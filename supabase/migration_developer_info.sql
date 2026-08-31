@@ -17,17 +17,33 @@ values (1, jsonb_build_object(
   'app_version',       '2.0.0',
   'developer_name',    'محمد عبده',
   'developer_title',   'محاسب',
-  'developer_country', 'مصري',
+  'developer_country', '',
   'phone',             '00966542520544',
   'whatsapp',          '00966542520544',
   'telegram',          '00966542520544',
-  'email',             '',
+  'email',             'conta.shepo@gmail.com',
   'support_hours',     'يومياً من ٩ صباحاً حتى ٩ مساءً',
   'about_text',        'نظام محاسبي سحابي متكامل لشركات النقل والنولون: فواتير النقل، سندات القبض والدفع، الخزائن والبنوك، الرواتب، وتقارير الأرباح.',
   'payment_note',      'للتحويل أو الاستفسار عن الاشتراك تواصل مع المطوّر عبر واتساب أو تليجرام.',
-  'copyright',         'جميع الحقوق محفوظة — محمد عبده'
+  'copyright',         'جميع الحقوق محفوظة — محمد عبده',
+  'visibility',        jsonb_build_object('developer_country', false),
+  'custom_fields',     '[]'::jsonb
 ))
 on conflict (id) do nothing;
+
+-- تحديث آمن للصف الموجود (لا يمسّ أي قيمة عدّلتها من اللوحة):
+--  • إضافة المفاتيح الجديدة إن غابت   • تفريغ الجنسية وتعطيلها   • ضبط بريد التواصل إن كان فارغاً
+update public.app_settings
+   set data = data
+     || case when data ? 'visibility'    then '{}'::jsonb else jsonb_build_object('visibility', jsonb_build_object('developer_country', false)) end
+     || case when data ? 'custom_fields' then '{}'::jsonb else jsonb_build_object('custom_fields', '[]'::jsonb) end
+     || case when coalesce(data->>'email', '') = '' then jsonb_build_object('email', 'conta.shepo@gmail.com') else '{}'::jsonb end
+     || case when coalesce(data->>'developer_country', '') = 'مصري'
+             then jsonb_build_object('developer_country', '',
+                    'visibility', coalesce(data->'visibility', '{}'::jsonb) || jsonb_build_object('developer_country', false))
+             else '{}'::jsonb end,
+       updated_at = now()
+ where id = 1;
 
 -- RLS: القراءة متاحة للجميع (تظهر في الصفحة التعريفية قبل تسجيل الدخول)
 -- والتعديل للمطوّر فقط عبر دالة is_admin().

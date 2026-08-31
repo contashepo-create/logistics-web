@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { DeveloperCard, useAppSettings } from "@/components/DeveloperInfo";
-import { displayPhone } from "@/lib/settings";
+import { displayPhone, showField } from "@/lib/settings";
 
 const MODULES = [
   "العملاء وكشوف حساباتهم",
@@ -39,8 +39,8 @@ export default function AboutPage() {
           <div className="group-title">📘 نبذة</div>
           <p style={{ lineHeight: 2, color: "var(--muted)", margin: 0 }}>{s.about_text}</p>
           <div style={{ marginTop: 14, display: "flex", gap: 18, flexWrap: "wrap", color: "var(--muted)", fontSize: 14 }}>
-            <span>الإصدار: <b dir="ltr">{s.app_version}</b></span>
-            <span>الدعم: <b>{s.support_hours}</b></span>
+            {showField(s, "app_version") && <span>الإصدار: <b dir="ltr">{s.app_version}</b></span>}
+            {showField(s, "support_hours") && <span>الدعم: <b>{s.support_hours}</b></span>}
           </div>
         </div>
 
@@ -61,7 +61,8 @@ export default function AboutPage() {
           <div>
             © {new Date().getFullYear()} {s.app_name} — {s.copyright}
           </div>
-          <div dir="ltr">{displayPhone(s.phone)}</div>
+          {showField(s, "phone") && <div dir="ltr">{displayPhone(s.phone)}</div>}
+          {showField(s, "email") && <div dir="ltr">{s.email}</div>}
         </div>
       </div>
     </div>
