@@ -1,0 +1,37 @@
+{
+  "name": "logistics-web",
+  "version": "1.0.0",
+  "private": true,
+  "description": "النظام المحاسبي المتكامل لشركة النقل — نسخة الويب (Next.js + Supabase)",
+  "scripts": {
+    "dev": "next dev",
+    "build": "next build",
+    "start": "next start",
+    "lint": "eslint",
+    "seed": "node scripts/seed.mjs",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "@fontsource/ibm-plex-sans-arabic": "^5.2.5",
+    "@supabase/supabase-js": "^2.110.8",
+    "@tanstack/react-query": "^5.101.0",
+    "exceljs": "^4.4.0",
+    "html2canvas": "^1.4.1",
+    "jspdf": "^3.0.0",
+    "next": "^16.3.0",
+    "react": "^19.2.4",
+    "react-dom": "^19.2.4"
+  },
+  "devDependencies": {
+    "@tailwindcss/postcss": "^4.3.3",
+    "@types/node": "^20.19.43",
+    "@types/react": "^19.2.17",
+    "@types/react-dom": "^19.2.3",
+    "eslint": "^9.39.4",
+    "eslint-config-next": "^16.2.9",
+    "postcss": "^8.5.6",
+    "tailwindcss": "^4.3.3",
+    "typescript": "^5.9.3",
+    "vitest": "^4.1.11"
+  }
+}
