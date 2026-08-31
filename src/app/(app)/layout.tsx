@@ -5,6 +5,7 @@ import { useRouter, usePathname } from "next/navigation";
 import { Sidebar } from "@/components/Sidebar";
 import { ToastHost } from "@/components/toast";
 import { getSession, getCompany, isAdmin } from "@/lib/auth";
+import { SUPABASE_CONFIGURED } from "@/lib/supabase";
 import { subscriptionState } from "@/lib/subscription";
 
 export default function AppLayout({ children }: { children: React.ReactNode }) {
@@ -16,6 +17,12 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
     let cancelled = false;
 
     (async () => {
+      // بلا إعدادات Supabase لا يمكن التحقق من الجلسة — الصفحة الجذر تشرح المطلوب
+      if (!SUPABASE_CONFIGURED) {
+        if (!cancelled) router.replace("/");
+        return;
+      }
+
       const session = await getSession();
       if (!session) {
         if (!cancelled) router.replace("/login");
