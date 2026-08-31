@@ -3,7 +3,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
 import Link from "next/link";
-import { getSession, getCompany, isAdmin, signOut } from "@/lib/auth";
+import { getSession, getCompany, signOut } from "@/lib/auth";
 import {
   PRICING, CUSTOMER_PLAN_TYPES, planLabel, planPrice, subscriptionState, stateLabel,
   submitActivationRequest, listMyActivationRequests, cancelMyActivationRequest, uploadReceipt,
@@ -31,7 +31,6 @@ export default function SubscriptionPage() {
     (async () => {
       const session = await getSession();
       if (!session) return router.replace("/login");
-      if (await isAdmin()) return router.replace("/admin");
       const c = await getCompany();
       if (!c) return router.replace("/onboarding");
       setCompany(c);

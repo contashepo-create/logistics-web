@@ -56,9 +56,9 @@ export default function AdminLayout({ children }: { children: React.ReactNode })
         <div className="sidebar-brand">🛡️ لوحة المطوّر</div>
         <nav style={{ flex: 1 }}>
           <div className="nav-section-title">الإدارة</div>
-          <Link href="/admin" className={`nav-item ${pathname === "/admin" ? "active" : ""}`}>نظرة عامة</Link>
-          <Link href="/admin/companies" className={`nav-item ${pathname.startsWith("/admin/companies") ? "active" : ""}`}>الشركات والمشتركون</Link>
-          <Link href="/admin/logs" className={`nav-item ${pathname.startsWith("/admin/logs") ? "active" : ""}`}>سجل النشاط</Link>
+          <Link href="/zerocold" className={`nav-item ${pathname === "/zerocold" ? "active" : ""}`}>نظرة عامة</Link>
+          <Link href="/zerocold/companies" className={`nav-item ${pathname.startsWith("/zerocold/companies") ? "active" : ""}`}>الشركات والمشتركون</Link>
+          <Link href="/zerocold/logs" className={`nav-item ${pathname.startsWith("/zerocold/logs") ? "active" : ""}`}>سجل النشاط</Link>
           <div className="nav-section-title">العودة</div>
           <Link href="/customers" className="nav-item">↩ العودة للتطبيق</Link>
         </nav>

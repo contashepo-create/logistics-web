@@ -92,7 +92,7 @@ export function Sidebar() {
         {admin && (
           <div>
             <div className="nav-section-title">🛡️ الإدارة</div>
-            <Link href="/admin" className={`nav-item ${pathname.startsWith("/admin") ? "active" : ""}`}>
+            <Link href="/zerocold" className={`nav-item ${pathname.startsWith("/zerocold") ? "active" : ""}`}>
               لوحة المطور
             </Link>
           </div>
