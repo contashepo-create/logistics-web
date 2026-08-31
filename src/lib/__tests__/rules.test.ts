@@ -12,6 +12,15 @@ describe("roundMoney", () => {
     expect(roundMoney(1.004)).toBe(1.0);
     expect(roundMoney(0.1 + 0.2)).toBe(0.3);
   });
+  it("يعالج خطأ التمثيل الثنائي عند حالات النصف (x.xx5)", () => {
+    expect(roundMoney(1.005)).toBe(1.01);
+    expect(roundMoney(1.015)).toBe(1.02);
+    expect(roundMoney(2.675)).toBe(2.68);
+    expect(roundMoney(0.145)).toBe(0.15);
+    // القيم الأقل من النصف تبقى منخفضة
+    expect(roundMoney(1.004)).toBe(1.0);
+    expect(roundMoney(1.004999999)).toBe(1.0);
+  });
   it("يرفض قيماً غير منتهية", () => {
     expect(() => roundMoney(Infinity)).toThrow(RuleError);
     expect(() => roundMoney("abc")).toThrow(RuleError);

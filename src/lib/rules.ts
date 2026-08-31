@@ -12,12 +12,11 @@ export class RuleError extends Error {
 
 /** تقنية دفاعية: كل مبلغ يُخزَّن مقرباً لمنزلتين عشريتين وضمن سقف منطقي. */
 export function roundMoney(x: unknown): number {
-  let v: number;
-  try {
-    v = Math.round(Number(x ?? 0) * 100) / 100;
-  } catch {
-    throw new RuleError("قيمة مبلغ غير صالحة.");
-  }
+  const raw = Number(x ?? 0);
+  if (!Number.isFinite(raw)) throw new RuleError("قيمة مبلغ غير صالحة.");
+  // Number.EPSILON يعوّض خطأ التمثيل الثنائي للكسور العشرية (مثل 1.005 → 1.004999…)
+  // كي تُقرَّب حالات «النصف» (x.xx5) للأعلى بشكل صحيح.
+  const v = Math.round((raw + Number.EPSILON) * 100) / 100;
   if (!Number.isFinite(v)) throw new RuleError("قيمة مبلغ غير صالحة.");
   if (Math.abs(v) > 999_999_999_999) {
     throw new RuleError("المبلغ خارج النطاق المسموح (الحد 999,999,999,999).");

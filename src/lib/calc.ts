@@ -29,7 +29,8 @@ function sum(xs: number[]): number {
 }
 
 function round2(x: number): number {
-  return Math.round(x * 100) / 100;
+  // Number.EPSILON يعوّض خطأ التمثيل الثنائي (مثل 1.005) كما في rules.roundMoney
+  return Math.round((x + Number.EPSILON) * 100) / 100;
 }
 
 // ---------------------------------------------------------------------------

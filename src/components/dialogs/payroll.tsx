@@ -35,12 +35,17 @@ export function PayrollDialog({ id, readOnly, onClose }: { id?: number | null; r
             account_kind: p.account_kind, account_id: String(p.account_id), base_salary: String(p.base_salary),
             additions: String(p.additions), additions_note: p.additions_note, other_deductions: String(p.other_deductions), notes: p.notes,
           });
-          if (p.settlements?.length) {
-            setAdvances(p.settlements.map((s) => ({
-              payment_voucher_id: s.payment_voucher_id, number: s.voucher_number, date: s.voucher_date,
-              amount: s.amount, remaining: 0, deduct: String(s.amount),
-            })));
-          }
+          // تحميل السلف بنفس طريقة الإضافة، مع استرجاع خصومات هذا الراتب وإتاحة سلف أخرى غير مسددة
+          const rows = await employeeAdvances(p.employee_id);
+          const settlements = p.settlements ?? [];
+          setAdvances(rows.map((r: any) => {
+            const s = settlements.find((x) => x.payment_voucher_id === r.id);
+            return {
+              payment_voucher_id: r.id, number: r.number, date: r.date,
+              amount: r.amount, remaining: r.remaining + (s ? s.amount : 0),
+              deduct: s ? String(s.amount) : "",
+            };
+          }));
         }
       }
     })();

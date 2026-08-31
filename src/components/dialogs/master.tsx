@@ -272,10 +272,11 @@ export function SnapshotDialog({ yearId, year, onClose }: { yearId: number; year
     getSnapshot(yearId).then(setSnap);
   }, [yearId]);
 
-  const customers: any[] = snap?.data?.customers ?? [];
-  const cashboxes: any[] = snap?.data?.cashboxes ?? [];
-  const banks: any[] = snap?.data?.banks ?? [];
-  const pnl: Record<string, number> = snap?.data?.pnl ?? {};
+  // getSnapshot يعيد كائن اللقطة مباشرة (بلا تغليف في .data)
+  const customers: any[] = snap?.customers ?? [];
+  const cashboxes: any[] = snap?.cashboxes ?? [];
+  const banks: any[] = snap?.banks ?? [];
+  const pnl: Record<string, number> = snap?.pnl ?? {};
 
   return (
     <Modal title="لقطة إغلاق السنة المالية" onClose={onClose} width={920}>
