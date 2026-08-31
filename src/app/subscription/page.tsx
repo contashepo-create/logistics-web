@@ -3,7 +3,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
 import Link from "next/link";
-import { getSession, getCompany, isAdmin, signOut } from "@/lib/auth";
+import { getSession, getCompany, signOut } from "@/lib/auth";
 import {
   PRICING, CUSTOMER_PLAN_TYPES, planLabel, planPrice, subscriptionState, stateLabel,
   submitActivationRequest, listMyActivationRequests, cancelMyActivationRequest, uploadReceipt,
@@ -11,6 +11,7 @@ import {
 } from "@/lib/subscription";
 import { exportDataExcel, exportDataCsv, exportDataPdf } from "@/lib/dataExport";
 import { notify, ToastHost } from "@/components/toast";
+import { DeveloperCard, CopyrightLine, useAppSettings } from "@/components/DeveloperInfo";
 import { money } from "@/lib/format";
 import type { Company } from "@/lib/types";
 
@@ -26,12 +27,12 @@ export default function SubscriptionPage() {
   const [submitting, setSubmitting] = useState(false);
   const [requests, setRequests] = useState<ActivationRequest[]>([]);
   const [exporting, setExporting] = useState<"excel" | "csv" | "pdf" | null>(null);
+  const settings = useAppSettings();
 
   useEffect(() => {
     (async () => {
       const session = await getSession();
       if (!session) return router.replace("/login");
-      if (await isAdmin()) return router.replace("/admin");
       const c = await getCompany();
       if (!c) return router.replace("/onboarding");
       setCompany(c);
@@ -54,7 +55,7 @@ export default function SubscriptionPage() {
 
       // إشعار المطوّر عبر الخادم (يعتمد على بيانات حقيقية من قاعدة البيانات)
       try {
-        await fetch("/api/notify-admin", {
+        await fetch("/api/zerocold/notify", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ request_id: req.id }),
@@ -118,6 +119,16 @@ export default function SubscriptionPage() {
           {expired && (
             <div style={{ marginTop: 14, background: "var(--danger-light)", border: "1px solid #fecaca", borderRadius: 12, padding: 16, color: "var(--danger)" }}>
               <b>انتهت صلاحية الوصول.</b> لتجديد اشتراكك أرسل طلباً أدناه وسيتواصل معك المطوّر، أو حمّل نسخة من بياناتك الآن.
+            </div>
+          )}
+        </div>
+
+        {/* بيانات المطوّر والدعم */}
+        <div style={{ marginBottom: 16 }}>
+          <DeveloperCard title="👨‍💻 للاشتراك والتجديد — تواصل مع المطوّر" />
+          {settings.payment_note && (
+            <div className="page-card" style={{ marginTop: 12, color: "var(--muted)", lineHeight: 2 }}>
+              {settings.payment_note}
             </div>
           )}
         </div>
@@ -202,6 +213,7 @@ export default function SubscriptionPage() {
             </div>
           )}
         </div>
+        <CopyrightLine className="sub-copy" />
       </div>
       <ToastHost />
     </div>

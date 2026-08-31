@@ -7,6 +7,8 @@ import { money, todayIso } from "@/lib/format";
 import { customerStatement, accountStatement } from "@/lib/calc";
 import { getCustomer, getAccount, companyInfo } from "@/lib/repo";
 import { buildReportHtml, exportExcel, exportPdfHtml, printHtml } from "@/lib/exporter";
+import { getPrintSettings, printCss } from "@/lib/print";
+import { docOptions } from "@/lib/exportHelper";
 
 function yearStart(): string {
   return `${new Date().getFullYear()}-01-01`;
@@ -33,7 +35,7 @@ export function CustomerStatementDialog({ customerId, onClose }: {
   const rows = (st?.rows ?? []).map((r) => [r.date, r.doc, r.desc, money(r.debit), money(r.credit), money(r.balance)]);
 
   const doExport = async (mode: "excel" | "pdf" | "print") => {
-    const info = await companyInfo();
+    const [info, ps] = await Promise.all([companyInfo(), getPrintSettings()]);
     const summary: [string, string][] = [
       ["العميل", owner],
       ["الرصيد الافتتاحي", money(st?.opening ?? 0)],
@@ -45,9 +47,9 @@ export function CustomerStatementDialog({ customerId, onClose }: {
     if (mode === "excel") {
       await exportExcel({ info, title, headers, rows, summaryLines: summary, defaultName: `${title}.xlsx` });
     } else {
-      const html = buildReportHtml({ info, title, subtitle: `الفترة: من ${dFrom} إلى ${dTo}`, headers, rows, summaryLines: summary, centerFrom: 1 });
+      const html = buildReportHtml({ info, title, subtitle: `الفترة: من ${dFrom} إلى ${dTo}`, headers, rows, summaryLines: summary, centerFrom: 1, doc: docOptions(ps) });
       if (mode === "pdf") await exportPdfHtml(html, `${title}.pdf`);
-      else printHtml(html, title);
+      else printHtml(html, title, { css: printCss(ps), watermark: ps.watermark });
     }
   };
 
@@ -102,7 +104,7 @@ export function AccountStatementDialog({ kind, accountId, onClose }: {
   const rows = (st?.rows ?? []).map((r) => [r.date, r.doc, r.desc, money(r.in), money(r.out), money(r.balance)]);
 
   const doExport = async (mode: "excel" | "pdf" | "print") => {
-    const info = await companyInfo();
+    const [info, ps] = await Promise.all([companyInfo(), getPrintSettings()]);
     const kindLabel = kind === "cashbox" ? "خزينة" : "بنك";
     const title = `كشف حساب ${kindLabel}`;
     const summary: [string, string][] = [
@@ -115,9 +117,9 @@ export function AccountStatementDialog({ kind, accountId, onClose }: {
     if (mode === "excel") {
       await exportExcel({ info, title, headers, rows, summaryLines: summary, defaultName: `${title}.xlsx` });
     } else {
-      const html = buildReportHtml({ info, title, subtitle: `${owner} | الفترة: من ${dFrom} إلى ${dTo}`, headers, rows, summaryLines: summary, centerFrom: 1 });
+      const html = buildReportHtml({ info, title, subtitle: `${owner} | الفترة: من ${dFrom} إلى ${dTo}`, headers, rows, summaryLines: summary, centerFrom: 1, doc: docOptions(ps) });
       if (mode === "pdf") await exportPdfHtml(html, `${title}.pdf`);
-      else printHtml(html, title);
+      else printHtml(html, title, { css: printCss(ps), watermark: ps.watermark });
     }
   };
 

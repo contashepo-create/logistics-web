@@ -410,10 +410,10 @@ async function customerInvoiceHtml(invoiceId: number): Promise<{ html: string; n
 export async function printCustomerInvoice(invoiceId: number): Promise<void> {
   const res = await customerInvoiceHtml(invoiceId);
   if (!res) return notify("الفاتورة غير موجودة.", "error");
-  const w = window.open("", "_blank");
-  if (!w) return notify("اسمح بالنوافذ المنبثقة للطباعة.", "error");
-  w.document.write(`<!doctype html><html lang="ar" dir="rtl"><head><meta charset="utf-8"><title>فاتورة ${res.number}</title></head><body>${res.html}<script>window.onload=function(){window.print();}</script></body></html>`);
-  w.document.close();
+  const { getPrintSettings, printCss } = await import("@/lib/print");
+  const { printHtml } = await import("@/lib/exporter");
+  const ps = await getPrintSettings();
+  printHtml(res.html, `فاتورة ${res.number}`, { css: printCss(ps), watermark: ps.watermark });
 }
 
 export async function exportCustomerInvoicePdf(invoiceId: number): Promise<void> {

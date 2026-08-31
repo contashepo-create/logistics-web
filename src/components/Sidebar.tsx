@@ -6,6 +6,7 @@ import { useEffect, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { listYears } from "@/lib/repo";
 import { getCompany, isAdmin, signOut } from "@/lib/auth";
+import { ThemeToggle } from "@/components/ThemeToggle";
 import { stateLabel, subscriptionState } from "@/lib/subscription";
 import type { Company } from "@/lib/types";
 
@@ -53,11 +54,12 @@ const NAV_SECTIONS: { title: string; items: { label: string; href: string }[] }[
     items: [
       { label: "الإعدادات", href: "/settings" },
       { label: "الاشتراك والباقات", href: "/subscription" },
+      { label: "حول التطبيق", href: "/about" },
     ],
   },
 ];
 
-export function Sidebar() {
+export function Sidebar({ open = false, onClose }: { open?: boolean; onClose?: () => void } = {}) {
   const pathname = usePathname();
   const router = useRouter();
   const { data: years } = useQuery({ queryKey: ["years"], queryFn: listYears });
@@ -76,14 +78,14 @@ export function Sidebar() {
   };
 
   return (
-    <aside className="sidebar">
+    <aside className={`sidebar ${open ? "open" : ""}`}>
       <div className="sidebar-brand">🚛 النظام المحاسبي<br />لشركة النقل</div>
       <nav style={{ flex: 1, overflowY: "auto" }}>
         {NAV_SECTIONS.map((section) => (
           <div key={section.title}>
             <div className="nav-section-title">{section.title}</div>
             {section.items.map((item) => (
-              <Link key={item.href} href={item.href} className={`nav-item ${pathname === item.href ? "active" : ""}`}>
+              <Link key={item.href} href={item.href} onClick={onClose} className={`nav-item ${pathname === item.href ? "active" : ""}`}>
                 {item.label}
               </Link>
             ))}
@@ -92,7 +94,7 @@ export function Sidebar() {
         {admin && (
           <div>
             <div className="nav-section-title">🛡️ الإدارة</div>
-            <Link href="/admin" className={`nav-item ${pathname.startsWith("/admin") ? "active" : ""}`}>
+            <Link href="/zerocold" onClick={onClose} className={`nav-item ${pathname.startsWith("/zerocold") ? "active" : ""}`}>
               لوحة المطور
             </Link>
           </div>
@@ -111,6 +113,7 @@ export function Sidebar() {
         >
           {company ? stateLabel(company) : ""}
         </div>
+        <div style={{ margin: "8px 0" }}><ThemeToggle /></div>
         <button className="nav-logout" onClick={logout}>تسجيل الخروج</button>
       </div>
     </aside>
