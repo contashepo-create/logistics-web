@@ -13,32 +13,12 @@ grant usage on schema public to anon, authenticated, service_role;
 
 -- ---------------------------------------------------------------------------
 -- دوال الصلاحيات
+--   ملاحظة: auth_company_id و is_company_active تعتمدان على جدولي profiles/companies،
+--   لذلك يُعرَّفان بعد إنشاء الجدولين (PostgreSQL 14+ يفحص جسم دوال SQL عند الإنشاء).
 -- ---------------------------------------------------------------------------
 create or replace function public.is_admin() returns boolean
 language sql stable as $$
   select coalesce((auth.jwt() ->> 'email'), '') = 'conta.moha@gmail.com';
-$$;
-
--- معرّف الشركة للمستخدم الحالي (security definer + search_path مُقيّد)
-create or replace function public.auth_company_id() returns uuid
-language sql stable security definer set search_path = public as $$
-  select p.company_id from public.profiles p where p.id = auth.uid();
-$$;
-
--- هل شركة المستخدم الحالي نشطة واشتراكها ساري (أو ضمن التجربة المجانية)؟
-create or replace function public.is_company_active() returns boolean
-language sql stable security definer set search_path = public as $$
-  select coalesce(
-    (select c.is_active and (
-            c.trial_end >= current_date                       -- ضمن التجربة
-            or c.plan_type = 'open'                           -- اشتراك مفتوح
-            or (c.subscription_end is not null and c.subscription_end >= current_date)
-         )
-     from public.companies c
-     join public.profiles p on p.company_id = c.id
-     where p.id = auth.uid()),
-    false
-  );
 $$;
 
 -- ---------------------------------------------------------------------------
@@ -71,6 +51,28 @@ create table if not exists public.profiles (
   name       text default '',
   created_at timestamptz default now()
 );
+
+-- معرّف الشركة للمستخدم الحالي (security definer + search_path مُقيّد)
+create or replace function public.auth_company_id() returns uuid
+language sql stable security definer set search_path = public as $$
+  select p.company_id from public.profiles p where p.id = auth.uid();
+$$;
+
+-- هل شركة المستخدم الحالي نشطة واشتراكها ساري (أو ضمن التجربة المجانية)؟
+create or replace function public.is_company_active() returns boolean
+language sql stable security definer set search_path = public as $$
+  select coalesce(
+    (select c.is_active and (
+            c.trial_end >= current_date                       -- ضمن التجربة
+            or c.plan_type = 'open'                           -- اشتراك مفتوح
+            or (c.subscription_end is not null and c.subscription_end >= current_date)
+         )
+     from public.companies c
+     join public.profiles p on p.company_id = c.id
+     where p.id = auth.uid()),
+    false
+  );
+$$;
 
 -- ---------------------------------------------------------------------------
 -- سجل النشاط (audit log)
