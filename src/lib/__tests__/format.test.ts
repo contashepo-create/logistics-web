@@ -1,5 +1,27 @@
 import { describe, it, expect } from "vitest";
-import { normalizeDigits, parseFloatSafe, money, monthName, periodLabel, clean, todayIso } from "@/lib/format";
+import {
+  normalizeDigits, parseFloatSafe, money, monthName, periodLabel, clean, todayIso,
+  MONTHS_AR, EXPENSE_TYPES, PAYMENT_TYPES, VEHICLE_EXPENSES, RECEIPT_TYPES, EMP_TYPES,
+} from "@/lib/format";
+
+describe("قواميس التسميات", () => {
+  it("MONTHS_AR يحتوي 12 شهراً", () => {
+    expect(MONTHS_AR).toHaveLength(12);
+    expect(MONTHS_AR[0]).toBe("يناير");
+    expect(MONTHS_AR[11]).toBe("ديسمبر");
+  });
+  it("EXPENSE_TYPES يغطي أنواع المصروفات الأربعة", () => {
+    expect(Object.keys(EXPENSE_TYPES).sort()).toEqual(["card", "fuel", "other", "trip"]);
+  });
+  it("PAYMENT_TYPES يغطي أنواع سندات الدفع الأربعة", () => {
+    expect(Object.keys(PAYMENT_TYPES).sort()).toEqual(["advance", "general", "trip", "vehicle"]);
+  });
+  it("VEHICLE_EXPENSES / RECEIPT_TYPES / EMP_TYPES", () => {
+    expect(Object.keys(VEHICLE_EXPENSES).sort()).toEqual(["maintenance", "other", "tires"]);
+    expect(Object.keys(RECEIPT_TYPES).sort()).toEqual(["customer", "other"]);
+    expect(Object.keys(EMP_TYPES).sort()).toEqual(["admin", "driver"]);
+  });
+});
 
 describe("normalizeDigits", () => {
   it("يحول الأرقام العربية", () => {

@@ -9,7 +9,9 @@ export default defineConfig({
   },
   resolve: {
     alias: {
-      "@": path.resolve(__dirname, "./src"),
+      "@": path.resolve(import.meta.dirname, "./src"),
+      // "server-only" يوفّره Next.js فقط — نستبدله ببديل فارغ في الاختبارات
+      "server-only": path.resolve(import.meta.dirname, "./src/lib/__tests__/server-only-stub.ts"),
     },
   },
 });
