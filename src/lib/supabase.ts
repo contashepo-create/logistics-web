@@ -3,12 +3,12 @@ import { createClient, type SupabaseClient } from "@supabase/supabase-js";
 // ملاحظة مهمة: أي متغيّر بيئة يُقرأ داخل المتصفّح يجب أن يبدأ بـ NEXT_PUBLIC_
 // وإلا فلن يُحقن في حزمة العميل وستظهر الرسالة: "supabaseUrl is required".
 const url =
-  process.env.NEXT_PUBLIC_SUPABASE_URL ??
-  process.env.NEXT_SUPABASE_URL ??
+  process.env.NEXT_PUBLIC_SUPABASE_URL ||
+  process.env.NEXT_SUPABASE_URL ||
   "";
 const anonKey =
-  process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY ??
-  process.env.NEXT_SUPABASE_ANON_KEY ??
+  process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY ||
+  process.env.NEXT_SUPABASE_ANON_KEY ||
   "";
 
 export const SUPABASE_CONFIGURED = Boolean(url && anonKey);
