@@ -1,7 +1,7 @@
 import { createClient, type SupabaseClient } from "@supabase/supabase-js";
 
-const url = process.env.NEXT_PUBLIC_SUPABASE_URL ?? "";
-const anonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY ?? "";
+const url = process.env.NEXT_SUPABASE_URL ?? "";
+const anonKey = process.env.NEXT_SUPABASE_ANON_KEY ?? "";
 
 // persistSession + autoRefresh: تحفظ الجلسة بين التحميلات وتجددها تلقائياً.
 // detectSessionInUrl: يتعامل مع روابط تأكيد البريد المرسلة من Supabase Auth.
