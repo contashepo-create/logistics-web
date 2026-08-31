@@ -59,6 +59,7 @@ export default function AdminLayout({ children }: { children: React.ReactNode })
           <Link href="/zerocold" className={`nav-item ${pathname === "/zerocold" ? "active" : ""}`}>نظرة عامة</Link>
           <Link href="/zerocold/companies" className={`nav-item ${pathname.startsWith("/zerocold/companies") ? "active" : ""}`}>الشركات والمشتركون</Link>
           <Link href="/zerocold/logs" className={`nav-item ${pathname.startsWith("/zerocold/logs") ? "active" : ""}`}>سجل النشاط</Link>
+          <Link href="/zerocold/settings" className={`nav-item ${pathname.startsWith("/zerocold/settings") ? "active" : ""}`}>بيانات المطوّر والتطبيق</Link>
           <div className="nav-section-title">العودة</div>
           <Link href="/customers" className="nav-item">↩ العودة للتطبيق</Link>
         </nav>

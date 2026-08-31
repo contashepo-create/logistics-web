@@ -1,4 +1,5 @@
 import Link from "next/link";
+import { LandingDeveloperFooter, CopyrightLine } from "@/components/DeveloperInfo";
 import type { Metadata } from "next";
 
 export const metadata: Metadata = {
@@ -178,9 +179,11 @@ export default function LandingPage() {
             <a href="#faq">الأسئلة الشائعة</a>
             <Link href="/login">تسجيل الدخول</Link>
             <Link href="/register">إنشاء حساب</Link>
+            <Link href="/about">حول التطبيق</Link>
           </div>
+          <LandingDeveloperFooter />
         </div>
-        <div className="lp-copy">© {new Date().getFullYear()} نظام النقل المحاسبي — جميع الحقوق محفوظة.</div>
+        <CopyrightLine className="lp-copy" />
       </footer>
     </div>
   );

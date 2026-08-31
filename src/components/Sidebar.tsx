@@ -53,6 +53,7 @@ const NAV_SECTIONS: { title: string; items: { label: string; href: string }[] }[
     items: [
       { label: "الإعدادات", href: "/settings" },
       { label: "الاشتراك والباقات", href: "/subscription" },
+      { label: "حول التطبيق", href: "/about" },
     ],
   },
 ];
