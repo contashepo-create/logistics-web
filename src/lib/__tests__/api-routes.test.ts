@@ -12,6 +12,7 @@ const mocks = vi.hoisted(() => ({
   verifyTwoFactorToken: vi.fn(),
   generateOtp: vi.fn(),
   sameOrigin: vi.fn(() => true),
+  hasSessionSecret: vi.fn(() => true),
   COOKIE_OPTIONS: { httpOnly: true, secure: false, sameSite: "strict" as const, path: "/", maxAge: 43200 },
   // telegram
   sendTelegramCode: vi.fn(),
@@ -32,6 +33,7 @@ vi.mock("@/lib/server/admin-session", () => ({
   verifyTwoFactorToken: mocks.verifyTwoFactorToken,
   generateOtp: mocks.generateOtp,
   sameOrigin: mocks.sameOrigin,
+  hasSessionSecret: mocks.hasSessionSecret,
   COOKIE_OPTIONS: mocks.COOKIE_OPTIONS,
 }));
 vi.mock("@/lib/server/telegram", () => ({
@@ -134,13 +136,15 @@ describe("GET /api/zerocold/2fa/status", () => {
     mocks.verifyTwoFactorToken.mockReturnValue(true);
     const res = await statusGet(fakeReq({ cookie: "tok" }));
     expect(res.status).toBe(200);
-    expect(await res.json()).toEqual({ success: true, verified: true });
+    expect(await res.json()).toEqual({ success: true, verified: true, reason: "ok" });
     expect(mocks.verifyTwoFactorToken).toHaveBeenCalledWith("tok", "conta.moha@gmail.com");
   });
-  it("يعيد verified=false عند غياب الكوكي", async () => {
+  it("يعيد verified=false مع سبب no-cookie عند غياب الكوكي", async () => {
     mocks.verifyTwoFactorToken.mockReturnValue(false);
     const res = await statusGet(fakeReq());
-    expect((await res.json()).verified).toBe(false);
+    const body = await res.json();
+    expect(body.verified).toBe(false);
+    expect(body.reason).toBe("no-cookie");
   });
 });
 

@@ -144,22 +144,10 @@ export async function adminStats(): Promise<Record<string, number>> {
   };
 }
 
-/** ملخص نشاط شركة واحدة. */
-export async function companySummary(companyId: string): Promise<Record<string, number>> {
-  const w = (col: string, val: unknown) => ({ col, val });
-  const [customers, invoices, trips, receipts, payments, payrolls] = await Promise.all([
-    countAll("customers", w("company_id", companyId)),
-    countAll("invoices", w("company_id", companyId)),
-    countAll("invoice_trips", w("company_id", companyId)),
-    countAll("receipt_vouchers", w("company_id", companyId)),
-    countAll("payment_vouchers", w("company_id", companyId)),
-    countAll("payrolls", w("company_id", companyId)),
-  ]);
-  const revenue = await sumFor(companyId, "invoice_trips", "price");
-  return { customers, invoices, trips, receipts, payments, payrolls, revenue };
-}
+/**
+ * ملاحظة خصوصية: لا توجد هنا (ولا في أي مكان بلوحة المطوّر) دالة تقرأ بيانات
+ * العملاء التشغيلية — الفواتير والنقلات والسندات والأرصدة والرواتب.
+ * لوحة المطوّر مقصورة على: بيانات الاشتراك، والسجل التجاري/الضريبي، والعنوان،
+ * وطلبات التفعيل، والرسائل والشكاوى. العزل مفروض أيضاً على مستوى RLS.
+ */
 
-async function sumFor(companyId: string, table: string, col: string): Promise<number> {
-  const { data } = await supabase.from(table).select(col).eq("company_id", companyId);
-  return (data ?? []).reduce((a, r) => a + num((r as unknown as Record<string, unknown>)[col]), 0);
-}

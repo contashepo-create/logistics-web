@@ -1,7 +1,7 @@
 "use client";
 
 import { Fragment, useEffect, useState } from "react";
-import { listCompanies, setCompanyStatus, setSubscription, deleteCompany, companySummary, listActivationRequests, reviewActivationRequest, type CompanyRow } from "@/lib/admin";
+import { listCompanies, setCompanyStatus, setSubscription, deleteCompany, listActivationRequests, reviewActivationRequest, type CompanyRow } from "@/lib/admin";
 import { notify } from "@/components/toast";
 import { money } from "@/lib/format";
 import { planLabel, requestKindLabel, subscriptionState, type ActivationRequest } from "@/lib/subscription";
@@ -23,9 +23,8 @@ const STATUS_BADGE: Record<string, { label: string; cls: string }> = {
 const PLAN_LABEL: Record<string, string> = { trial: "تجريبي", monthly: "شهري", yearly: "سنوي", open: "مفتوح" };
 
 export default function AdminCompaniesPage() {
-  const [rows, setRows] = useState<(CompanyRow & { summary?: Record<string, number> })[] | null>(null);
+  const [rows, setRows] = useState<CompanyRow[] | null>(null);
   const [search, setSearch] = useState("");
-  const [expanded, setExpanded] = useState<string | null>(null);
   const [subEdit, setSubEdit] = useState<CompanyRow | null>(null);
   const [subForm, setSubForm] = useState({ plan_type: "open" as CompanyRow["plan_type"], end_date: "" });
   const [requests, setRequests] = useState<(ActivationRequest & { company_name: string })[] | null>(null);
@@ -78,12 +77,6 @@ export default function AdminCompaniesPage() {
     } catch (e) { notify(e instanceof Error ? e.message : String(e), "error"); }
   };
 
-  const toggleExpand = async (id: string) => {
-    if (expanded === id) return setExpanded(null);
-    const s = await companySummary(id);
-    setRows((prev) => prev?.map((r) => (r.id === id ? { ...r, summary: s } : r)) ?? null);
-    setExpanded(id);
-  };
 
   const review = async (req: ActivationRequest, approve: boolean) => {
     const notes = reqNotes[req.id] ?? "";
@@ -191,7 +184,6 @@ export default function AdminCompaniesPage() {
                         <td dir="ltr">{c.subscription_end ?? "بلا تحديد"}</td>
                         <td><span className={`badge ${b.cls}`}>{b.label}</span></td>
                         <td style={{ display: "flex", gap: 6, flexWrap: "wrap", justifyContent: "center" }}>
-                          <button className="btn btn-row" onClick={() => toggleExpand(c.id)}>📊</button>
                           <button className="btn btn-row" onClick={() => openSub(c)} title="الاشتراك">💳 الاشتراك</button>
                           <button className={`btn ${c.is_active ? "btn-danger" : "btn-primary"}`} onClick={() => toggle(c)}>
                             {c.is_active ? "⏸ إيقاف" : "▶ تفعيل"}
@@ -199,20 +191,6 @@ export default function AdminCompaniesPage() {
                           <button className="btn btn-row-danger" onClick={() => remove(c)} title="حذف">🗑</button>
                         </td>
                       </tr>
-                      {expanded === c.id && c.summary && (
-                        <tr>
-                          <td colSpan={8} style={{ background: "#f8fafc" }}>
-                            <div style={{ display: "flex", gap: 16, flexWrap: "wrap", padding: 8 }}>
-                              {[
-                                ["العملاء", c.summary.customers], ["الفواتير", c.summary.invoices],
-                                ["النقلات", c.summary.trips], ["سندات القبض", c.summary.receipts],
-                                ["سندات الدفع", c.summary.payments], ["الرواتب", c.summary.payrolls],
-                              ].map(([l, v]) => <div key={l}><b>{l}:</b> {String(v)}</div>)}
-                              <div><b>قيمة النقلات:</b> {money(c.summary.revenue)}</div>
-                            </div>
-                          </td>
-                        </tr>
-                      )}
                     </Fragment>
                   );
                 })}

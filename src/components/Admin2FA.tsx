@@ -14,6 +14,7 @@ export function Admin2FA({ onVerified }: { onVerified: () => void }) {
   const [verifying, setVerifying] = useState(false);
   const [code, setCode] = useState("");
   const [denied, setDenied] = useState(false);
+  const [reason, setReason] = useState<string>("");
 
   useEffect(() => {
     (async () => {
@@ -24,6 +25,8 @@ export function Admin2FA({ onVerified }: { onVerified: () => void }) {
           setDenied(true);
         } else if (data.verified) {
           onVerified();
+        } else {
+          setReason(String(data.reason ?? ""));
         }
       } catch {
         // ابقَ على شاشة التحقق
@@ -101,7 +104,19 @@ export function Admin2FA({ onVerified }: { onVerified: () => void }) {
         <h1 className="auth-title">التحقق بخطوتين</h1>
         <p className="auth-sub" style={{ lineHeight: 2 }}>
           للدخول إلى لوحة المطوّر أدخل رمز التحقق المرسل إلى تليجرام.
+          {reason === "ok" ? "" : ""}
         </p>
+        {reason === "no-secret" && (
+          <p className="auth-sub" style={{ color: "var(--danger, #b91c1c)", lineHeight: 2 }}>
+            تنبيه: متغيّر <b dir="ltr">ADMIN_2FA_SECRET</b> غير مضبوط على الخادم،
+            ولذلك تُطلب منك إعادة التحقق بعد كل تحديث للصفحة. اضبطه في إعدادات النشر ثم أعد النشر.
+          </p>
+        )}
+        {reason === "invalid" && (
+          <p className="auth-sub" style={{ lineHeight: 2 }}>
+            انتهت صلاحية جلسة التحقق السابقة (أو تغيّر سر الخادم) — أعد التحقق مرة واحدة.
+          </p>
+        )}
         <form onSubmit={verify} style={{ display: "grid", gap: 12 }}>
           <button type="button" className="btn auth-btn" onClick={send} disabled={sending}>
             {sending ? "جارٍ الإرسال…" : "📨 إرسال الرمز إلى تليجرام"}

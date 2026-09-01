@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { requireAdmin } from "@/lib/server/supabase";
 import { rateLimit, clientIp } from "@/lib/server/rate-limit";
 import { verifyOtp, clearOtp } from "@/lib/server/otp-store";
-import { createTwoFactorToken, COOKIE_NAME, COOKIE_OPTIONS, sameOrigin } from "@/lib/server/admin-session";
+import { createTwoFactorToken, COOKIE_NAME, COOKIE_OPTIONS, sameOrigin, hasSessionSecret } from "@/lib/server/admin-session";
 
 export const runtime = "nodejs";
 
@@ -46,6 +46,13 @@ export async function POST(req: NextRequest) {
     return NextResponse.json(
       { success: false, message: result.reason === "missing" ? "أرسل الرمز أولاً." : "رمز التحقق غير صحيح." },
       { status: 401 }
+    );
+  }
+
+  if (!hasSessionSecret()) {
+    return NextResponse.json(
+      { success: false, message: "إعداد الخادم ناقص: ADMIN_2FA_SECRET غير مضبوط — لن تُحفظ الجلسة." },
+      { status: 500 }
     );
   }
 

@@ -1,9 +1,22 @@
 // جلسة 2FA للوحة المطوّر: رمز ممضى (HMAC) في كوكي httpOnly.
 // لا يُستخدم JWT عام — السر خاص بالخادم ولا يغادر الخادم أبداً.
 import "server-only";
-import { createHmac, timingSafeEqual, randomBytes } from "crypto";
+import { createHmac, createHash, timingSafeEqual, randomBytes } from "crypto";
 
-const SECRET = process.env.ADMIN_2FA_SECRET || "";
+/**
+ * سر توقيع جلسة 2FA. يُفضّل ADMIN_2FA_SECRET، ومع غيابه نشتق سراً ثابتاً من
+ * مفتاح الخدمة حتى لا تصبح الجلسة غير قابلة للتحقق بعد كل تحديث للصفحة.
+ */
+const SECRET =
+  process.env.ADMIN_2FA_SECRET ||
+  (process.env.SUPABASE_SERVICE_ROLE_KEY
+    ? createHash("sha256").update(`2fa:${process.env.SUPABASE_SERVICE_ROLE_KEY}`).digest("hex")
+    : "");
+
+/** هل يمكن إصدار جلسات 2FA أصلاً؟ (يُستخدم لإظهار خطأ صريح بدل جلسة صامتة لا تُقبل) */
+export function hasSessionSecret(): boolean {
+  return SECRET.length >= 16;
+}
 const TTL_MS = 12 * 60 * 60 * 1000; // 12 ساعة
 const IS_PROD = process.env.NODE_ENV === "production";
 

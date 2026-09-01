@@ -26,6 +26,7 @@ vi.mock("@/lib/server/supabase", () => ({
 }));
 vi.mock("@/lib/server/admin-session", () => ({
   sameOrigin: () => true,
+  hasSessionSecret: () => true,
   COOKIE_NAME: "admin_2fa",
   verifyTwoFactorToken: () => true,
   COOKIE_OPTIONS: { httpOnly: true, secure: false, sameSite: "strict", path: "/", maxAge: 1 },

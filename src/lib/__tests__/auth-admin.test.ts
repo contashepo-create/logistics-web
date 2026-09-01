@@ -241,21 +241,10 @@ describe("admin.ts", () => {
     expect(st.salaries).toBe(200);
   });
 
-  it("companySummary يفلتر بمعرّف الشركة", async () => {
-    supabaseMock.from.mockImplementation(makeFrom((s) => {
-      const companyFiltered = s.filters.some(([c]) => c === "company_id");
-      const base: Record<string, number> = { customers: 5, invoices: 3, invoice_trips: 12, receipt_vouchers: 2, payment_vouchers: 4, payrolls: 1 };
-      if (s.opts?.head && s.opts?.count === "exact") {
-        // أي عدد يخص الشركة فقط عندما يوجد فلتر company_id
-        return { count: companyFiltered ? (base[s.table] ?? 0) : 0 };
-      }
-      if (s.table === "invoice_trips" && s.cols === "price") return { data: companyFiltered ? [{ price: 900 }] : [], error: null };
-      return { data: [], error: null };
-    }));
-    const s = await adminLib.companySummary("c1");
-    expect(s.customers).toBe(5);
-    expect(s.invoices).toBe(3);
-    expect(s.trips).toBe(12);
-    expect(s.revenue).toBe(900);
+  it("لوحة المطوّر لا تعرض أي دالة تقرأ بيانات العملاء التشغيلية", async () => {
+    const exported = Object.keys(adminLib);
+    for (const forbidden of ["companySummary", "listCompanyInvoices", "companyRevenue"]) {
+      expect(exported).not.toContain(forbidden);
+    }
   });
 });
