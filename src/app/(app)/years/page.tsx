@@ -5,7 +5,7 @@ import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { DataTable } from "@/components/DataTable";
 import { PageFrame, Spinner, ExportBar } from "@/components/ui";
 import { YearDialog, SnapshotDialog } from "@/components/dialogs/master";
-import { listYears, deleteYear, setYearStatus, createSnapshot, movementsCountInRange, getSnapshot } from "@/lib/repo";
+import { listYears, deleteYear, setYearStatus, createSnapshot, movementsCountInRange, getSnapshot, rolloverYear } from "@/lib/repo";
 import { notify } from "@/components/toast";
 import { exportPage } from "@/lib/exportHelper";
 
@@ -54,6 +54,18 @@ export default function YearsPage() {
     }
   };
 
+  const onRollover = async (id: number) => {
+    const y = (data ?? []).find((x) => x.id === id);
+    if (!y || y.status !== "closed") return notify("أغلق السنة السابقة أولاً.", "error");
+    const next = y.year + 1;
+    try {
+      const newId = await rolloverYear(id, next, `${next}-01-01`, `${next}-12-31`);
+      notify(`تم إنشاء سنة ${next} وترحيل الأرصدة الافتتاحية بنجاح.`, "success");
+      qc.invalidateQueries({ queryKey: ["years"] });
+      return newId;
+    } catch (e) { notify(e instanceof Error ? e.message : String(e), "error"); }
+  };
+
   const onDelete = async (id: number) => {
     if (!window.confirm("هل أنت متأكد من حذف هذه السنة المالية؟")) return;
     try {
@@ -75,12 +87,14 @@ export default function YearsPage() {
           extra={[
             { key: "snapshot", label: "🖼️", title: "لقطة الإغلاق Snapshot" },
             { key: "toggle", label: "🔐", title: "إغلاق / فتح السنة" },
+            { key: "rollover", label: "➕", title: "فتح السنة التالية وترحيل الأرصدة" },
           ]}
           onAction={(id, key) => {
             if (key === "view") setDialog({ mode: "view", id: Number(id) });
             else if (key === "edit") setDialog({ mode: "edit", id: Number(id) });
             else if (key === "delete") onDelete(Number(id));
             else if (key === "toggle") onToggle(Number(id));
+            else if (key === "rollover") onRollover(Number(id));
             else if (key === "snapshot") {
               const y = (data ?? []).find((x) => x.id === Number(id));
               if (y) setSnapshot({ id: y.id, year: y.year });

@@ -215,6 +215,19 @@ async function count(
 }
 
 // ---------------------------------------------------------------------------
+// إشعارات الدائن والمدين — لا تعديل للفواتير بعد إصدارها
+export async function saveCreditDebitNote(data: Record<string, any>): Promise<number> {
+  if (data.note_type !== "credit" && data.note_type !== "debit") throw new RuleError("نوع الإشعار غير صالح.");
+  if (!data.invoice_id || !data.customer_id || Number(data.amount) <= 0) throw new RuleError("أكمل الفاتورة والعميل والمبلغ.");
+  const { data: inserted, error } = await supabase.from("credit_debit_notes").insert({
+    note_type: data.note_type, invoice_id: Number(data.invoice_id), customer_id: Number(data.customer_id),
+    date: String(data.date), amount: roundMoney(data.amount), vat_rate: num(data.vat_rate ?? 15), reason: txt(data.reason ?? "", "سبب الإشعار"),
+  }).select().single();
+  if (error) throw new RuleError(error.message);
+  return Number(inserted.id);
+}
+
+// ---------------------------------------------------------------------------
 // السنوات المالية
 // ---------------------------------------------------------------------------
 export async function listYears(): Promise<FinancialYear[]> {
@@ -275,6 +288,14 @@ export async function saveYear(data: Record<string, unknown>, yearId?: number | 
     .single();
   if (error) throw new RuleError(error.message);
   return inserted.id;
+}
+
+export async function rolloverYear(yearId: number, nextYear: number, dateFrom: string, dateTo: string): Promise<number> {
+  const { data, error } = await supabase.rpc("create_next_financial_year", {
+    p_closed_year_id: yearId, p_year: nextYear, p_date_from: dateFrom, p_date_to: dateTo,
+  });
+  if (error) throw new RuleError(error.message);
+  return Number(data);
 }
 
 export async function setYearStatus(yearId: number, status: string): Promise<void> {
