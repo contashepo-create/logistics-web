@@ -3,7 +3,8 @@
 import { useState } from "react";
 import { useRouter } from "next/navigation";
 import Link from "next/link";
-import { signIn, isAdmin } from "@/lib/auth";
+import { signIn, getCompany } from "@/lib/auth";
+import { SUPABASE_CONFIGURED } from "@/lib/supabase";
 
 export default function LoginPage() {
   const router = useRouter();
@@ -26,14 +27,30 @@ export default function LoginPage() {
         setError(translateAuthError(res.message));
         return;
       }
-      // المطوّر إلى اللوحة، والمستخدم إلى تطبيقه
-      router.replace((await isAdmin()) ? "/admin" : "/customers");
+      // الجميع (بما فيهم المطوّر) يدخلون التطبيق كمستخدم عادي.
+      // لوحة المطوّر لها مسار خاص غير معلن ومحمي بتحقق ثنائي.
+      const company = await getCompany();
+      router.replace(company ? "/customers" : "/onboarding");
     } catch (err) {
       setError(err instanceof Error ? err.message : "حدث خطأ غير متوقع.");
     } finally {
       setLoading(false);
     }
   };
+
+  if (!SUPABASE_CONFIGURED) {
+    return (
+      <div className="auth-card" style={{ lineHeight: 2 }}>
+        <div className="auth-brand">⚙️</div>
+        <h1 className="auth-title">النظام بحاجة إلى إعداد</h1>
+        <p className="auth-sub">
+          لم تُضبط متغيّرات Supabase في بيئة النشر. أضف <code>NEXT_SUPABASE_URL</code> و
+          <code> NEXT_SUPABASE_ANON_KEY</code> ثم أعد النشر (Redeploy).
+        </p>
+        <Link href="/" className="auth-link">← العودة للصفحة الرئيسية</Link>
+      </div>
+    );
+  }
 
   return (
     <div className="auth-card">
@@ -73,6 +90,9 @@ export default function LoginPage() {
         </button>
       </form>
 
+      <p className="auth-foot">
+        <Link href="/" className="auth-link">← الصفحة الرئيسية</Link>
+      </p>
       <p className="auth-foot">
         ليس لديك حساب؟{" "}
         <Link href="/register" className="auth-link">

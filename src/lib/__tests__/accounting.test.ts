@@ -44,14 +44,14 @@ async function seedDemo(): Promise<Record<string, number>> {
   const inv1 = await repo.saveInvoice({
     date: d(2, 10), customer_id: cust1, notes: "مشروع", attachments: [],
     trips: [
-      { vehicle_id: veh1, driver_id: drv1, from_loc: "الرياض", to_loc: "الدمام", price: 4500, notes: "", expenses: [{ expense_type: "trip", amount: 350, notes: "" }, { expense_type: "fuel", amount: 260, notes: "" }, { expense_type: "card", amount: 90, notes: "" }] },
-      { vehicle_id: veh2, driver_id: drv2, from_loc: "الرياض", to_loc: "القصيم", price: 3000, notes: "", expenses: [{ expense_type: "trip", amount: 250, notes: "" }, { expense_type: "fuel", amount: 180, notes: "" }] },
+      { vehicle_id: veh1, driver_id: drv1, from_loc: "الرياض", to_loc: "الدمام", price: 4500, notes: "", expenses: [{ expense_type: "trip", source: "supplier", supplier_name: "محطة", amount: 350, notes: "" }, { expense_type: "fuel", source: "supplier", supplier_name: "محطة", amount: 260, notes: "" }, { expense_type: "card", source: "supplier", supplier_name: "محطة", amount: 90, notes: "" }] },
+      { vehicle_id: veh2, driver_id: drv2, from_loc: "الرياض", to_loc: "القصيم", price: 3000, notes: "", expenses: [{ expense_type: "trip", source: "supplier", supplier_name: "محطة", amount: 250, notes: "" }, { expense_type: "fuel", source: "supplier", supplier_name: "محطة", amount: 180, notes: "" }] },
     ],
   });
   const inv2 = await repo.saveInvoice({
     date: d(3, 5), customer_id: cust2, notes: "", attachments: [],
     trips: [
-      { vehicle_id: veh1, driver_id: drv1, from_loc: "جدة", to_loc: "مكة", price: 1800, notes: "", expenses: [{ expense_type: "trip", amount: 150, notes: "" }, { expense_type: "fuel", amount: 100, notes: "" }] },
+      { vehicle_id: veh1, driver_id: drv1, from_loc: "جدة", to_loc: "مكة", price: 1800, notes: "", expenses: [{ expense_type: "trip", source: "supplier", supplier_name: "محطة", amount: 150, notes: "" }, { expense_type: "fuel", source: "supplier", supplier_name: "محطة", amount: 100, notes: "" }] },
     ],
   });
   await repo.saveReceipt({ date: d(2, 25), account_kind: "cashbox", account_id: cb, voucher_type: "customer", customer_id: cust1, amount: 5000, description: "دفعة تحت الحساب" });
@@ -106,12 +106,14 @@ describe("الحسابات — مطابقة التطبيق المكتبي الم
     expect(p.other_revenue).toBeCloseTo(750, 2);
     expect(p.total_revenue).toBeCloseTo(10050, 2);
     expect(p.direct_expenses).toBeCloseTo(1380, 2);
+    // سندات الرحلات اليدوية صارت تُحتسب مصروفاً (كانت تخرج من الخزينة بلا قيد مصروف)
+    expect(p.trip_payments).toBeCloseTo(220, 2);
     expect(p.salaries).toBeCloseTo(6450, 2);
     expect(p.advances).toBeCloseTo(1000, 2);
     expect(p.maintenance).toBeCloseTo(850, 2);
     expect(p.general_expenses).toBeCloseTo(1200, 2);
-    expect(p.total_expenses).toBeCloseTo(10880, 2);
-    expect(p.net).toBeCloseTo(-830, 2);
+    expect(p.total_expenses).toBeCloseTo(11100, 2);
+    expect(p.net).toBeCloseTo(-1050, 2);
     expect(p.vat_collected).toBeCloseTo(0, 2);
   });
 
@@ -165,7 +167,7 @@ describe("الحسابات — مطابقة التطبيق المكتبي الم
     expect(t1.net).toBeCloseTo(3580, 2);
   });
 
-  it("معادلة ميزان المراجعة: صافي الربح − تغيّر الأصول = سندات الرحلات − المصروفات المباشرة", async () => {
+  it("معادلة ميزان المراجعة: صافي الربح − تغيّر الأصول = − المصروفات غير النقدية", async () => {
     const p = await calc.pnlReport("1900-01-01", "2999-12-31");
     const assets =
       (await calc.customerBalance(ids.cust1)) +
@@ -174,9 +176,9 @@ describe("الحسابات — مطابقة التطبيق المكتبي الم
       (await calc.accountBalance("bank", ids.bnk));
     const opened = 15000 + 0 + 20000 + 80000;
     const dAssets = assets - opened;
-    const tripPays = table("payment_vouchers").filter((v) => v.voucher_type === "trip").reduce((a, v) => a + v.amount, 0);
+    // المصروفات المسجّلة داخل الفواتير هنا "آجلة على مورد" فلم تمس الأصول بعد
     const direct = table("trip_expenses").reduce((a, e) => a + e.amount, 0);
-    expect(p.net - dAssets).toBeCloseTo(tripPays - direct, 2);
+    expect(p.net - dAssets).toBeCloseTo(-direct, 2);
   });
 });
 

@@ -135,11 +135,15 @@ async function stampCode(table: string, rowId: number, prefix: string): Promise<
   return code;
 }
 
-async function count(table: string, column: string, value: unknown): Promise<number> {
-  const { count: c } = await supabase
-    .from(table)
-    .select("id", { count: "exact", head: true })
-    .eq(column, value);
+async function count(
+  table: string,
+  column: string,
+  value: unknown,
+  extra?: { column: string; value: unknown }
+): Promise<number> {
+  let q = supabase.from(table).select("id", { count: "exact", head: true }).eq(column, value);
+  if (extra) q = q.eq(extra.column, extra.value);
+  const { count: c } = await q;
   return c ?? 0;
 }
 
@@ -501,9 +505,11 @@ export async function saveAccount(
 }
 
 export async function deleteAccount(kind: string, accountId: number): Promise<void> {
-  const nRec = await count("receipt_vouchers", "account_id", accountId);
-  const nPay = await count("payment_vouchers", "account_id", accountId);
-  const nSal = await count("payrolls", "account_id", accountId);
+  // المطابقة على نوع الحساب أيضاً: الخزائن والبنوك ترقيمهما مستقل وقد يتشابه المعرّف
+  const k = { column: "account_kind", value: kind };
+  const nRec = await count("receipt_vouchers", "account_id", accountId, k);
+  const nPay = await count("payment_vouchers", "account_id", accountId, k);
+  const nSal = await count("payrolls", "account_id", accountId, k);
   if (nRec || nPay || nSal) {
     throw new RuleError(
       `لا يمكن الحذف لوجود حركات مرتبطة (قبض: ${nRec}، دفع: ${nPay}، رواتب: ${nSal}).`
@@ -545,9 +551,28 @@ export async function saveInvoice(data: Record<string, any>, invoiceId?: number 
     }
   }
   for (const t of trips) {
-    if (roundMoney(t.price ?? 0) <= 0) throw new RuleError("سعر النقلة يجب أن يكون أكبر من صفر.");
+    const qty = Math.max(1, Math.trunc(num(t.qty ?? 1)));
+    t.qty = qty;
+    t.unit_price = roundMoney(t.unit_price ?? (num(t.price) / qty));
+    t.price = roundMoney(qty * t.unit_price);
+    if (t.price <= 0) throw new RuleError("سعر النقلة يجب أن يكون أكبر من صفر.");
     for (const e of t.expenses ?? []) {
-      if (roundMoney(e.amount ?? 0) <= 0) throw new RuleError("مبلغ مصروف النقلة يجب أن يكون أكبر من صفر.");
+      const eq = num(e.qty ?? 1) || 1;
+      e.qty = eq;
+      e.unit_amount = roundMoney(e.unit_amount ?? (num(e.amount) / eq));
+      e.amount = roundMoney(eq * e.unit_amount);
+      if (e.amount <= 0) throw new RuleError("مبلغ مصروف النقلة يجب أن يكون أكبر من صفر.");
+      const src = e.source ?? "cash";
+      if (!["cash", "driver", "supplier", "customer"].includes(src)) {
+        throw new RuleError("مصدر تمويل المصروف غير صالح.");
+      }
+      e.source = src;
+      if (src === "cash" && (!e.account_kind || !e.account_id)) {
+        throw new RuleError("اختر الخزينة أو البنك الذي صُرف منه المصروف النقدي.");
+      }
+      if (src === "driver" && !t.driver_id) {
+        throw new RuleError("حدّد السائق في النقلة قبل تسجيل مصروف من عهدته.");
+      }
     }
   }
 
@@ -570,11 +595,19 @@ export async function saveInvoice(data: Record<string, any>, invoiceId?: number 
     driver_id: t.driver_id ?? null,
     from_loc: t.from_loc ?? "",
     to_loc: t.to_loc ?? "",
+    qty: t.qty ?? 1,
+    unit_price: roundMoney(t.unit_price ?? 0),
     price: roundMoney(t.price ?? 0),
     notes: t.notes ?? "",
     expenses: (t.expenses ?? []).map((e: any) => ({
       expense_type: e.expense_type,
+      qty: e.qty ?? 1,
+      unit_amount: roundMoney(e.unit_amount ?? 0),
       amount: roundMoney(e.amount ?? 0),
+      source: e.source ?? "cash",
+      account_kind: e.source === "cash" ? (e.account_kind ?? null) : null,
+      account_id: e.source === "cash" && e.account_id ? Number(e.account_id) : null,
+      supplier_name: e.supplier_name ?? "",
       notes: e.notes ?? "",
     })),
   }));
@@ -605,6 +638,8 @@ export async function deleteInvoice(invoiceId: number): Promise<void> {
       .from("payment_vouchers")
       .select("id", { count: "exact", head: true })
       .eq("voucher_type", "trip")
+      // السندات المتولّدة تلقائياً من مصروفات الفاتورة تُحذف معها تتابعياً
+      .is("source_expense_id", null)
       .in("trip_id", tripIds);
     linked = c ?? 0;
   }

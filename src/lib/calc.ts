@@ -55,16 +55,30 @@ export async function customerBalance(
   const { data: invs } = await invQuery;
   const invIds = (invs ?? []).map((r) => r.id);
 
-  // إجمالي الفاتورة على العميل = قيمة النقلات + ضريبة القيمة المضافة
+  // إجمالي الفاتورة على العميل = قيمة النقلات + المصروفات التي يتحمّلها العميل + الضريبة
   let inv = 0;
   if (invIds.length) {
     const { data: trips } = await supabase
       .from("invoice_trips")
-      .select("invoice_id, price")
+      .select("id, invoice_id, price")
       .in("invoice_id", invIds);
     const subByInv = new Map<number, number>();
+    const invOfTrip = new Map<number, number>();
     for (const t of trips ?? []) {
+      invOfTrip.set(t.id, t.invoice_id);
       subByInv.set(t.invoice_id, (subByInv.get(t.invoice_id) ?? 0) + num(t.price));
+    }
+    const tripIds = [...invOfTrip.keys()];
+    if (tripIds.length) {
+      const { data: exps } = await supabase
+        .from("trip_expenses")
+        .select("trip_id, amount, source")
+        .eq("source", "customer")
+        .in("trip_id", tripIds);
+      for (const e of exps ?? []) {
+        const iid = invOfTrip.get(e.trip_id);
+        if (iid != null) subByInv.set(iid, (subByInv.get(iid) ?? 0) + num(e.amount));
+      }
     }
     const vatMap = new Map((invs ?? []).map((r) => [r.id, num(r.vat_rate)]));
     for (const [iid, sub] of subByInv) {
@@ -180,6 +194,7 @@ export async function allAccounts(): Promise<
 // ---------------------------------------------------------------------------
 export async function invoiceTotals(invoiceId: number): Promise<{
   trips_total: number;
+  billable_total: number;
   expenses_total: number;
   expected_profit: number;
   later_payments: number;
@@ -202,36 +217,45 @@ export async function invoiceTotals(invoiceId: number): Promise<{
   const tripIds = (trips ?? []).map((t) => t.id);
   const tripsTotal = sum((trips ?? []).map((t) => num(t.price)));
 
+  // المصروف المُعاد تحميله على العميل ليس تكلفة — يُضاف لقيمة الفاتورة
   let expensesTotal = 0;
+  let billableTotal = 0;
   if (tripIds.length) {
     const { data: exps } = await supabase
       .from("trip_expenses")
-      .select("amount")
+      .select("amount, source")
       .in("trip_id", tripIds);
-    expensesTotal = sum((exps ?? []).map((e) => num(e.amount)));
+    for (const e of exps ?? []) {
+      if ((e as { source?: string }).source === "customer") billableTotal += num(e.amount);
+      else expensesTotal += num(e.amount);
+    }
   }
 
+  // السندات المتولّدة تلقائياً من مصروفات الفاتورة مستبعدة (وإلا احتُسبت مرتين)
   let later = 0;
   if (tripIds.length) {
     const { data: pays } = await supabase
       .from("payment_vouchers")
       .select("amount")
       .eq("voucher_type", "trip")
+      .is("source_expense_id", null)
       .in("trip_id", tripIds);
     later = sum((pays ?? []).map((p) => num(p.amount)));
   }
 
-  const expected = round2(tripsTotal - expensesTotal);
-  const vatAmount = round2((tripsTotal * vatRate) / 100);
+  const revenue = tripsTotal + billableTotal;
+  const expected = round2(revenue - expensesTotal);
+  const vatAmount = round2((revenue * vatRate) / 100);
   return {
     trips_total: round2(tripsTotal),
+    billable_total: round2(billableTotal),
     expenses_total: round2(expensesTotal),
     expected_profit: expected,
     later_payments: round2(later),
     actual_profit: round2(expected - later),
     vat_rate: round2(vatRate),
     vat_amount: vatAmount,
-    customer_total: round2(tripsTotal + vatAmount),
+    customer_total: round2(revenue + vatAmount),
   };
 }
 
@@ -241,14 +265,21 @@ export async function tripProfit(
   pTo?: string | null
 ): Promise<{ price: number; direct: number; later: number; net: number }> {
   const { data: t } = await supabase.from("invoice_trips").select("price").eq("id", tripId).single();
-  const price = t ? num(t.price) : 0;
-  const { data: exps } = await supabase.from("trip_expenses").select("amount").eq("trip_id", tripId);
-  const direct = sum((exps ?? []).map((e) => num(e.amount)));
+  const basePrice = t ? num(t.price) : 0;
+  const { data: exps } = await supabase.from("trip_expenses").select("amount, source").eq("trip_id", tripId);
+  let direct = 0;
+  let billable = 0;
+  for (const e of exps ?? []) {
+    if ((e as { source?: string }).source === "customer") billable += num(e.amount);
+    else direct += num(e.amount);
+  }
+  const price = basePrice + billable;
 
   let payQuery = supabase
     .from("payment_vouchers")
     .select("amount")
     .eq("voucher_type", "trip")
+    .is("source_expense_id", null)
     .eq("trip_id", tripId);
   if (pFrom) payQuery = payQuery.gte("date", pFrom);
   if (pTo) payQuery = payQuery.lte("date", pTo);
@@ -262,6 +293,8 @@ export interface InvoiceListItem extends Invoice {
   customer_name: string;
   customer_code: string;
   trips_total: number;
+  /** مصروفات يتحمّلها العميل (تُضاف لقيمة الفاتورة) */
+  billable_total: number;
   expenses_total: number;
   expected_profit: number;
   later_payments: number;
@@ -815,14 +848,33 @@ export async function pnlReport(
   const invIds = (invs ?? []).map((i) => i.id);
   let transport = 0;
   let vatCollected = 0;
+  let direct = 0;
   if (invIds.length) {
     const { data: trips } = await supabase
       .from("invoice_trips")
-      .select("invoice_id, price")
+      .select("id, invoice_id, price")
       .in("invoice_id", invIds);
     const subByInv = new Map<number, number>();
+    const invOfTrip = new Map<number, number>();
     for (const t of trips ?? []) {
+      invOfTrip.set(t.id, t.invoice_id);
       subByInv.set(t.invoice_id, (subByInv.get(t.invoice_id) ?? 0) + num(t.price));
+    }
+    // المصروف الذي يتحمّله العميل إيراد إضافي (يدخل وعاء الضريبة)، وما عداه تكلفة مباشرة
+    const tripIds = [...invOfTrip.keys()];
+    if (tripIds.length) {
+      const { data: exps } = await supabase
+        .from("trip_expenses")
+        .select("trip_id, amount, source")
+        .in("trip_id", tripIds);
+      for (const e of exps ?? []) {
+        if ((e as { source?: string }).source === "customer") {
+          const iid = invOfTrip.get(e.trip_id);
+          if (iid != null) subByInv.set(iid, (subByInv.get(iid) ?? 0) + num(e.amount));
+        } else {
+          direct += num(e.amount);
+        }
+      }
     }
     const vatMap = new Map((invs ?? []).map((i) => [i.id, num(i.vat_rate)]));
     for (const [iid, sub] of subByInv) {
@@ -838,17 +890,6 @@ export async function pnlReport(
     "date"
   );
   const otherRev = sum((otherRows ?? []).map((r) => num(r.amount)));
-
-  // المصروفات المباشرة
-  let direct = 0;
-  if (invIds.length) {
-    const { data: trips } = await supabase.from("invoice_trips").select("id").in("invoice_id", invIds);
-    const tripIds = (trips ?? []).map((t) => t.id);
-    if (tripIds.length) {
-      const { data: exps } = await supabase.from("trip_expenses").select("amount").in("trip_id", tripIds);
-      direct = sum((exps ?? []).map((e) => num(e.amount)));
-    }
-  }
 
   const { data: salRows } = await between(supabase.from("payrolls").select("net_salary"), "date");
   const salaries = sum((salRows ?? []).map((r) => num(r.net_salary)));
@@ -871,13 +912,21 @@ export async function pnlReport(
   );
   const general = sum((genRows ?? []).map((r) => num(r.amount)));
 
+  // سندات الرحلات اليدوية (المتولّدة تلقائياً محتسبة ضمن direct أعلاه)
+  const { data: tripPayRows } = await between(
+    supabase.from("payment_vouchers").select("amount").eq("voucher_type", "trip").is("source_expense_id", null),
+    "date"
+  );
+  const tripPayments = sum((tripPayRows ?? []).map((r) => num(r.amount)));
+
   const totalRev = round2(transport + otherRev);
-  const totalExp = round2(direct + salaries + advances + maintenance + general);
+  const totalExp = round2(direct + tripPayments + salaries + advances + maintenance + general);
   return {
     transport_revenue: round2(transport),
     other_revenue: round2(otherRev),
     total_revenue: totalRev,
     direct_expenses: round2(direct),
+    trip_payments: round2(tripPayments),
     salaries: round2(salaries),
     advances: round2(advances),
     maintenance: round2(maintenance),

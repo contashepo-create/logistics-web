@@ -22,6 +22,21 @@ export const EXPENSE_TYPES: Record<string, string> = {
   other: "أخرى",
 };
 
+export const EXPENSE_SOURCES: Record<string, string> = {
+  cash: "نقداً من خزينة/بنك",
+  driver: "من عهدة السائق",
+  supplier: "آجل على مورد",
+  customer: "يتحمّله العميل",
+};
+
+/** شرح مختصر لأثر كل مصدر تمويل — يظهر تحت الحقل في شاشة الفاتورة. */
+export const EXPENSE_SOURCE_HINTS: Record<string, string> = {
+  cash: "يُنشأ سند دفع تلقائي ويُخصم فوراً من رصيد الخزينة/البنك.",
+  driver: "يُقيَّد على حساب السائق (يُخصم من عهدته/مستحقاته) بلا تحريك خزينة.",
+  supplier: "التزام آجل على المورد يُسدَّد لاحقاً بسند دفع يدوي.",
+  customer: "لا يُعد تكلفة — يُضاف على الفاتورة ويزيد المستحق على العميل.",
+};
+
 export const PAYMENT_TYPES: Record<string, string> = {
   trip: "مصروف يخص رحلة",
   advance: "سلفة موظف/سائق",

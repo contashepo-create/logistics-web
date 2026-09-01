@@ -59,8 +59,10 @@
 
 ```bash
 # ==================== Supabase (من Project Settings → API) ====================
-NEXT_PUBLIC_SUPABASE_URL=https://مشروعك.supabase.co
-NEXT_PUBLIC_SUPABASE_ANON_KEY=المفتاح-العام-anon-الخاص-بك
+# الأسماء المعتمدة في النشر (Vercel). يجسرها next.config.ts تلقائياً إلى
+# NEXT_PUBLIC_SUPABASE_URL / NEXT_PUBLIC_SUPABASE_ANON_KEY وقت البناء.
+NEXT_SUPABASE_URL=https://مشروعك.supabase.co
+NEXT_SUPABASE_ANON_KEY=المفتاح-العام-anon-الخاص-بك
 
 # ==================== تليجرام (أسرار — لا تُنشر أبداً) ====================
 # أنشئ البوت من @BotFather ثم انسخ التوكن هنا
@@ -157,7 +159,7 @@ npm run seed
 
 ## استكشاف الأخطاء الشائعة
 
-- **«supabaseUrl is required» عند البناء:** تأكد من وجود `NEXT_PUBLIC_SUPABASE_URL` في `.env.local`.
+- **«supabaseUrl is required»:** تأكد من وجود `NEXT_SUPABASE_URL` و`NEXT_SUPABASE_ANON_KEY` (أو نسختيهما بالبادئة `NEXT_PUBLIC_`) في `.env.local` أو في متغيّرات بيئة Vercel، **ولكل البيئات** (Production + Preview)، ثم أعد النشر — القيم تُحقن وقت البناء وليس وقت التشغيل.
 - **2FA لا يصل إلى تليجرام:** تأكد من التوكن/chat_id، ومن أنك أرسلت رسالة أولى للبوت، ومن وصول الخادم إلى `api.telegram.org`.
 - **العميل لا يستطيع التسجيل بعد إغلاق سنة:** تأكد من وجود سنة مالية **مفتوحة** تشمل التاريخ قبل تسجيل أي حركة.
 - **خطأ `23505` (رقم مكرر):** لا يحدث عادةً — النظام يعيد المحاولة تلقائياً، والقيود الفريدة تحميه.

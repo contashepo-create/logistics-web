@@ -32,7 +32,7 @@ describe("الحفظ الذري للفواتير عبر save_invoice", () => {
       customer_id: cust,
       attachments: [],
       trips: [
-        { from_loc: "أ", to_loc: "ب", price: 1000, expenses: [{ expense_type: "fuel", amount: 100 }] },
+        { from_loc: "أ", to_loc: "ب", price: 1000, expenses: [{ expense_type: "fuel", source: "supplier", supplier_name: "محطة", amount: 100 }] },
         { from_loc: "ب", to_loc: "ج", price: 500, expenses: [] },
       ],
     });
