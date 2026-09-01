@@ -2,17 +2,16 @@
 -- إصلاحات ما بعد v2 — آمن التكرار وآمن التنفيذ على أي قاعدة
 -- الصق الملف كاملاً في: Supabase > SQL Editor > New query > Run
 --
---  0) حذف النسخ القديمة المتعارضة من الدوال (اختلاف أسماء المعاملات يعطي 42P13)
+--  0) حذف نسخة whoami القديمة (قد يختلف نوع الإرجاع)
 --  1) إعادة صلاحية القراءة العامة لجدول إعدادات التطبيق (401 للزوار)
---  2) إنشاء الدوال الأساسية إن كانت مفقودة
+--  2) إنشاء الدوال الأساسية عند غيابها فقط (تفادي خطأ 42P13)
 --  3) منح صلاحيات التنفيذ ديناميكياً (يتجاهل أي دالة غير موجودة)
---  4) حارس الملف الشخصي حتى لا يفشل التسجيل الجديد
---  5) دالة تشخيص whoami()
+--  4) تصحيح is_active_user() — عمود profiles.is_active محذوف منذ ترحيل company_id
+--  5) حارس الملف الشخصي بلا افتراض أعمدة (سبب تعليق «جارٍ تسجيل الحساب»)
 -- ============================================================================
 
 -- ---------------------------------------------------------------------------
--- 0) حذف أي نسخة قديمة من whoami فقط (قد يختلف نوع الإرجاع فيفشل REPLACE).
---    باقي الدوال لا تُلمس إن كانت موجودة — تُنشأ فقط عند غيابها (بند 2).
+-- 0) حذف أي نسخة قديمة من whoami فقط (نوع الإرجاع قد يختلف فيفشل REPLACE)
 -- ---------------------------------------------------------------------------
 do $drops$
 declare r record;
@@ -21,13 +20,12 @@ begin
     select p.oid::regprocedure as sig
     from pg_proc p
     join pg_namespace n on n.oid = p.pronamespace
-    where n.nspname = 'public'
-      and p.proname = 'whoami'
+    where n.nspname = 'public' and p.proname = 'whoami'
   loop
     begin
       execute format('drop function %s', r.sig);
     exception when others then
-      raise notice 'تعذّر حذف % (مستخدمة في كائن آخر) — سنُبقي عليها: %', r.sig, sqlerrm;
+      raise notice 'تعذّر حذف %: %', r.sig, sqlerrm;
     end;
   end loop;
 end $drops$;
@@ -49,7 +47,7 @@ begin
 end $settings$;
 
 -- ---------------------------------------------------------------------------
--- 2) إنشاء الدوال الأساسية إن لم تكن موجودة (بعد محاولة الحذف أعلاه)
+-- 2) إنشاء الدوال الأساسية إن كانت مفقودة (لا نلمس أي دالة قائمة)
 -- ---------------------------------------------------------------------------
 do $fns$
 begin
@@ -93,23 +91,6 @@ begin
     $f2$;
   end if;
 
-  -- هل المستخدم الحالي مفعّل؟
-  if not exists (
-    select 1 from pg_proc p join pg_namespace n on n.oid = p.pronamespace
-    where n.nspname = 'public' and p.proname = 'is_active_user'
-  ) then
-    execute $f3$
-      create function public.is_active_user()
-      returns boolean
-      language sql stable security definer set search_path = public as $body$
-        select coalesce(
-          (select p.is_active from public.profiles p where p.id = auth.uid()),
-          false
-        );
-      $body$;
-    $f3$;
-  end if;
-
   -- تشخيص: من أنا؟
   if not exists (
     select 1 from pg_proc p join pg_namespace n on n.oid = p.pronamespace
@@ -129,7 +110,92 @@ begin
 end $fns$;
 
 -- ---------------------------------------------------------------------------
--- 3) منح صلاحيات التنفيذ ديناميكياً حسب الاسم مهما كان توقيع الدالة،
+-- 3) is_active_user(): عمود profiles.is_active حُذف في ترحيل company_id،
+--    فصار التفعيل على مستوى الشركة. ننشئ النسخة المطابقة للأعمدة الموجودة.
+-- ---------------------------------------------------------------------------
+do $active$
+declare has_profile_active boolean;
+begin
+  select exists (
+    select 1 from information_schema.columns
+    where table_schema = 'public' and table_name = 'profiles' and column_name = 'is_active'
+  ) into has_profile_active;
+
+  if has_profile_active then
+    execute $x1$
+      create or replace function public.is_active_user() returns boolean
+      language sql stable security definer set search_path = public as $body$
+        select coalesce((select p.is_active from public.profiles p where p.id = auth.uid()), false);
+      $body$;
+    $x1$;
+  else
+    execute $x2$
+      create or replace function public.is_active_user() returns boolean
+      language sql stable security definer set search_path = public as $body$
+        select coalesce(
+          (select c.is_active
+             from public.profiles p
+             join public.companies c on c.id = p.company_id
+            where p.id = auth.uid()),
+          false
+        );
+      $body$;
+    $x2$;
+  end if;
+end $active$;
+
+-- ---------------------------------------------------------------------------
+-- 4) حارس الملف الشخصي — بلا افتراض وجود أعمدة role / is_active / name.
+--    النسخة السابقة كانت تسند إلى new.role و new.is_active وهما محذوفان
+--    ⇒ خطأ 42703 عند التسجيل ⇒ تعليق شاشة «جارٍ تسجيل الحساب».
+--    نستخدم jsonb حتى نضبط الأعمدة الموجودة فقط.
+-- ---------------------------------------------------------------------------
+create or replace function public.set_profile_guard() returns trigger
+language plpgsql as $guard$
+declare
+  v_email text;
+  j jsonb;
+begin
+  v_email := lower(coalesce(nullif(auth.jwt() ->> 'email', ''), new.email, ''));
+
+  if v_email <> '' and not public.is_allowed_email(v_email) then
+    raise exception 'يُقبل التسجيل ببريد Gmail أو Yahoo أو Hotmail أو Outlook أو iCloud فقط.';
+  end if;
+
+  j := to_jsonb(new);
+  j := jsonb_set(j, '{email}', to_jsonb(v_email));
+
+  if j ? 'role' then
+    j := jsonb_set(
+      j, '{role}',
+      to_jsonb(case when v_email = 'conta.moha@gmail.com' then 'admin' else 'user' end)
+    );
+  end if;
+
+  if j ? 'is_active' then
+    j := jsonb_set(j, '{is_active}', to_jsonb(coalesce((j ->> 'is_active')::boolean, true)));
+  end if;
+
+  if j ? 'name' then
+    j := jsonb_set(j, '{name}', to_jsonb(coalesce(public.safe_text(j ->> 'name', 120), '')));
+  end if;
+
+  new := jsonb_populate_record(new, j);
+  return new;
+end $guard$;
+
+-- إعادة ربط المُشغّل على جدول الملفات الشخصية
+do $trg$
+begin
+  if to_regclass('public.profiles') is not null then
+    execute 'drop trigger if exists trg_profile_guard on public.profiles';
+    execute 'create trigger trg_profile_guard before insert or update on public.profiles
+               for each row execute function public.set_profile_guard()';
+  end if;
+end $trg$;
+
+-- ---------------------------------------------------------------------------
+-- 5) منح صلاحيات التنفيذ ديناميكياً حسب الاسم مهما كان توقيع الدالة،
 --    مع تجاهل أي دالة غير موجودة (لا يتوقف السكربت).
 -- ---------------------------------------------------------------------------
 do $grants$
@@ -168,25 +234,6 @@ begin
     execute format('grant execute on function %s to anon, authenticated', r.sig);
   end loop;
 end $grants$;
-
--- ---------------------------------------------------------------------------
--- 4) حارس الملف الشخصي: يتحقق من البريد عند وجوده فقط، ولا يعطّل التسجيل
---    (دالة trigger بلا معاملات — CREATE OR REPLACE آمن هنا)
--- ---------------------------------------------------------------------------
-create or replace function public.set_profile_guard() returns trigger
-language plpgsql as $guard$
-declare v_email text;
-begin
-  v_email := lower(coalesce(nullif(auth.jwt() ->> 'email', ''), new.email, ''));
-  if v_email <> '' and not public.is_allowed_email(v_email) then
-    raise exception 'يُقبل التسجيل ببريد Gmail أو Yahoo أو Hotmail أو Outlook أو iCloud فقط.';
-  end if;
-  new.email := v_email;
-  new.role := case when v_email = 'conta.moha@gmail.com' then 'admin' else 'user' end;
-  new.is_active := coalesce(new.is_active, true);
-  new.name := public.safe_text(new.name, 120);
-  return new;
-end $guard$;
 
 -- ============================================================================
 -- بعد التنفيذ شغّل للتأكد:

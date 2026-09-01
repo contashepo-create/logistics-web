@@ -142,20 +142,32 @@ exception when insufficient_privilege then
 end $$;
 
 -- (ب) على الملف الشخصي (طبقة ثانية)
+-- ملاحظة: أعمدة role / is_active حُذفت من profiles في ترحيل company_id،
+-- لذلك نضبط الأعمدة الموجودة فعلاً عبر jsonb بدل الإسناد المباشر.
 create or replace function public.set_profile_guard() returns trigger
-language plpgsql as $$
-declare v_email text;
+language plpgsql as $guard$
+declare
+  v_email text;
+  j jsonb;
 begin
-  v_email := lower(coalesce(auth.jwt() ->> 'email', new.email));
-  if not public.is_allowed_email(v_email) then
+  v_email := lower(coalesce(nullif(auth.jwt() ->> 'email', ''), new.email, ''));
+  if v_email <> '' and not public.is_allowed_email(v_email) then
     raise exception 'يُقبل التسجيل ببريد Gmail أو Yahoo أو Hotmail أو Outlook أو iCloud فقط.';
   end if;
-  new.email := v_email;
-  new.role := case when v_email = 'conta.moha@gmail.com' then 'admin' else 'user' end;
-  new.is_active := coalesce(new.is_active, true);
-  new.name := public.safe_text(new.name, 120);
+  j := to_jsonb(new);
+  j := jsonb_set(j, '{email}', to_jsonb(v_email));
+  if j ? 'role' then
+    j := jsonb_set(j, '{role}', to_jsonb(case when v_email = 'conta.moha@gmail.com' then 'admin' else 'user' end));
+  end if;
+  if j ? 'is_active' then
+    j := jsonb_set(j, '{is_active}', to_jsonb(coalesce((j ->> 'is_active')::boolean, true)));
+  end if;
+  if j ? 'name' then
+    j := jsonb_set(j, '{name}', to_jsonb(coalesce(public.safe_text(j ->> 'name', 120), '')));
+  end if;
+  new := jsonb_populate_record(new, j);
   return new;
-end $$;
+end $guard$;
 
 -- ---------------------------------------------------------------------------
 -- 4) الباقة التجريبية 7 أيام هي الافتراضية
