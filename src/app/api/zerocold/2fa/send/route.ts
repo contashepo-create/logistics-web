@@ -3,7 +3,7 @@ import { requireAdmin } from "@/lib/server/supabase";
 import { rateLimit, clientIp } from "@/lib/server/rate-limit";
 import { sendTelegramCode } from "@/lib/server/telegram";
 import { issueOtp, canResend } from "@/lib/server/otp-store";
-import { generateOtp } from "@/lib/server/admin-session";
+import { generateOtp, sameOrigin } from "@/lib/server/admin-session";
 
 export const runtime = "nodejs";
 
@@ -14,6 +14,10 @@ export async function POST(req: NextRequest) {
   const rl = rateLimit(`2fa-send:${ip}`, 5, 60 * 1000);
   if (!rl.allowed) {
     return NextResponse.json({ success: false, message: "طلبات كثيرة جداً. حاول بعد قليل." }, { status: 429 });
+  }
+
+  if (!sameOrigin(req)) {
+    return NextResponse.json({ success: false, message: "طلب مرفوض (أصل غير موثوق)." }, { status: 403 });
   }
 
   // التحقق من هوية المطوّر (JWT صادر من Supabase)

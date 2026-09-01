@@ -2,6 +2,7 @@
 
 import { useEffect, useState } from "react";
 import { notify } from "@/components/toast";
+import { authFetch } from "@/lib/apiClient";
 
 interface Complaint {
   id: string; ticket: string; name: string; email: string; phone: string;
@@ -10,9 +11,9 @@ interface Complaint {
 interface Msg { sender: "visitor" | "admin"; body: string; created_at: string }
 
 async function api(payload: Record<string, unknown>) {
-  const res = await fetch("/api/zerocold/complaints", {
+  const res = await authFetch("/api/zerocold/complaints", {
     method: "POST", headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(payload), credentials: "same-origin",
+    body: JSON.stringify(payload),
   });
   const out = await res.json().catch(() => ({}));
   if (!res.ok || !out?.success) throw new Error(out?.message || "تعذّر تنفيذ الطلب.");

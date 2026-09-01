@@ -438,3 +438,18 @@ grant execute on function public.rls_audit() to authenticated, service_role;
 revoke all on all tables in schema public from anon;
 revoke all on all sequences in schema public from anon;
 revoke all on all functions in schema public from anon;
+
+-- ---------------------------------------------------------------------------
+-- 10) استثناءات ضرورية بعد التشديد (وإلا يفشل الزائر وصفحة الدخول بـ 401)
+-- ---------------------------------------------------------------------------
+grant usage on schema public to anon;
+grant select on public.app_settings to anon;
+grant execute on function public.register_company(text, text, text) to authenticated;
+grant execute on function public.is_admin() to authenticated;
+grant execute on function public.auth_company_id() to authenticated;
+grant execute on function public.is_company_active() to authenticated;
+grant execute on function public.is_active_user() to authenticated;
+grant execute on function public.export_company_data() to authenticated;
+grant execute on function public.is_allowed_email(text) to authenticated, anon;
+grant execute on function public.safe_text(text, int) to authenticated;
+grant execute on function public.log_activity(text, text, text, text) to authenticated;

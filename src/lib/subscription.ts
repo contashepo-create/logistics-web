@@ -2,6 +2,7 @@
 // الأسعار بالجنيه المصري وغير شاملة ضريبة القيمة المضافة.
 
 import { supabase } from "./supabase";
+import { authFetch } from "./apiClient";
 import type { Company } from "./types";
 
 /** عملة العرض. */
@@ -166,8 +167,6 @@ export interface SubscriptionRequestInput {
  * ويمرّر صورة الوصل مباشرة إلى تليجرام المطوّر دون تخزينها.
  */
 export async function submitSubscriptionRequest(input: SubscriptionRequestInput): Promise<ActivationRequest> {
-  const { data: sess } = await supabase.auth.getSession();
-  const token = sess.session?.access_token ?? "";
   const fd = new FormData();
   fd.set("plan_type", input.plan_type);
   fd.set("request_kind", input.request_kind);
@@ -179,11 +178,7 @@ export async function submitSubscriptionRequest(input: SubscriptionRequestInput)
   fd.set("notes", input.notes ?? "");
   if (input.receipt) fd.set("receipt", input.receipt);
 
-  const res = await fetch("/api/subscription/request", {
-    method: "POST",
-    headers: token ? { Authorization: `Bearer ${token}` } : undefined,
-    body: fd,
-  });
+  const res = await authFetch("/api/subscription/request", { method: "POST", body: fd });
   const out = await res.json().catch(() => ({}));
   if (!res.ok || !out?.success) throw new Error(out?.message || "تعذّر إرسال الطلب.");
   return out.request as ActivationRequest;

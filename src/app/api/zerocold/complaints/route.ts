@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { requireAdmin, serviceClient, hasServiceKey } from "@/lib/server/supabase";
-import { verifyTwoFactorToken, COOKIE_NAME } from "@/lib/server/admin-session";
+import { verifyTwoFactorToken, COOKIE_NAME, sameOrigin } from "@/lib/server/admin-session";
 import { rateLimit, clientIp } from "@/lib/server/rate-limit";
 import { safeField } from "@/lib/security";
 import { notifyAdmin } from "@/lib/server/telegram";
@@ -18,6 +18,8 @@ function twoFactorOk(req: NextRequest, email: string): boolean {
 export async function POST(req: NextRequest) {
   if (!hasServiceKey()) return bad("الخدمة غير مهيأة.", 503);
   if (!rateLimit(`adm:ct:${clientIp(req)}`, 60, 60_000).allowed) return bad("طلبات كثيرة.", 429);
+
+  if (!sameOrigin(req)) return bad("طلب مرفوض (أصل غير موثوق).", 403);
 
   const admin = await requireAdmin(req);
   if (!admin) return bad("غير مصرح.", 403);

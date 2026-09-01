@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { requireAdmin } from "@/lib/server/supabase";
 import { rateLimit, clientIp } from "@/lib/server/rate-limit";
 import { verifyOtp, clearOtp } from "@/lib/server/otp-store";
-import { createTwoFactorToken, COOKIE_NAME } from "@/lib/server/admin-session";
+import { createTwoFactorToken, COOKIE_NAME, COOKIE_OPTIONS, sameOrigin } from "@/lib/server/admin-session";
 
 export const runtime = "nodejs";
 
@@ -11,6 +11,10 @@ export async function POST(req: NextRequest) {
   const rl = rateLimit(`2fa-verify:${ip}`, 10, 60 * 1000);
   if (!rl.allowed) {
     return NextResponse.json({ success: false, message: "محاولات كثيرة. حاول بعد قليل." }, { status: 429 });
+  }
+
+  if (!sameOrigin(req)) {
+    return NextResponse.json({ success: false, message: "طلب مرفوض (أصل غير موثوق)." }, { status: 403 });
   }
 
   const admin = await requireAdmin(req);
@@ -47,12 +51,6 @@ export async function POST(req: NextRequest) {
 
   const token = createTwoFactorToken(admin.email);
   const res = NextResponse.json({ success: true, message: "تم التحقق بنجاح." });
-  res.cookies.set(COOKIE_NAME, token, {
-    httpOnly: true,
-    secure: process.env.NODE_ENV === "production",
-    sameSite: "strict",
-    path: "/",
-    maxAge: 12 * 60 * 60,
-  });
+  res.cookies.set(COOKIE_NAME, token, COOKIE_OPTIONS);
   return res;
 }

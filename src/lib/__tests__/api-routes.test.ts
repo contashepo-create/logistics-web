@@ -11,6 +11,8 @@ const mocks = vi.hoisted(() => ({
   createTwoFactorToken: vi.fn(),
   verifyTwoFactorToken: vi.fn(),
   generateOtp: vi.fn(),
+  sameOrigin: vi.fn(() => true),
+  COOKIE_OPTIONS: { httpOnly: true, secure: false, sameSite: "strict" as const, path: "/", maxAge: 43200 },
   // telegram
   sendTelegramCode: vi.fn(),
   notifyAdmin: vi.fn(),
@@ -29,6 +31,8 @@ vi.mock("@/lib/server/admin-session", () => ({
   createTwoFactorToken: mocks.createTwoFactorToken,
   verifyTwoFactorToken: mocks.verifyTwoFactorToken,
   generateOtp: mocks.generateOtp,
+  sameOrigin: mocks.sameOrigin,
+  COOKIE_OPTIONS: mocks.COOKIE_OPTIONS,
 }));
 vi.mock("@/lib/server/telegram", () => ({
   sendTelegramCode: mocks.sendTelegramCode,

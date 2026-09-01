@@ -2,6 +2,7 @@
 
 import { useEffect, useState } from "react";
 import { notify } from "./toast";
+import { authFetch } from "@/lib/apiClient";
 
 /**
  * بوابة التحقق بخطوتين للوحة المطوّر: يُرسل رمز عبر تليجرام ثم يُتحقق منه.
@@ -12,13 +13,18 @@ export function Admin2FA({ onVerified }: { onVerified: () => void }) {
   const [sending, setSending] = useState(false);
   const [verifying, setVerifying] = useState(false);
   const [code, setCode] = useState("");
+  const [denied, setDenied] = useState(false);
 
   useEffect(() => {
     (async () => {
       try {
-        const res = await fetch("/api/zerocold/2fa/status");
-        const data = await res.json();
-        if (data.verified) onVerified();
+        const res = await authFetch("/api/zerocold/2fa/status");
+        const data = await res.json().catch(() => ({}));
+        if (res.status === 403) {
+          setDenied(true);
+        } else if (data.verified) {
+          onVerified();
+        }
       } catch {
         // ابقَ على شاشة التحقق
       } finally {
@@ -30,7 +36,7 @@ export function Admin2FA({ onVerified }: { onVerified: () => void }) {
   const send = async () => {
     setSending(true);
     try {
-      const res = await fetch("/api/zerocold/2fa/send", { method: "POST" });
+      const res = await authFetch("/api/zerocold/2fa/send", { method: "POST" });
       const data = await res.json();
       if (res.ok && data.success) notify("تم إرسال الرمز إلى تليجرام.", "success");
       else notify(data.message || "تعذّر الإرسال.", "error");
@@ -45,7 +51,7 @@ export function Admin2FA({ onVerified }: { onVerified: () => void }) {
     e.preventDefault();
     setVerifying(true);
     try {
-      const res = await fetch("/api/zerocold/2fa/verify", {
+      const res = await authFetch("/api/zerocold/2fa/verify", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ code }),
@@ -68,6 +74,22 @@ export function Admin2FA({ onVerified }: { onVerified: () => void }) {
     return (
       <div style={{ minHeight: "100vh", display: "flex", alignItems: "center", justifyContent: "center", background: "var(--bg)" }}>
         <div className="spinner" />
+      </div>
+    );
+  }
+
+  if (denied) {
+    return (
+      <div className="blocked-screen">
+        <div className="auth-card" style={{ maxWidth: 480 }}>
+          <div className="auth-brand">🚫</div>
+          <h1 className="auth-title">غير مصرح بالدخول</h1>
+          <p className="auth-sub" style={{ lineHeight: 2 }}>
+            الحساب الحالي ليس حساب المطوّر، أو انتهت صلاحية الجلسة.
+            سجّل الخروج ثم ادخل ببريد المطوّر المصرّح به وأعد المحاولة.
+          </p>
+          <button className="btn auth-btn" onClick={() => location.reload()}>إعادة المحاولة</button>
+        </div>
       </div>
     );
   }

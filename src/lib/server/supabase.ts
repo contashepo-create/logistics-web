@@ -2,7 +2,9 @@
 import "server-only";
 import { createClient, type SupabaseClient } from "@supabase/supabase-js";
 
-export const ADMIN_EMAIL = "conta.moha@gmail.com";
+export const ADMIN_EMAIL = (
+  process.env.ADMIN_EMAIL || process.env.NEXT_PUBLIC_ADMIN_EMAIL || "conta.moha@gmail.com"
+).trim().toLowerCase();
 
 function baseClient(): SupabaseClient {
   const url =

@@ -21,7 +21,9 @@ const CSP = [
   "style-src 'self' 'unsafe-inline'",
   "img-src 'self' data: blob:",
   "font-src 'self' data:",
-  `connect-src 'self' ${supabaseOrigin} ${supabaseOrigin.replace("https://", "wss://")}`.trim(),
+  supabaseOrigin
+    ? `connect-src 'self' ${supabaseOrigin} ${supabaseOrigin.replace("https://", "wss://")}`
+    : "connect-src 'self' https: wss:",
   "form-action 'self'",
   "frame-ancestors 'none'",
   "object-src 'none'",
@@ -48,6 +50,8 @@ const nextConfig: NextConfig = {
   env: {
     NEXT_PUBLIC_SUPABASE_URL: SUPABASE_URL,
     NEXT_PUBLIC_SUPABASE_ANON_KEY: SUPABASE_ANON_KEY,
+    NEXT_PUBLIC_ADMIN_EMAIL:
+      process.env.NEXT_PUBLIC_ADMIN_EMAIL || process.env.ADMIN_EMAIL || "conta.moha@gmail.com",
   },
   async headers() {
     return [

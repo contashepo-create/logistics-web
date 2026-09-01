@@ -3,6 +3,7 @@ import { rateLimit, clientIp } from "@/lib/server/rate-limit";
 import { hasServiceKey } from "@/lib/server/supabase";
 import { createComplaint, trackComplaint, replyToComplaint } from "@/lib/server/complaints";
 import { notifyAdmin, escapeTelegramHtml } from "@/lib/server/telegram";
+import { sameOrigin } from "@/lib/server/admin-session";
 
 export const runtime = "nodejs";
 
@@ -25,6 +26,8 @@ async function readJson(req: NextRequest): Promise<Record<string, unknown> | nul
  */
 export async function POST(req: NextRequest) {
   if (!hasServiceKey()) return bad("خدمة الشكاوى غير مهيأة على الخادم.", 503);
+
+  if (!sameOrigin(req)) return bad("طلب مرفوض (أصل غير موثوق).", 403);
 
   const ip = clientIp(req);
   const body = await readJson(req);

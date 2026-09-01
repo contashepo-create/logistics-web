@@ -24,6 +24,12 @@ vi.mock("@/lib/server/supabase", () => ({
   serviceClient: mocks.serviceClient,
   hasServiceKey: mocks.hasServiceKey,
 }));
+vi.mock("@/lib/server/admin-session", () => ({
+  sameOrigin: () => true,
+  COOKIE_NAME: "admin_2fa",
+  verifyTwoFactorToken: () => true,
+  COOKIE_OPTIONS: { httpOnly: true, secure: false, sameSite: "strict", path: "/", maxAge: 1 },
+}));
 vi.mock("@/lib/server/telegram", () => ({
   notifyAdmin: mocks.notifyAdmin,
   escapeTelegramHtml: mocks.escapeTelegramHtml,

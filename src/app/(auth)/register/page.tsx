@@ -47,6 +47,11 @@ export default function RegisterPage() {
         setVerification(true);
         return;
       }
+      if ((res as { needsOnboarding?: boolean }).needsOnboarding) {
+        notify("تم إنشاء حسابك — أكمل بيانات الشركة.", "success");
+        router.replace("/onboarding");
+        return;
+      }
       notify("تم إنشاء الحساب بنجاح. أهلاً بك!", "success");
       router.replace("/customers");
     } catch (err) {

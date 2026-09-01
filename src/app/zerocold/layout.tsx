@@ -6,6 +6,7 @@ import Link from "next/link";
 import { ToastHost } from "@/components/toast";
 import { Admin2FA } from "@/components/Admin2FA";
 import { getSession, isAdmin, signOut } from "@/lib/auth";
+import { authFetch } from "@/lib/apiClient";
 import { ThemeToggle } from "@/components/ThemeToggle";
 
 export default function AdminLayout({ children }: { children: React.ReactNode }) {
@@ -15,6 +16,7 @@ export default function AdminLayout({ children }: { children: React.ReactNode })
   const [allowed, setAllowed] = useState(false);
   const [twoFactor, setTwoFactor] = useState(false);
   const [navOpen, setNavOpen] = useState(false);
+  const [denied, setDenied] = useState<string | null>(null);
 
   useEffect(() => {
     (async () => {
@@ -25,7 +27,8 @@ export default function AdminLayout({ children }: { children: React.ReactNode })
       }
       const admin = await isAdmin();
       if (!admin) {
-        router.replace("/customers");
+        setDenied(session.user?.email ?? "");
+        setReady(true);
         return;
       }
       setAllowed(true);
@@ -39,6 +42,27 @@ export default function AdminLayout({ children }: { children: React.ReactNode })
     return (
       <div style={{ minHeight: "100vh", display: "flex", alignItems: "center", justifyContent: "center", background: "var(--bg)" }}>
         <div className="spinner" />
+      </div>
+    );
+  }
+  if (denied !== null) {
+    return (
+      <div className="blocked-screen">
+        <div className="auth-card" style={{ maxWidth: 480 }}>
+          <div className="auth-brand">🚫</div>
+          <h1 className="auth-title">غير مصرح بالدخول</h1>
+          <p className="auth-sub" style={{ lineHeight: 2 }}>
+            لوحة المطوّر مقصورة على بريد المطوّر المصرّح به.<br />
+            أنت مسجّل حالياً بالبريد: <b dir="ltr">{denied || "—"}</b>
+          </p>
+          <button className="btn btn-primary auth-btn" onClick={async () => { await signOut(); router.replace("/login"); }}>
+            تسجيل الخروج والدخول بحساب المطوّر
+          </button>
+          <button className="btn auth-btn" style={{ marginTop: 8 }} onClick={() => router.replace("/customers")}>
+            العودة للتطبيق
+          </button>
+        </div>
+        <ToastHost />
       </div>
     );
   }
@@ -72,7 +96,11 @@ export default function AdminLayout({ children }: { children: React.ReactNode })
         </nav>
         <div className="nav-user">
           <div style={{ marginBottom: 8 }}><ThemeToggle /></div>
-          <button className="nav-logout" onClick={async () => { await signOut(); router.replace("/login"); }}>تسجيل الخروج</button>
+          <button className="nav-logout" onClick={async () => {
+            await authFetch("/api/zerocold/2fa/logout", { method: "POST" }).catch(() => undefined);
+            await signOut();
+            router.replace("/login");
+          }}>تسجيل الخروج</button>
         </div>
       </aside>
       <div className="app-main">

@@ -4,6 +4,7 @@ import { rateLimit, clientIp } from "@/lib/server/rate-limit";
 import { notifyAdmin, escapeTelegramHtml } from "@/lib/server/telegram";
 import { sendPhotoToAdmin, detectImageMime, MAX_PHOTO_BYTES } from "@/lib/server/telegram-photo";
 import { safeField, safePhone } from "@/lib/security";
+import { sameOrigin } from "@/lib/server/admin-session";
 
 export const runtime = "nodejs";
 
@@ -25,6 +26,8 @@ export async function POST(req: NextRequest) {
   if (!rateLimit(`subreq:ip:${ip}`, 8, 10 * 60 * 1000).allowed) {
     return bad("طلبات كثيرة جداً. حاول بعد قليل.", 429);
   }
+
+  if (!sameOrigin(req)) return bad("طلب مرفوض (أصل غير موثوق).", 403);
 
   const user = await requireUser(req);
   if (!user) return bad("يجب تسجيل الدخول.", 401);
