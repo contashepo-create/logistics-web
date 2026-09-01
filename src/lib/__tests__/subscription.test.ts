@@ -114,9 +114,37 @@ describe("daysLeft / stateLabel", () => {
     expect(daysLeft(company({ subscription_end: daysFromNow(5) }))).toBeGreaterThanOrEqual(4);
     expect(daysLeft(company({ subscription_end: daysFromNow(-5) }))).toBe(0);
   });
+  it("الباقة المفتوحة تتقدّم على تجربة لم تنتهِ بعد", () => {
+    const c = company({ plan_type: "open", trial_end: daysFromNow(5), subscription_end: null });
+    expect(subscriptionState(c)).toBe("active");
+    expect(stateLabel(c)).toBe("اشتراك مفتوح (بلا تحديد)");
+  });
+
+  it("الاشتراك الشهري الساري يتقدّم على التجربة", () => {
+    const c = company({ plan_type: "monthly", trial_end: daysFromNow(3), subscription_end: daysFromNow(30) });
+    expect(subscriptionState(c)).toBe("active");
+    expect(stateLabel(c)).toContain("اشتراك شهري");
+  });
+
+  it("انتهاء الاشتراك المدفوع مع بقاء التجربة يعيد الحالة إلى تجربة", () => {
+    const c = company({ plan_type: "monthly", trial_end: daysFromNow(2), subscription_end: daysFromNow(-1) });
+    expect(subscriptionState(c)).toBe("trial");
+  });
+
+  it("انتهاء الاشتراك والتجربة معاً = منتهي", () => {
+    const c = company({ plan_type: "monthly", trial_end: daysFromNow(-5), subscription_end: daysFromNow(-1) });
+    expect(subscriptionState(c)).toBe("expired");
+    expect(stateLabel(c)).toBe("الاشتراك منتهي");
+  });
+
+  it("الإيقاف يتقدّم على كل شيء", () => {
+    const c = company({ is_active: false, plan_type: "open", trial_end: daysFromNow(9) });
+    expect(subscriptionState(c)).toBe("suspended");
+  });
+
   it("stateLabel يعرض وصفاً مناسباً لكل حالة", () => {
     expect(stateLabel(company({ trial_end: daysFromNow(2), subscription_end: null }))).toContain("تجربة مجانية");
-    expect(stateLabel(company({ plan_type: "open", trial_end: daysFromNow(-1) }))).toBe("اشتراك مفتوح");
+    expect(stateLabel(company({ plan_type: "open", trial_end: daysFromNow(-1) }))).toBe("اشتراك مفتوح (بلا تحديد)");
     expect(stateLabel(company({ subscription_end: daysFromNow(-1) }))).toBe("الاشتراك منتهي");
     expect(stateLabel(company({ is_active: false }))).toBe("الشركة موقوفة");
     expect(stateLabel(null)).toBe("بدون اشتراك");

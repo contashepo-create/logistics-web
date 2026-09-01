@@ -3,14 +3,13 @@
 import { Fragment, useEffect, useState } from "react";
 import { listCompanies, setCompanyStatus, setSubscription, deleteCompany, companySummary, listActivationRequests, reviewActivationRequest, type CompanyRow } from "@/lib/admin";
 import { notify } from "@/components/toast";
-import { money, todayIso } from "@/lib/format";
-import { planLabel, requestKindLabel, type ActivationRequest } from "@/lib/subscription";
+import { money } from "@/lib/format";
+import { planLabel, requestKindLabel, subscriptionState, type ActivationRequest } from "@/lib/subscription";
+import type { Company } from "@/lib/types";
 
-function statusOf(c: CompanyRow): "active" | "trial" | "expired" | "suspended" {
-  if (!c.is_active) return "suspended";
-  if (c.trial_end && c.trial_end >= todayIso() && !c.subscription_end) return "trial";
-  if (!c.subscription_end) return c.plan_type === "open" ? "active" : "expired";
-  return c.subscription_end >= todayIso() ? "active" : "expired";
+/** الحالة تُشتق من نفس المنطق المستخدم في واجهة العميل (مصدر واحد للحقيقة). */
+function statusOf(c: CompanyRow): "active" | "trial" | "expired" | "suspended" | "none" {
+  return subscriptionState(c as unknown as Company);
 }
 
 const STATUS_BADGE: Record<string, { label: string; cls: string }> = {
@@ -18,6 +17,7 @@ const STATUS_BADGE: Record<string, { label: string; cls: string }> = {
   trial: { label: "تجريبي", cls: "badge-warn" },
   expired: { label: "منتهي", cls: "badge-off" },
   suspended: { label: "موقوف", cls: "badge-off" },
+  none: { label: "بدون اشتراك", cls: "badge-off" },
 };
 
 const PLAN_LABEL: Record<string, string> = { trial: "تجريبي", monthly: "شهري", yearly: "سنوي", open: "مفتوح" };

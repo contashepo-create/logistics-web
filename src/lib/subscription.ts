@@ -77,21 +77,33 @@ export function endDateForPlan(plan: PlanType, from: Date = new Date()): string 
   return addDays(from, days).toISOString().slice(0, 10);
 }
 
-/** الحالة الفعلية للشركة (مع مراعاة التجربة المجانية). */
+/**
+ * الحالة الفعلية للشركة.
+ * ترتيب الأولوية مهم: الباقة المدفوعة/المفتوحة تتقدّم على التجربة،
+ * وإلا ظهر «تجريبي» لعميل فُتح له الاشتراك بينما تاريخ تجربته لم ينتهِ بعد.
+ */
 export function subscriptionState(c: Company | null): SubscriptionState {
   if (!c) return "none";
   if (!c.is_active) return "suspended";
 
   const today = toDateOnly(new Date());
-  const trialEnd = c.trial_end ? new Date(c.trial_end) : null;
+  const trialEnd = c.trial_end ? toDateOnly(new Date(c.trial_end)) : null;
+  const end = c.subscription_end ? toDateOnly(new Date(c.subscription_end)) : null;
 
-  // ما زال في التجربة المجانية؟
-  if (trialEnd && toDateOnly(trialEnd) >= today) return "trial";
+  // 1) اشتراك مفتوح (بلا تاريخ انتهاء) — أعلى أولوية
+  if (c.plan_type === "open") return "active";
 
-  // اشتراك مفتوح (بلا تحديد) أو ضمن المدة
-  if (!c.subscription_end) return c.plan_type === "open" || trialEnd ? "active" : "expired";
-  const end = toDateOnly(new Date(c.subscription_end));
-  return end >= today ? "active" : "expired";
+  // 2) اشتراك مدفوع بتاريخ انتهاء
+  if (end) {
+    if (end >= today) return "active";
+    // انتهى المدفوع: قد يبقى ضمن التجربة إن كانت ما زالت سارية
+    return trialEnd && trialEnd >= today ? "trial" : "expired";
+  }
+
+  // 3) لا اشتراك مدفوع ⇒ التجربة هي المرجع
+  if (trialEnd) return trialEnd >= today ? "trial" : "expired";
+
+  return "expired";
 }
 
 export function isExpired(c: Company | null): boolean {
@@ -102,16 +114,22 @@ export function isExpired(c: Company | null): boolean {
 export function daysLeft(c: Company | null): number {
   if (!c) return 0;
   const today = toDateOnly(new Date());
-  const end = c.subscription_end ? new Date(c.subscription_end) : null;
-  const trialEnd = c.trial_end ? new Date(c.trial_end) : null;
-  const ref = end ?? (trialEnd ?? today);
+  const state = subscriptionState(c);
+  if (state === "active" && c.plan_type === "open") return Infinity;
+  const ref =
+    state === "trial"
+      ? (c.trial_end ? new Date(c.trial_end) : today)
+      : (c.subscription_end ? new Date(c.subscription_end) : today);
   return Math.max(0, Math.ceil((toDateOnly(ref).getTime() - today.getTime()) / 86400000));
 }
 
 export function stateLabel(c: Company | null): string {
   const s = subscriptionState(c);
   if (s === "trial") return `تجربة مجانية — متبقي ${daysLeft(c)} يوم`;
-  if (s === "active") return c?.plan_type === "open" ? "اشتراك مفتوح" : planLabel(c?.plan_type ?? "monthly");
+  if (s === "active") {
+    if (c?.plan_type === "open") return "اشتراك مفتوح (بلا تحديد)";
+    return `${planLabel(c?.plan_type ?? "monthly")} — متبقي ${daysLeft(c)} يوم`;
+  }
   if (s === "expired") return "الاشتراك منتهي";
   if (s === "suspended") return "الشركة موقوفة";
   return "بدون اشتراك";

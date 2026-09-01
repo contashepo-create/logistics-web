@@ -70,7 +70,7 @@ export default function SubscriptionPage() {
     ["بداية الاشتراك", company?.subscription_start || "—"],
     ["نهاية الاشتراك", company?.subscription_end || (company?.plan_type === "open" ? "مفتوح بلا تحديد" : "—")],
     ["نهاية التجربة", company?.trial_end || "—"],
-    ["الأيام المتبقية", String(daysLeft(company))],
+    ["الأيام المتبقية", Number.isFinite(daysLeft(company)) ? `${daysLeft(company)} يوم` : "بلا حد"],
     ["حالة الحساب", company?.is_active ? "نشط" : "موقوف"],
   ];
 
