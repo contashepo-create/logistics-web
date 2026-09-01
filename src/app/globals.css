@@ -1042,3 +1042,60 @@ table.data-table thead th { position: sticky; top: 0; z-index: 1; }
 .msg-item .muted { color: var(--muted); font-size: 11.5px; font-family: ui-monospace, monospace; }
 .msg-preview { color: var(--muted); font-size: 12px; }
 @media (max-width: 760px) { .msg-list { width: 100%; } }
+
+/* ===== إعدادات الطباعة: القوالب والألوان والمعاينة الحيّة ===== */
+.print-settings-layout {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(280px, 420px);
+  gap: 16px;
+  align-items: start;
+}
+@media (max-width: 1100px) {
+  .print-settings-layout { grid-template-columns: 1fr; }
+}
+.print-settings-forms { min-width: 0; }
+.print-preview-pane { position: sticky; top: 12px; }
+.print-preview-frame {
+  width: 100%;
+  height: 520px;
+  border: 1px solid var(--border, #d4d4d8);
+  border-radius: 10px;
+  background: #fff;
+}
+
+.tpl-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(190px, 1fr));
+  gap: 10px;
+}
+.tpl-card {
+  display: grid;
+  gap: 4px;
+  text-align: start;
+  padding: 10px 12px;
+  border: 1.5px solid var(--border, #d4d4d8);
+  border-radius: 10px;
+  background: var(--card, #fff);
+  cursor: pointer;
+  transition: border-color .15s, box-shadow .15s, transform .1s;
+}
+.tpl-card:hover { transform: translateY(-1px); }
+.tpl-card.active {
+  border-color: var(--primary, #1d4ed8);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--primary, #1d4ed8) 18%, transparent);
+}
+.tpl-swatch { display: block; width: 100%; height: 8px; border-radius: 4px; }
+.tpl-name { font-weight: 700; font-size: 14px; }
+.tpl-desc { font-size: 12px; opacity: .75; line-height: 1.7; }
+
+.color-row { display: flex; gap: 8px; align-items: center; }
+.color-input {
+  width: 44px; height: 36px; padding: 2px;
+  border: 1px solid var(--border, #d4d4d8); border-radius: 8px; background: none; cursor: pointer;
+}
+.color-presets { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
+.color-dot {
+  width: 26px; height: 26px; border-radius: 50%;
+  border: 2px solid var(--border, #d4d4d8); cursor: pointer;
+}
+.color-dot:hover { transform: scale(1.08); }

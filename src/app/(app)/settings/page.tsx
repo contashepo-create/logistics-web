@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { PageFrame, Field, Input, Select, Button } from "@/components/ui";
 import { getSetting, setSetting, companyInfo } from "@/lib/repo";
 import { notify } from "@/components/toast";
@@ -13,7 +13,10 @@ import {
   savePrintSettings,
   printCss,
   paperDimensions,
+  PRINT_TEMPLATES,
+  getTemplate,
   type PrintSettings,
+  type PrintTemplate,
 } from "@/lib/print";
 import { buildReportHtml, printHtml } from "@/lib/exporter";
 import { docOptions } from "@/lib/exportHelper";
@@ -98,6 +101,40 @@ export default function SettingsPage() {
     printHtml(html, "صفحة تجريبية", { css: printCss(ps), watermark: ps.watermark });
   };
 
+  /** نفس محرّك الطباعة، لكن داخل إطار معاينة بدل نافذة الطباعة. */
+  const previewHtml = useMemo(() => {
+    const body = buildReportHtml({
+      info: {
+        company_name: name || "اسم الشركة",
+        company_phone: phone,
+        company_address: address,
+        currency: currency || "ج.م",
+        company_vat_note: vatNote,
+        vat_rate: vatRate,
+      },
+      title: "معاينة مباشرة لإعدادات الطباعة",
+      subtitle: "تتغيّر فوراً مع كل تعديل — لا حاجة للحفظ أولاً",
+      headers: ["#", "البيان", "المبلغ", "التاريخ"],
+      rows: Array.from({ length: 5 }, (_, i) => [
+        i + 1,
+        `سطر تجريبي رقم ${i + 1}`,
+        (1000 * (i + 1)).toLocaleString("en-US"),
+        `2026-01-0${(i % 9) + 1}`,
+      ]),
+      summaryLines: [["الإجمالي", "15,000.00"], ["عدد السطور", "5"]],
+      centerFrom: 1,
+      doc: docOptions(ps),
+    });
+    const wm = ps.watermark
+      ? `<div style="position:fixed;inset:0;display:flex;align-items:center;justify-content:center;
+            font-size:60px;color:rgba(0,0,0,.07);transform:rotate(-30deg);pointer-events:none">${ps.watermark}</div>`
+      : "";
+    return `<!doctype html><html dir="rtl" lang="ar"><head><meta charset="utf-8">
+      <style>${printCss(ps)}
+        body{margin:0;padding:10px;background:#fff}
+      </style></head><body>${wm}${body}</body></html>`;
+  }, [ps, name, phone, address, currency, vatNote, vatRate]);
+
   const dims = paperDimensions(ps);
 
   return (
@@ -131,7 +168,59 @@ export default function SettingsPage() {
       {/* ---------------- إعدادات الطباعة ---------------- */}
       {tab === "print" && (
         <>
+          <div className="print-settings-layout">
+            <div className="print-settings-forms">
           <div className="group-box" style={{ marginTop: 0 }}>
+            <div className="group-title">🎨 قالب الطباعة</div>
+            <p className="page-sub" style={{ marginBottom: 10 }}>
+              اختر شكل المستندات المطبوعة — يُطبَّق على الفواتير والتقارير وكشوف الحسابات كلها.
+            </p>
+            <div className="tpl-grid">
+              {PRINT_TEMPLATES.map((t) => (
+                <button
+                  key={t.id}
+                  type="button"
+                  className={`tpl-card${ps.template === t.id ? " active" : ""}`}
+                  onClick={() => setPs((p) => ({ ...p, template: t.id as PrintTemplate, accent_color: t.accent }))}
+                >
+                  <span className="tpl-swatch" style={{ background: t.accent }} />
+                  <span className="tpl-name">{t.name}</span>
+                  <span className="tpl-desc">{t.description}</span>
+                </button>
+              ))}
+            </div>
+
+            <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit,minmax(200px,1fr))", gap: 12, marginTop: 14 }}>
+              <Field label="اللون الرئيسي للقالب">
+                <div className="color-row">
+                  <input type="color" className="color-input" value={ps.accent_color}
+                    onChange={(e) => set("accent_color", e.target.value)} aria-label="اللون الرئيسي" />
+                  <Input dir="ltr" value={ps.accent_color} onChange={(e) => set("accent_color", e.target.value)} />
+                </div>
+              </Field>
+              <Field label="لون رأس الجدول">
+                <div className="color-row">
+                  <input type="color" className="color-input" value={ps.header_color}
+                    onChange={(e) => set("header_color", e.target.value)} aria-label="لون رأس الجدول" />
+                  <Input dir="ltr" value={ps.header_color} onChange={(e) => set("header_color", e.target.value)} />
+                </div>
+              </Field>
+              <Field label="ألوان جاهزة">
+                <div className="color-presets">
+                  {["#1d4ed8", "#0f766e", "#b45309", "#9d174d", "#334155", "#111827"].map((c) => (
+                    <button key={c} type="button" className="color-dot" style={{ background: c }}
+                      title={c} aria-label={`اللون ${c}`}
+                      onClick={() => setPs((p) => ({ ...p, accent_color: c, header_color: c }))} />
+                  ))}
+                </div>
+              </Field>
+            </div>
+            <div className="page-sub" style={{ marginTop: 8 }}>
+              القالب الحالي: <b>{getTemplate(ps.template).name}</b>
+            </div>
+          </div>
+
+          <div className="group-box">
             <div className="group-title">📄 الورق والهوامش</div>
             <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(200px, 1fr))", gap: 12 }}>
               <Field label="حجم الورق">
@@ -200,6 +289,24 @@ export default function SettingsPage() {
             </Button>
             <Button onClick={testPrint}>🖨️ طباعة صفحة تجريبية</Button>
             <Button onClick={() => setPs(DEFAULT_PRINT_SETTINGS)}>↺ استعادة الافتراضي</Button>
+          </div>
+            </div>
+
+            {/* ---------- المعاينة الحيّة ---------- */}
+            <aside className="print-preview-pane">
+              <div className="group-box" style={{ marginTop: 0 }}>
+                <div className="group-title">👁️ معاينة مباشرة</div>
+                <div className="page-sub" style={{ marginBottom: 8 }}>
+                  {getTemplate(ps.template).name} — {dims.w} × {dims.h} mm
+                </div>
+                <iframe
+                  className="print-preview-frame"
+                  title="معاينة الطباعة"
+                  sandbox=""
+                  srcDoc={previewHtml}
+                />
+              </div>
+            </aside>
           </div>
         </>
       )}
