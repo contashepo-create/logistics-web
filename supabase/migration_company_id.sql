@@ -117,7 +117,7 @@ alter table public.profiles drop column if exists phone;
 
 -- 7) حارس company_id + RLS + دوال الإدارة (كما في schema.sql)
 create or replace function public.is_admin() returns boolean
-language sql stable as $$
+language sql stable set search_path = public, pg_temp as $$
   select coalesce((auth.jwt() ->> 'email'), '') = 'conta.moha@gmail.com';
 $$;
 
@@ -137,7 +137,7 @@ language sql stable security definer set search_path = public as $$
 $$;
 
 create or replace function public.set_company_id() returns trigger
-language plpgsql as $$
+language plpgsql set search_path = public, pg_temp as $$
 begin
   new.company_id := public.auth_company_id();
   return new;

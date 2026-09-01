@@ -266,3 +266,31 @@ complaint_messages, app_settings, activity_logs` فقط.
 الملف يضيف الأعمدة الناقصة (البيانات الضريبية، العنوان الوطني، `print_settings`) ثم
 يمنح `authenticated` صلاحية تحديث أعمدة الإعدادات التشغيلية فقط، ويُبقي أعمدة
 الاشتراك والحالة و`client_code` تحت إشراف المطوّر (`service_role` / `is_admin`).
+
+## v8 — معالجة تنبيهات مدقّق أمان Supabase
+
+نفّذ `supabase/migration_linter_hardening_v8.sql` بعد v7 (آمن التكرار).
+
+يعالج تنبيهات Database Linter:
+- **0011 search_path متغيّر**: يثبّت `search_path = public, pg_temp` لكل دوال المخطط
+  `public` (بما فيها `is_admin`, `safe_text`, `set_company_id`, `gen_code`,
+  `is_allowed_email`, `check_tax_identifiers`, `set_profile_guard`،
+  `clean_activation_request`, `guard_supplier_delete`, `set_client_code`).
+  كما حُدِّثت ملفات الترحيل الأصلية حتى لا يعود التنبيه عند إعادة تنفيذها.
+- **0025 دلو عام يسمح بالسرد**: تُحذف سياسة `receipts_read_public` على
+  `storage.objects`. الدلو عام، لذا روابط الملفات تبقى تعمل، لكن لم يعد بإمكان
+  أي عميل سرد محتويات الدلو.
+- **0028 / 0029 دوال SECURITY DEFINER مكشوفة**: سحب `EXECUTE` من `public/anon/authenticated`
+  عن كل الدوال، ثم منحه فقط لِـ:
+  - `anon`: `is_allowed_email` (تحقق البريد قبل التسجيل).
+  - `authenticated`: دوال RPC التي تستدعيها الواجهة فعلاً
+    (`register_company`, `export_company_data`, `create_next_financial_year`,
+    `save_invoice`, `save_payroll`, `save_purchase_invoice`, ودوال `admin_*`، `whoami`).
+  - دوال الـ trigger والدوال الداخلية (`auth_company_id`, `is_company_active`,
+    `is_active_user`, `log_activity`, `rls_audit`, `gen_code`, `safe_text`)
+    لم تعد قابلة للاستدعاء عبر REST؛ تعمل داخلياً عبر السياسات والمشغّلات.
+
+### إعداد يدوي مطلوب (لا يُضبط بـ SQL)
+**حماية كلمات المرور المسرّبة**: من Supabase Dashboard →
+Authentication → Policies (Password) → فعّل *Leaked password protection*
+(فحص HaveIBeenPwned)، ويُنصح بحدّ أدنى 8 محارف مع شروط تعقيد.

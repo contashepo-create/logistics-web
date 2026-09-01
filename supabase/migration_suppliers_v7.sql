@@ -198,7 +198,7 @@ grant execute on function public.save_purchase_invoice(
 -- 6) منع حذف مورّد له حركات
 -- ---------------------------------------------------------------------------
 create or replace function public.guard_supplier_delete() returns trigger
-language plpgsql as $$
+language plpgsql set search_path = public, pg_temp as $$
 declare n_inv int; n_pay int;
 begin
   select count(*) into n_inv from public.purchase_invoices where supplier_id = old.id;

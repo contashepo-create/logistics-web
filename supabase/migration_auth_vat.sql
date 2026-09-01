@@ -6,7 +6,7 @@
 
 -- دوال الصلاحيات
 create or replace function public.is_admin() returns boolean
-language sql stable as $$
+language sql stable set search_path = public, pg_temp as $$
   select coalesce((auth.jwt() ->> 'email'), '') = 'conta.moha@gmail.com';
 $$;
 
@@ -56,7 +56,7 @@ alter table public.invoices add column if not exists vat_rate double precision n
 
 -- دالة الحالة النشطة (بعد إنشاء profiles)
 create or replace function public.is_active_user() returns boolean
-language sql stable security definer as $$
+language sql stable security definer set search_path = public, pg_temp as $$
   select coalesce(
     (select p.is_active from public.profiles p where p.id = auth.uid()),
     true
@@ -106,7 +106,7 @@ end $$;
 
 -- صلاحية المطوّر تلقائياً
 create or replace function public.set_admin_role() returns trigger
-language plpgsql as $$
+language plpgsql set search_path = public, pg_temp as $$
 begin
   if new.email = 'conta.moha@gmail.com' then
     new.role := 'admin';

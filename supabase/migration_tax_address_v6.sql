@@ -69,7 +69,7 @@ alter table public.customers add constraint customers_tax_status_check
 --    الرقم الضريبي السعودي: 15 رقماً يبدأ وينتهي بالرقم 3.
 -- ---------------------------------------------------------------------------
 create or replace function public.check_tax_identifiers() returns trigger
-language plpgsql as $$
+language plpgsql set search_path = public, pg_temp as $$
 declare j jsonb;
 begin
   j := to_jsonb(new);

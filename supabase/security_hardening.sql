@@ -54,7 +54,7 @@ $$;
 -- استبدال حارس الملف الشخصي القديم (set_admin_role) بالنسخة الأمنية
 -- ---------------------------------------------------------------------------
 create or replace function public.set_profile_guard() returns trigger
-language plpgsql as $$
+language plpgsql set search_path = public, pg_temp as $$
 declare
   v_email text;
 begin
@@ -78,7 +78,7 @@ drop trigger if exists trg_profiles_admin on public.profiles;
 drop function if exists public.set_admin_role();
 
 create or replace function public.trg_profile_signup() returns trigger
-language plpgsql as $$
+language plpgsql set search_path = public, pg_temp as $$
 begin
   perform public.log_activity('signup', 'profile', new.id::text, new.company_name);
   return new;

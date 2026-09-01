@@ -17,7 +17,7 @@ grant usage on schema public to anon, authenticated, service_role;
 --   لذلك يُعرَّفان بعد إنشاء الجدولين (PostgreSQL 14+ يفحص جسم دوال SQL عند الإنشاء).
 -- ---------------------------------------------------------------------------
 create or replace function public.is_admin() returns boolean
-language sql stable as $$
+language sql stable set search_path = public, pg_temp as $$
   select coalesce((auth.jwt() ->> 'email'), '') = 'conta.moha@gmail.com';
 $$;
 
@@ -382,7 +382,7 @@ create unique index if not exists uq_payrolls_company_number on public.payrolls(
 -- حارس فرض company_id عند الإدراج (يمنع أي عميل من تزوير الشركة)
 -- ---------------------------------------------------------------------------
 create or replace function public.set_company_id() returns trigger
-language plpgsql as $$
+language plpgsql set search_path = public, pg_temp as $$
 begin
   new.company_id := public.auth_company_id();
   return new;
@@ -880,6 +880,7 @@ create policy "receipts_upload_own" on storage.objects
   for insert to authenticated
   with check (bucket_id = 'receipts');
 
+-- ملاحظة أمنية (Supabase linter 0025_public_bucket_allows_listing):
+-- الدلو عام، لذا روابط الكائنات تعمل بلا سياسة SELECT. أي سياسة SELECT واسعة
+-- تسمح للعملاء بسرد كل ملفات الدلو، لذلك تُحذف ولا يُعاد إنشاؤها.
 drop policy if exists "receipts_read_public" on storage.objects;
-create policy "receipts_read_public" on storage.objects
-  for select using (bucket_id = 'receipts');

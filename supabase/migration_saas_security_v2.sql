@@ -19,7 +19,7 @@
 
 -- توليد رمز عشوائي من أبجدية غير ملتبسة (بلا 0/O/1/I/L)
 create or replace function public.gen_code(p_len int)
-returns text language plpgsql volatile as $$
+returns text language plpgsql volatile set search_path = public, pg_temp as $$
 declare
   v_alpha constant text := '23456789ABCDEFGHJKMNPQRSTVWXYZ';
   v_out text := '';
@@ -38,7 +38,7 @@ end $$;
 
 -- التحقق من مزوّد البريد المسموح به (نفس قائمة src/lib/security.ts)
 create or replace function public.is_allowed_email(p_email text)
-returns boolean language sql immutable as $$
+returns boolean language sql immutable set search_path = public, pg_temp as $$
   select case
     when p_email is null or p_email = '' then false
     when p_email !~ '^[A-Za-z0-9][A-Za-z0-9._%+-]{0,62}@[A-Za-z0-9.-]+\.[A-Za-z]{2,}$' then false
@@ -57,7 +57,7 @@ $$;
 
 -- تعقيم نص وارد من مستخدم قبل تخزينه (إزالة الوسوم ومحارف التحكم وقصّ الطول)
 create or replace function public.safe_text(p_in text, p_max int default 2000)
-returns text language sql immutable as $$
+returns text language sql immutable set search_path = public, pg_temp as $$
   select left(
     btrim(
       regexp_replace(
@@ -73,7 +73,7 @@ $$;
 alter table public.companies add column if not exists client_code text;
 
 create or replace function public.set_client_code() returns trigger
-language plpgsql as $$
+language plpgsql set search_path = public, pg_temp as $$
 declare
   v_code text;
   i int := 0;
@@ -145,7 +145,7 @@ end $$;
 -- ملاحظة: أعمدة role / is_active حُذفت من profiles في ترحيل company_id،
 -- لذلك نضبط الأعمدة الموجودة فعلاً عبر jsonb بدل الإسناد المباشر.
 create or replace function public.set_profile_guard() returns trigger
-language plpgsql as $guard$
+language plpgsql set search_path = public, pg_temp as $guard$
 declare
   v_email text;
   j jsonb;
@@ -248,7 +248,7 @@ alter table public.activation_requests add column if not exists receipt_sent boo
 
 -- تعقيم إجباري لكل نص وارد في الطلب
 create or replace function public.clean_activation_request() returns trigger
-language plpgsql as $$
+language plpgsql set search_path = public, pg_temp as $$
 begin
   new.notes        := public.safe_text(new.notes, 1000);
   new.payer_name   := public.safe_text(new.payer_name, 120);
