@@ -2,7 +2,7 @@
 
 import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
-import { getSession, getCompany, isAdmin, registerCurrentCompany, signOut } from "@/lib/auth";
+import { getSession, getCompany, registerCurrentCompany, signOut } from "@/lib/auth";
 import { notify } from "@/components/toast";
 
 export default function OnboardingPage() {
@@ -15,7 +15,6 @@ export default function OnboardingPage() {
     (async () => {
       const session = await getSession();
       if (!session) return router.replace("/login");
-      if (await isAdmin()) return router.replace("/admin");
       if (await getCompany()) return router.replace("/customers");
       setChecking(false);
     })();

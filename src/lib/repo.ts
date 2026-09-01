@@ -545,9 +545,28 @@ export async function saveInvoice(data: Record<string, any>, invoiceId?: number 
     }
   }
   for (const t of trips) {
-    if (roundMoney(t.price ?? 0) <= 0) throw new RuleError("سعر النقلة يجب أن يكون أكبر من صفر.");
+    const qty = Math.max(1, Math.trunc(num(t.qty ?? 1)));
+    t.qty = qty;
+    t.unit_price = roundMoney(t.unit_price ?? (num(t.price) / qty));
+    t.price = roundMoney(qty * t.unit_price);
+    if (t.price <= 0) throw new RuleError("سعر النقلة يجب أن يكون أكبر من صفر.");
     for (const e of t.expenses ?? []) {
-      if (roundMoney(e.amount ?? 0) <= 0) throw new RuleError("مبلغ مصروف النقلة يجب أن يكون أكبر من صفر.");
+      const eq = num(e.qty ?? 1) || 1;
+      e.qty = eq;
+      e.unit_amount = roundMoney(e.unit_amount ?? (num(e.amount) / eq));
+      e.amount = roundMoney(eq * e.unit_amount);
+      if (e.amount <= 0) throw new RuleError("مبلغ مصروف النقلة يجب أن يكون أكبر من صفر.");
+      const src = e.source ?? "cash";
+      if (!["cash", "driver", "supplier", "customer"].includes(src)) {
+        throw new RuleError("مصدر تمويل المصروف غير صالح.");
+      }
+      e.source = src;
+      if (src === "cash" && (!e.account_kind || !e.account_id)) {
+        throw new RuleError("اختر الخزينة أو البنك الذي صُرف منه المصروف النقدي.");
+      }
+      if (src === "driver" && !t.driver_id) {
+        throw new RuleError("حدّد السائق في النقلة قبل تسجيل مصروف من عهدته.");
+      }
     }
   }
 
@@ -570,11 +589,19 @@ export async function saveInvoice(data: Record<string, any>, invoiceId?: number 
     driver_id: t.driver_id ?? null,
     from_loc: t.from_loc ?? "",
     to_loc: t.to_loc ?? "",
+    qty: t.qty ?? 1,
+    unit_price: roundMoney(t.unit_price ?? 0),
     price: roundMoney(t.price ?? 0),
     notes: t.notes ?? "",
     expenses: (t.expenses ?? []).map((e: any) => ({
       expense_type: e.expense_type,
+      qty: e.qty ?? 1,
+      unit_amount: roundMoney(e.unit_amount ?? 0),
       amount: roundMoney(e.amount ?? 0),
+      source: e.source ?? "cash",
+      account_kind: e.source === "cash" ? (e.account_kind ?? null) : null,
+      account_id: e.source === "cash" && e.account_id ? Number(e.account_id) : null,
+      supplier_name: e.supplier_name ?? "",
       notes: e.notes ?? "",
     })),
   }));

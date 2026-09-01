@@ -57,7 +57,7 @@ export function DataTable({
               ))}
               {showActions && (
                 <td>
-                  <div style={{ display: "flex", gap: 3, justifyContent: "center" }}>
+                  <div className="row-actions">
                     {allActionLabels.map((a) => (
                       <Button
                         key={a.key}

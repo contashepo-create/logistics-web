@@ -187,7 +187,7 @@ export function ExportBar({
   onPrint?: () => void;
 }) {
   return (
-    <div style={{ display: "flex", gap: 6 }}>
+    <div className="export-bar">
       <Button onClick={onExcel} title="تصدير إلى ملف Excel">📊 Excel</Button>
       <Button onClick={onPdf} title="تصدير إلى ملف PDF">📄 PDF</Button>
       <Button onClick={onPrint} title="طباعة بتنسيق احترافي">🖨️ طباعة</Button>
@@ -219,19 +219,18 @@ export function PageFrame({
 }) {
   return (
     <div className="page-card">
-      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: 12, flexWrap: "wrap" }}>
-        <div>
+      <div className="page-head">
+        <div style={{ minWidth: 0 }}>
           <div className="page-title">{title}</div>
           {subtitle && <div className="page-sub">{subtitle}</div>}
         </div>
-        <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
+        <div className="page-tools">
           {onAdd && (
             <Button variant="primary" onClick={onAdd}>{addText ?? "➕ إضافة"}</Button>
           )}
           {onSearch && (
             <input
-              className="input"
-              style={{ maxWidth: 240 }}
+              className="input page-search"
               placeholder="🔍 بحث سريع..."
               value={search}
               onChange={(e) => onSearch(e.target.value)}

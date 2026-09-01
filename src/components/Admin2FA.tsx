@@ -5,7 +5,7 @@ import { notify } from "./toast";
 
 /**
  * بوابة التحقق بخطوتين للوحة المطوّر: يُرسل رمز عبر تليجرام ثم يُتحقق منه.
- * تعتمد على مسارات /api/admin/2fa (send/verify/status) بصلاحية المطوّر فقط.
+ * تعتمد على مسارات /api/zerocold/2fa (send/verify/status) بصلاحية المطوّر فقط.
  */
 export function Admin2FA({ onVerified }: { onVerified: () => void }) {
   const [checking, setChecking] = useState(true);
@@ -16,7 +16,7 @@ export function Admin2FA({ onVerified }: { onVerified: () => void }) {
   useEffect(() => {
     (async () => {
       try {
-        const res = await fetch("/api/admin/2fa/status");
+        const res = await fetch("/api/zerocold/2fa/status");
         const data = await res.json();
         if (data.verified) onVerified();
       } catch {
@@ -30,7 +30,7 @@ export function Admin2FA({ onVerified }: { onVerified: () => void }) {
   const send = async () => {
     setSending(true);
     try {
-      const res = await fetch("/api/admin/2fa/send", { method: "POST" });
+      const res = await fetch("/api/zerocold/2fa/send", { method: "POST" });
       const data = await res.json();
       if (res.ok && data.success) notify("تم إرسال الرمز إلى تليجرام.", "success");
       else notify(data.message || "تعذّر الإرسال.", "error");
@@ -45,7 +45,7 @@ export function Admin2FA({ onVerified }: { onVerified: () => void }) {
     e.preventDefault();
     setVerifying(true);
     try {
-      const res = await fetch("/api/admin/2fa/verify", {
+      const res = await fetch("/api/zerocold/2fa/verify", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ code }),

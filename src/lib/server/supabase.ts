@@ -5,8 +5,14 @@ import { createClient, type SupabaseClient } from "@supabase/supabase-js";
 export const ADMIN_EMAIL = "conta.moha@gmail.com";
 
 function baseClient(): SupabaseClient {
-  const url = process.env.NEXT_SUPABASE_URL || "";
-  const anon = process.env.NEXT_SUPABASE_ANON_KEY || "";
+  const url =
+    process.env.NEXT_PUBLIC_SUPABASE_URL ||
+    process.env.NEXT_SUPABASE_URL ||
+    "https://placeholder.supabase.co";
+  const anon =
+    process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY ||
+    process.env.NEXT_SUPABASE_ANON_KEY ||
+    "placeholder-anon-key";
   return createClient(url, anon, { auth: { persistSession: false, autoRefreshToken: false } });
 }
 

@@ -5,15 +5,36 @@ import { Modal, Field, Input, Select, Textarea, AmountInput, DateInput, Button, 
 import { notify } from "@/components/toast";
 import { listCustomers, listEmployees, listVehicles, saveInvoice, saveReceipt, savePayment, getReceipt, getPayment, companyInfo, currentVatRate } from "@/lib/repo";
 import { getInvoiceFull, allAccounts, tripsOptions, tripProfit } from "@/lib/calc";
-import { money, todayIso, EXPENSE_TYPES, PAYMENT_TYPES, RECEIPT_TYPES, VEHICLE_EXPENSES } from "@/lib/format";
+import { money, todayIso, EXPENSE_TYPES, EXPENSE_SOURCES, EXPENSE_SOURCE_HINTS, PAYMENT_TYPES, RECEIPT_TYPES, VEHICLE_EXPENSES } from "@/lib/format";
 
-type TripRow = { id?: number; vehicle_id: string; driver_id: string; from_loc: string; to_loc: string; price: string; notes: string; expenses: { id?: number; expense_type: string; amount: string; notes: string }[] };
+type ExpRow = {
+  id?: number;
+  expense_type: string;
+  qty: string;
+  unit_amount: string;
+  source: string;
+  account_kind: string;
+  account_id: string;
+  supplier_name: string;
+  notes: string;
+};
+type TripRow = {
+  id?: number; vehicle_id: string; driver_id: string; from_loc: string; to_loc: string;
+  qty: string; unit_price: string; notes: string; expenses: ExpRow[];
+};
+
+const n = (v: string) => parseFloat(String(v).replace(/,/g, "")) || 0;
+/** إجمالي سطر النقلة = العدد × سعر الوحدة */
+export const tripLineTotal = (t: { qty: string; unit_price: string }) => Math.round(Math.max(1, n(t.qty) || 1) * n(t.unit_price) * 100) / 100;
+/** إجمالي سطر المصروف = العدد × قيمة الوحدة */
+export const expLineTotal = (e: { qty: string; unit_amount: string }) => Math.round((n(e.qty) || 1) * n(e.unit_amount) * 100) / 100;
 
 /* ============================ فاتورة نقل ============================ */
 export function InvoiceDialog({ id, readOnly, onClose }: { id?: number | null; readOnly?: boolean; onClose: (changed?: boolean) => void }) {
   const [customers, setCustomers] = useState<{ id: number; name: string; balance?: number }[]>([]);
   const [vehicles, setVehicles] = useState<{ id: number; plate_number: string }[]>([]);
   const [drivers, setDrivers] = useState<{ id: number; name: string }[]>([]);
+  const [accounts, setAccounts] = useState<{ kind: string; id: number; label: string }[]>([]);
   const [f, setF] = useState({ customer_id: "", date: todayIso(), vat_rate: "15", notes: "" });
   const [trips, setTrips] = useState<TripRow[]>([]);
   const [attachments, setAttachments] = useState<string[]>([]);
@@ -21,8 +42,8 @@ export function InvoiceDialog({ id, readOnly, onClose }: { id?: number | null; r
 
   useEffect(() => {
     (async () => {
-      const [cs, vs, ds, vatRate] = await Promise.all([listCustomers(), listVehicles(), listEmployees("driver"), currentVatRate()]);
-      setCustomers(cs); setVehicles(vs); setDrivers(ds);
+      const [cs, vs, ds, vatRate, accs] = await Promise.all([listCustomers(), listVehicles(), listEmployees("driver"), currentVatRate(), allAccounts()]);
+      setCustomers(cs); setVehicles(vs); setDrivers(ds); setAccounts(accs);
       setF((old) => ({ ...old, vat_rate: String(vatRate) }));
       if (id) {
         const inv = await getInvoiceFull(id);
@@ -31,8 +52,20 @@ export function InvoiceDialog({ id, readOnly, onClose }: { id?: number | null; r
           setAttachments(inv.attachments ?? []);
           setTrips(inv.trips.map((t) => ({
             id: t.id, vehicle_id: t.vehicle_id ? String(t.vehicle_id) : "", driver_id: t.driver_id ? String(t.driver_id) : "",
-            from_loc: t.from_loc, to_loc: t.to_loc, price: String(t.price), notes: t.notes,
-            expenses: (t.expenses ?? []).map((e) => ({ id: e.id, expense_type: e.expense_type, amount: String(e.amount), notes: e.notes })),
+            from_loc: t.from_loc, to_loc: t.to_loc,
+            qty: String(t.qty ?? 1),
+            unit_price: String(t.unit_price || (t.qty ? t.price / t.qty : t.price)),
+            notes: t.notes,
+            expenses: (t.expenses ?? []).map((e) => ({
+              id: e.id, expense_type: e.expense_type,
+              qty: String(e.qty ?? 1),
+              unit_amount: String(e.unit_amount || e.amount),
+              source: e.source ?? "cash",
+              account_kind: e.account_kind ?? "",
+              account_id: e.account_id ? String(e.account_id) : "",
+              supplier_name: e.supplier_name ?? "",
+              notes: e.notes,
+            })),
           })));
         }
       }
@@ -40,16 +73,30 @@ export function InvoiceDialog({ id, readOnly, onClose }: { id?: number | null; r
   }, [id]);
 
   const totals = useMemo(() => {
-    const subtotal = trips.reduce((a, t) => a + (parseFloat(t.price || "0") || 0), 0);
+    const tripsTotal = trips.reduce((a, t) => a + tripLineTotal(t), 0);
+    let cost = 0;
+    let billable = 0;
+    for (const t of trips) {
+      for (const e of t.expenses) {
+        if (e.source === "customer") billable += expLineTotal(e);
+        else cost += expLineTotal(e);
+      }
+    }
+    const subtotal = Math.round((tripsTotal + billable) * 100) / 100;
     const vatRate = parseFloat(f.vat_rate || "0") || 0;
     const vat = Math.round(subtotal * vatRate) / 100;
-    return { subtotal, vat, total: subtotal + vat };
+    return { tripsTotal, billable, cost, subtotal, vat, total: subtotal + vat, profit: Math.round((subtotal - cost) * 100) / 100 };
   }, [trips, f.vat_rate]);
 
-  const addTrip = () => setTrips((p) => [...p, { vehicle_id: "", driver_id: "", from_loc: "", to_loc: "", price: "", notes: "", expenses: [] }]);
+  const addTrip = () => setTrips((p) => [...p, { vehicle_id: "", driver_id: "", from_loc: "", to_loc: "", qty: "1", unit_price: "", notes: "", expenses: [] }]);
   const updTrip = (i: number, patch: Partial<TripRow>) => setTrips((p) => p.map((t, x) => (x === i ? { ...t, ...patch } : t)));
   const delTrip = (i: number) => setTrips((p) => p.filter((_, x) => x !== i));
-  const addExp = (i: number) => setTrips((p) => p.map((t, x) => (x === i ? { ...t, expenses: [...t.expenses, { expense_type: "trip", amount: "", notes: "" }] } : t)));
+  const defaultAccount = () => (accounts.length ? { kind: accounts[0].kind, id: String(accounts[0].id) } : { kind: "cashbox", id: "" });
+  const addExp = (i: number) => setTrips((p) => p.map((t, x) => {
+    if (x !== i) return t;
+    const acc = defaultAccount();
+    return { ...t, expenses: [...t.expenses, { expense_type: "trip", qty: "1", unit_amount: "", source: "cash", account_kind: acc.kind, account_id: acc.id, supplier_name: "", notes: "" }] };
+  }));
   const updExp = (i: number, j: number, patch: Partial<TripRow["expenses"][number]>) =>
     setTrips((p) => p.map((t, x) => (x === i ? { ...t, expenses: t.expenses.map((e, y) => (y === j ? { ...e, ...patch } : e)) } : t)));
   const delExp = (i: number, j: number) => setTrips((p) => p.map((t, x) => (x === i ? { ...t, expenses: t.expenses.filter((_, y) => y !== j) } : t)));
@@ -59,7 +106,14 @@ export function InvoiceDialog({ id, readOnly, onClose }: { id?: number | null; r
     if (!trips.length) return notify("أضف نقلة واحدة على الأقل.", "error");
     for (const t of trips) {
       if (!t.from_loc.trim() || !t.to_loc.trim()) return notify("أكمل أماكن الانطلاق والوصول لكل نقلة.", "error");
-      if (!(parseFloat(t.price) > 0)) return notify("سعر النقلة يجب أن يكون أكبر من صفر.", "error");
+      if (!(n(t.qty) >= 1)) return notify("عدد النقلات يجب أن يكون 1 على الأقل.", "error");
+      if (!(tripLineTotal(t) > 0)) return notify("سعر النقلة يجب أن يكون أكبر من صفر.", "error");
+      for (const e of t.expenses) {
+        if (!(expLineTotal(e) > 0)) return notify("أكمل عدد وقيمة كل مصروف.", "error");
+        if (e.source === "cash" && !e.account_id) return notify("اختر الخزينة أو البنك لكل مصروف نقدي.", "error");
+        if (e.source === "driver" && !t.driver_id) return notify("حدّد السائق في النقلة قبل تسجيل مصروف من عهدته.", "error");
+        if (e.source === "supplier" && !e.supplier_name.trim()) return notify("اكتب اسم المورد/المحطة للمصروف الآجل.", "error");
+      }
     }
     setSaving(true);
     try {
@@ -69,8 +123,20 @@ export function InvoiceDialog({ id, readOnly, onClose }: { id?: number | null; r
         attachments,
         trips: trips.map((t) => ({
           id: t.id, vehicle_id: t.vehicle_id ? Number(t.vehicle_id) : null, driver_id: t.driver_id ? Number(t.driver_id) : null,
-          from_loc: t.from_loc, to_loc: t.to_loc, price: parseFloat(t.price) || 0, notes: t.notes,
-          expenses: t.expenses.map((e) => ({ id: e.id, expense_type: e.expense_type, amount: parseFloat(e.amount) || 0, notes: e.notes })),
+          from_loc: t.from_loc, to_loc: t.to_loc,
+          qty: Math.max(1, Math.trunc(n(t.qty) || 1)),
+          unit_price: n(t.unit_price),
+          price: tripLineTotal(t),
+          notes: t.notes,
+          expenses: t.expenses.map((e) => ({
+            id: e.id, expense_type: e.expense_type,
+            qty: n(e.qty) || 1, unit_amount: n(e.unit_amount), amount: expLineTotal(e),
+            source: e.source,
+            account_kind: e.source === "cash" ? e.account_kind : null,
+            account_id: e.source === "cash" && e.account_id ? Number(e.account_id) : null,
+            supplier_name: e.source === "supplier" ? e.supplier_name : "",
+            notes: e.notes,
+          })),
         })),
       }, id);
       notify("تم حفظ الفاتورة بنجاح.", "success");
@@ -118,22 +184,92 @@ export function InvoiceDialog({ id, readOnly, onClose }: { id?: number | null; r
                 </Select>
               </Field>
             </div>
-            <Field label="السعر"><AmountInput value={t.price} onChange={(v) => updTrip(i, { price: v })} /></Field>
+            <div style={{ display: "grid", gridTemplateColumns: "110px 1fr 1fr", gap: 10, alignItems: "end" }}>
+              <Field label="عدد النقلات" required>
+                <Input type="number" min={1} step={1} dir="ltr" style={{ textAlign: "center" }}
+                  value={t.qty} onChange={(e) => updTrip(i, { qty: e.target.value })} />
+              </Field>
+              <Field label="سعر النقلة الواحدة" required>
+                <AmountInput value={t.unit_price} onChange={(v) => updTrip(i, { unit_price: v })} />
+              </Field>
+              <Field label="إجمالي السطر">
+                <Input value={money(tripLineTotal(t))} readOnly />
+              </Field>
+            </div>
             <Field label="ملاحظات"><Input value={t.notes} onChange={(e) => updTrip(i, { notes: e.target.value })} /></Field>
             <div className="expenses-head">
-              <span className="section-label">المصروفات المباشرة</span>
+              <span className="section-label">مصروفات النقلة (لكل مصروف مصدر تمويل)</span>
               <button className="btn" onClick={() => addExp(i)}>+ مصروف</button>
             </div>
             {t.expenses.map((e, j) => (
-              <div key={j} style={{ display: "grid", gridTemplateColumns: "120px 1fr 1fr auto", gap: 8, alignItems: "end" }}>
-                <Field label="النوع">
-                  <Select value={e.expense_type} onChange={(ev) => updExp(i, j, { expense_type: ev.target.value })}>
-                    {Object.entries(EXPENSE_TYPES).map(([k, v]) => <option key={k} value={k}>{v}</option>)}
-                  </Select>
-                </Field>
-                <Field label="المبلغ"><AmountInput value={e.amount} onChange={(v) => updExp(i, j, { amount: v })} /></Field>
-                <Field label="بيان"><Input value={e.notes} onChange={(ev) => updExp(i, j, { notes: ev.target.value })} /></Field>
-                <button className="btn-row-danger" onClick={() => delExp(i, j)}>✕</button>
+              <div key={j} className="exp-row">
+                <div className="exp-grid">
+                  <Field label="النوع">
+                    <Select value={e.expense_type} onChange={(ev) => updExp(i, j, { expense_type: ev.target.value })}>
+                      {Object.entries(EXPENSE_TYPES).map(([k, v]) => <option key={k} value={k}>{v}</option>)}
+                    </Select>
+                  </Field>
+                  <Field label="العدد">
+                    <Input type="number" min={1} step={1} dir="ltr" style={{ textAlign: "center" }}
+                      value={e.qty} onChange={(ev) => updExp(i, j, { qty: ev.target.value })} />
+                  </Field>
+                  <Field label="قيمة الوحدة">
+                    <AmountInput value={e.unit_amount} onChange={(v) => updExp(i, j, { unit_amount: v })} />
+                  </Field>
+                  <Field label="الإجمالي">
+                    <Input value={money(expLineTotal(e))} readOnly />
+                  </Field>
+                  <button className="btn btn-danger" title="حذف المصروف" onClick={() => delExp(i, j)}>✕</button>
+                </div>
+
+                <div className="exp-grid-2">
+                  <Field label="مصدر التمويل" required>
+                    <Select value={e.source} onChange={(ev) => {
+                      const src = ev.target.value;
+                      const acc = defaultAccount();
+                      updExp(i, j, {
+                        source: src,
+                        account_kind: src === "cash" ? (e.account_kind || acc.kind) : "",
+                        account_id: src === "cash" ? (e.account_id || acc.id) : "",
+                      });
+                    }}>
+                      {Object.entries(EXPENSE_SOURCES).map(([k, v]) => <option key={k} value={k}>{v}</option>)}
+                    </Select>
+                  </Field>
+
+                  {e.source === "cash" && (
+                    <Field label="من الخزينة / البنك" required>
+                      <Select value={e.account_kind && e.account_id ? `${e.account_kind}:${e.account_id}` : ""}
+                        onChange={(ev) => {
+                          const [kind, id] = ev.target.value.split(":");
+                          updExp(i, j, { account_kind: kind ?? "", account_id: id ?? "" });
+                        }}>
+                        <option value="">— اختر —</option>
+                        {accounts.map((a) => (
+                          <option key={`${a.kind}:${a.id}`} value={`${a.kind}:${a.id}`}>{a.label}</option>
+                        ))}
+                      </Select>
+                    </Field>
+                  )}
+                  {e.source === "supplier" && (
+                    <Field label="المورد / المحطة" required>
+                      <Input value={e.supplier_name} onChange={(ev) => updExp(i, j, { supplier_name: ev.target.value })} />
+                    </Field>
+                  )}
+                  {e.source === "driver" && (
+                    <Field label="السائق">
+                      <Input value={drivers.find((d) => String(d.id) === t.driver_id)?.name ?? "— حدّد السائق أعلاه —"} readOnly />
+                    </Field>
+                  )}
+                  {e.source === "customer" && (
+                    <Field label="الأثر">
+                      <Input value="يُضاف على الفاتورة (إيراد وليس تكلفة)" readOnly />
+                    </Field>
+                  )}
+
+                  <Field label="بيان"><Input value={e.notes} onChange={(ev) => updExp(i, j, { notes: ev.target.value })} /></Field>
+                </div>
+                <div className="exp-hint">{EXPENSE_SOURCE_HINTS[e.source]}</div>
               </div>
             ))}
           </div>
@@ -144,12 +280,16 @@ export function InvoiceDialog({ id, readOnly, onClose }: { id?: number | null; r
       <div className="group-box">
         <div className="group-title">الضريبة والإجمالي</div>
         <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 12 }}>
-          <Field label="نسبة ضريبة القيمة المضافة %"><AmountInput value={f.vat_rate} onChange={(v) => setF({ ...f, vat_rate: v })} /></Field>
+          <Field label="إجمالي النقلات"><Input value={money(totals.tripsTotal)} readOnly /></Field>
+          <Field label="مصروفات يتحمّلها العميل"><Input value={money(totals.billable)} readOnly /></Field>
           <Field label="الإجمالي قبل الضريبة"><Input value={money(totals.subtotal)} readOnly /></Field>
+          <Field label="نسبة ضريبة القيمة المضافة %"><AmountInput value={f.vat_rate} onChange={(v) => setF({ ...f, vat_rate: v })} /></Field>
           <Field label="الضريبة"><Input value={money(totals.vat)} readOnly /></Field>
-        </div>
-        <div style={{ marginTop: 8 }}>
           <Field label="الإجمالي شامل الضريبة"><Input value={money(totals.total)} readOnly /></Field>
+        </div>
+        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12, marginTop: 10 }}>
+          <Field label="تكلفة المصروفات (على الشركة)"><Input value={money(totals.cost)} readOnly /></Field>
+          <Field label="الربح المتوقع من الفاتورة"><Input value={money(totals.profit)} readOnly /></Field>
         </div>
       </div>
 
@@ -373,17 +513,34 @@ async function customerInvoiceHtml(invoiceId: number): Promise<{ html: string; n
   const inv = await getInvoiceFull(invoiceId);
   if (!inv) return null;
   const info = await companyInfo();
-  const subtotal = inv.trips_total;
+  const billable = inv.billable_total ?? 0;
+  const subtotal = inv.trips_total + billable;
   const vat = inv.vat_amount ?? Math.round(subtotal * (inv.vat_rate ?? 0)) / 100;
   const total = subtotal + vat;
 
-  const rows = inv.trips
+  const tripRows = inv.trips
     .map((t, i) => `<tr>
       <td>${i + 1}</td>
       <td>${esc(t.from_loc)}</td><td>${esc(t.to_loc)}</td>
+      <td>${t.qty ?? 1}</td>
+      <td>${money(t.unit_price || t.price)}</td>
       <td>${money(t.price)}</td>
     </tr>`)
     .join("");
+
+  // المصروفات التي يتحمّلها العميل تظهر كبنود إضافية على الفاتورة
+  const billableRows = inv.trips
+    .flatMap((t) => (t.expenses ?? []).filter((e) => e.source === "customer").map((e) => ({ t, e })))
+    .map(({ t, e }, i) => `<tr>
+      <td>${inv.trips.length + i + 1}</td>
+      <td colspan="2">${esc(e.notes || "مصروف مُعاد تحميله")} (${esc(t.from_loc)} ← ${esc(t.to_loc)})</td>
+      <td>${e.qty ?? 1}</td>
+      <td>${money(e.unit_amount || e.amount)}</td>
+      <td>${money(e.amount)}</td>
+    </tr>`)
+    .join("");
+
+  const rows = tripRows + billableRows;
 
   const html = `<div style="font-family:'IBM Plex Sans Arabic','Segoe UI',Tahoma,sans-serif;color:#111;">
     <div style="display:flex;justify-content:space-between;border-bottom:2px solid #1f4e79;padding-bottom:12px;">
@@ -393,7 +550,7 @@ async function customerInvoiceHtml(invoiceId: number): Promise<{ html: string; n
     <h2 style="color:#1f4e79;margin:6px 0;">فاتورة نقل — ${esc(inv.customer?.name ?? "")}</h2>
     <div>العميل: ${esc(inv.customer?.name ?? "")}${inv.customer?.phone ? " — هاتف: " + esc(inv.customer.phone) : ""}</div>
     <table width="100%" border="1" cellspacing="0" cellpadding="6" style="border-collapse:collapse;margin-top:12px;font-size:13px;">
-      <thead><tr style="background:#eef3f9;"><th>#</th><th>من</th><th>إلى</th><th>السعر (${esc(info.currency || "ر.س")})</th></tr></thead>
+      <thead><tr style="background:#eef3f9;"><th>#</th><th>من</th><th>إلى</th><th>العدد</th><th>سعر الوحدة</th><th>الإجمالي (${esc(info.currency || "ر.س")})</th></tr></thead>
       <tbody>${rows}</tbody>
     </table>
     <table width="300px" align="left" style="margin-top:14px;border-collapse:collapse;font-size:13px;">
@@ -410,10 +567,10 @@ async function customerInvoiceHtml(invoiceId: number): Promise<{ html: string; n
 export async function printCustomerInvoice(invoiceId: number): Promise<void> {
   const res = await customerInvoiceHtml(invoiceId);
   if (!res) return notify("الفاتورة غير موجودة.", "error");
-  const w = window.open("", "_blank");
-  if (!w) return notify("اسمح بالنوافذ المنبثقة للطباعة.", "error");
-  w.document.write(`<!doctype html><html lang="ar" dir="rtl"><head><meta charset="utf-8"><title>فاتورة ${res.number}</title></head><body>${res.html}<script>window.onload=function(){window.print();}</script></body></html>`);
-  w.document.close();
+  const { getPrintSettings, printCss } = await import("@/lib/print");
+  const { printHtml } = await import("@/lib/exporter");
+  const ps = await getPrintSettings();
+  printHtml(res.html, `فاتورة ${res.number}`, { css: printCss(ps), watermark: ps.watermark });
 }
 
 export async function exportCustomerInvoicePdf(invoiceId: number): Promise<void> {

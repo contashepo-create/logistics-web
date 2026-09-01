@@ -8,11 +8,30 @@ export function esc(v: unknown): string {
     .replace(/>/g, "&gt;");
 }
 
-export function companyHeaderHtml(info: Record<string, string>): string {
-  const parts = [`<b style="font-size:16pt">${esc(info.company_name)}</b>`];
-  const contact = [info.company_phone, info.company_address].filter(Boolean).join(" | ");
-  if (contact) parts.push(contact);
-  return parts.join("<br>");
+export interface DocOptions {
+  showHeader?: boolean;
+  showPhone?: boolean;
+  showAddress?: boolean;
+  showLogo?: boolean;
+  logoUrl?: string;
+  headerNote?: string;
+  showDate?: boolean;
+  showCount?: boolean;
+  footerText?: string;
+  showSignature?: boolean;
+  signatureLabel?: string;
+}
+
+export function companyHeaderHtml(info: Record<string, string>, o: DocOptions = {}): string {
+  const showPhone = o.showPhone !== false;
+  const showAddress = o.showAddress !== false;
+  const parts: string[] = [];
+  if (o.showLogo && o.logoUrl) parts.push(`<img class="doc-logo" src="${esc(o.logoUrl)}" alt="">`);
+  parts.push(`<div class="doc-company">${esc(info.company_name)}</div>`);
+  const contact = [showPhone ? info.company_phone : "", showAddress ? info.company_address : ""].filter(Boolean).join(" | ");
+  if (contact) parts.push(`<div class="doc-contact">${esc(contact)}</div>`);
+  if (o.headerNote) parts.push(`<div class="doc-note">${esc(o.headerNote)}</div>`);
+  return parts.join("");
 }
 
 export function buildTableHtml(
@@ -50,13 +69,19 @@ export function buildReportHtml(opts: {
   summaryLines?: [string, string | number][];
   centerFrom?: number | null;
   footerNote?: string;
+  doc?: DocOptions;
 }): string {
   const { info, title, subtitle = "", headers, rows = [], summaryLines, centerFrom, footerNote } = opts;
-  const body: string[] = [
-    `<div align='center'>${companyHeaderHtml(info)}</div><hr>`,
-    `<div align='center' style='font-size:14pt'><b>${esc(title)}</b></div>`,
-  ];
-  if (subtitle) body.push(`<div align='center'>${esc(subtitle)}</div><br>`);
+  const o: DocOptions = opts.doc ?? {};
+  const body: string[] = [];
+  if (o.showHeader !== false) {
+    body.push(`<div class='doc-head'>${companyHeaderHtml(info, o)}</div><hr>`);
+  }
+  body.push(`<div class='doc-title'>${esc(title)}</div>`);
+  if (subtitle) body.push(`<div class='doc-sub'>${esc(subtitle)}</div>`);
+  if (o.showDate) {
+    body.push(`<div class='doc-meta'><span>تاريخ الطباعة: ${new Date().toLocaleString("ar-EG")}</span><span></span></div>`);
+  }
   if (summaryLines && summaryLines.length) {
     body.push(
       "<table dir='rtl' width='60%' align='center' border='0.5' cellspacing='0' cellpadding='3' style='font-size:10pt;border-collapse:collapse'>"
@@ -68,10 +93,15 @@ export function buildReportHtml(opts: {
   }
   if (headers) {
     body.push(buildTableHtml(headers, rows, centerFrom));
-    body.push(`<div align='left' style='font-size:9pt'>عدد السجلات: ${rows.length}</div>`);
+    if (o.showCount !== false) {
+      body.push(`<div align='left' style='font-size:9pt'>عدد السجلات: ${rows.length}</div>`);
+    }
   }
-  const note = footerNote ?? info.company_vat_note ?? "";
-  if (note) body.push(`<br><div align='center' style='font-size:9pt'>${esc(note)}</div>`);
+  const note = footerNote ?? o.footerText ?? info.company_vat_note ?? "";
+  if (note) body.push(`<div class='doc-foot'>${esc(note)}</div>`);
+  if (o.showSignature) {
+    body.push(`<div class='doc-sign'><span>${esc(o.signatureLabel || "التوقيع والختم")}</span></div>`);
+  }
   return body.join("");
 }
 
@@ -220,15 +250,24 @@ export async function exportPdfHtml(html: string, defaultName: string): Promise<
   pdf.save(name.endsWith(".pdf") ? name : `${name}.pdf`);
 }
 
-export function printHtml(html: string, title: string): void {
+/**
+ * فتح نافذة طباعة بتنسيق ورقي كامل يعتمد إعدادات الطباعة الخاصة بالشركة.
+ * ps اختيارية للحفاظ على التوافق مع الاستدعاءات القديمة.
+ */
+export function printHtml(html: string, title: string, ps?: PrintSettingsLike): void {
   const w = window.open("", "_blank", "width=900,height=650");
   if (!w) return;
+  const css = ps
+    ? ps.css
+    : `body { font-family: 'IBM Plex Sans Arabic','Segoe UI',Tahoma,sans-serif; color:#1d2a38; padding:24px; }
+       table { border-collapse: collapse; }
+       @media print { body { padding: 0; } }`;
+  const watermark = ps?.watermark ? `<div class="doc-watermark">${esc(ps.watermark)}</div>` : "";
   w.document.write(`<!doctype html><html dir="rtl" lang="ar"><head><meta charset="utf-8"><title>${esc(title)}</title>
-    <style>
-      body { font-family: 'IBM Plex Sans Arabic','Segoe UI',Tahoma,sans-serif; color:#1d2a38; padding:24px; }
-      table { border-collapse: collapse; }
-      @media print { body { padding: 0; } }
-    </style></head><body>${html}
-    <script>window.onload=function(){window.print();}</script></body></html>`);
+    <style>${css}</style></head><body>${watermark}${html}
+    <script>window.onload=function(){setTimeout(function(){window.print();},250);}</script></body></html>`);
   w.document.close();
 }
+
+/** ما يحتاجه محرك الطباعة من إعدادات (يُمرَّر من lib/print.ts). */
+export interface PrintSettingsLike { css: string; watermark?: string }

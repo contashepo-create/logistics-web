@@ -115,16 +115,36 @@ export interface InvoiceTrip {
   driver_id: number | null;
   from_loc: string;
   to_loc: string;
+  /** عدد النقلات لنفس الوجهة */
+  qty: number;
+  /** سعر النقلة الواحدة */
+  unit_price: number;
+  /** إجمالي السطر = qty × unit_price */
   price: number;
   notes: string;
   expenses: TripExpense[];
 }
 
+/** مصدر تمويل مصروف النقلة. */
+export type ExpenseSource = "cash" | "driver" | "supplier" | "customer";
+
 export interface TripExpense {
   id?: number;
   trip_id?: number;
   expense_type: "trip" | "fuel" | "card" | "other";
+  /** العدد (مثال: 3 كارتات) */
+  qty: number;
+  /** قيمة الوحدة */
+  unit_amount: number;
+  /** الإجمالي = qty × unit_amount */
   amount: number;
+  /** من أين مُوِّل المصروف */
+  source: ExpenseSource;
+  /** للمصروف النقدي فقط: الخزينة/البنك المصروف منه */
+  account_kind?: "cashbox" | "bank" | null;
+  account_id?: number | null;
+  /** للمصروف الآجل: اسم المورد/المحطة */
+  supplier_name?: string;
   notes: string;
 }
 

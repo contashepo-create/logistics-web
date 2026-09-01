@@ -25,6 +25,7 @@ export default function PnlReportPage() {
     ["الإيرادات الأخرى (خردة / متنوع)", d.other_revenue ?? 0],
     ["إجمالي الإيرادات", d.total_revenue ?? 0],
     ["مصروفات النقلات المباشرة (تريب/بنزين/كارتة)", d.direct_expenses ?? 0],
+    ["سندات صرف على النقلات (يدوية)", d.trip_payments ?? 0],
     ["الرواتب الصافية المنصرفة", d.salaries ?? 0],
     ["إجمالي السلفيات المسجلة", d.advances ?? 0],
     ["مصاريف الصيانة (سندات السيارات)", d.maintenance ?? 0],
