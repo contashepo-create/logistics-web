@@ -207,30 +207,24 @@ describe("admin.ts", () => {
     expect(rows).toHaveLength(1);
   });
 
-  it("adminStats يجمع الأرقام من كل الجداول", async () => {
-    const counts: Record<string, number> = {
-      companies: 3, customers: 10, invoices: 20, receipt_vouchers: 5,
-      payment_vouchers: 7, payrolls: 4, invoice_trips: 40,
-    };
-    const sums: Record<string, number> = {
-      "invoice_trips:price": 1000, "receipt_vouchers:amount": 500,
-      "payment_vouchers:amount": 300, "payrolls:net_salary": 200,
-    };
-    supabaseMock.from.mockImplementation(makeFrom((s) => {
-      // استعلام count (head)
-      if (s.opts?.head && s.opts?.count === "exact") {
-        const base = counts[s.table] ?? 0;
-        const isActive = s.filters.some(([c, v]) => c === "is_active" && v === true);
-        return { count: s.table === "companies" && isActive ? 2 : base };
-      }
-      // استعلام sum
-      if (s.table === "invoice_trips" && s.cols === "price") return { data: [{ price: 1000 }], error: null };
-      if (s.table === "receipt_vouchers" && s.cols === "amount") return { data: [{ amount: 500 }], error: null };
-      if (s.table === "payment_vouchers" && s.cols === "amount") return { data: [{ amount: 300 }], error: null };
-      if (s.table === "payrolls" && s.cols === "net_salary") return { data: [{ net_salary: 200 }], error: null };
-      return { data: [], error: null };
-    }));
+  it("adminStats يقرأ الأرقام عبر RPC مجمّعة ولا يلمس جداول العملاء", async () => {
+    // بعد إغلاق ثغرة admin_full_access لم يعد للمطوّر وصول لصفوف بيانات
+    // العملاء؛ الإحصاءات تأتي مجمّعة من admin_platform_stats().
+    supabaseMock.rpc.mockResolvedValue({
+      data: {
+        companies: 3, active_companies: 2, customers: 10, invoices: 20,
+        trips: 40, receipts: 5, payments: 7, payrolls: 4,
+        revenue: 1000, collected: 500, spent: 300, salaries: 200,
+      },
+      error: null,
+    });
+    supabaseMock.from.mockImplementation(() => {
+      throw new Error("adminStats يجب ألا يقرأ الجداول مباشرة");
+    });
+
     const st = await adminLib.adminStats();
+    expect(supabaseMock.rpc).toHaveBeenCalledWith("admin_platform_stats");
+    expect(supabaseMock.from).not.toHaveBeenCalled();
     expect(st.companies).toBe(3);
     expect(st.active_companies).toBe(2);
     expect(st.customers).toBe(10);
@@ -239,6 +233,11 @@ describe("admin.ts", () => {
     expect(st.collected).toBe(500);
     expect(st.spent).toBe(300);
     expect(st.salaries).toBe(200);
+  });
+
+  it("adminStats يرمي رسالة واضحة عند رفض الصلاحية", async () => {
+    supabaseMock.rpc.mockResolvedValue({ data: null, error: { message: "غير مصرح لك بهذا الإجراء." } });
+    await expect(adminLib.adminStats()).rejects.toThrow("غير مصرح لك بهذا الإجراء.");
   });
 
   it("لوحة المطوّر لا تعرض أي دالة تقرأ بيانات العملاء التشغيلية", async () => {

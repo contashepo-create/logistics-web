@@ -139,6 +139,42 @@ begin
   end loop;
 end $notnull$;
 
+-- ---------------------------------------------------------------------------
+-- 4) بديل آمن لإحصاءات لوحة المطوّر
+--    لوحة المطوّر (adminStats) كانت تَعُدّ صفوف customers/invoices/... مباشرة،
+--    وكان ذلك ينجح فقط بفضل الثغرة (admin_full_access). بعد إغلاقها ستعود
+--    الأصفار. البديل: دالة SECURITY DEFINER تُرجع **أرقاماً مجمّعة فقط**
+--    (بلا أي صف بيانات عميل) ومحمية بفحص is_admin().
+-- ---------------------------------------------------------------------------
+create or replace function public.admin_platform_stats()
+returns jsonb
+language plpgsql security definer set search_path = public, pg_temp as $stats$
+declare
+  v jsonb;
+begin
+  if not public.is_admin() then
+    raise exception 'غير مصرح لك بهذا الإجراء.';
+  end if;
+  select jsonb_build_object(
+    'companies',        (select count(*) from public.companies),
+    'active_companies', (select count(*) from public.companies where is_active),
+    'customers',        (select count(*) from public.customers),
+    'invoices',         (select count(*) from public.invoices),
+    'trips',            (select count(*) from public.invoice_trips),
+    'receipts',         (select count(*) from public.receipt_vouchers),
+    'payments',         (select count(*) from public.payment_vouchers),
+    'payrolls',         (select count(*) from public.payrolls),
+    'revenue',          (select coalesce(sum(price), 0)      from public.invoice_trips),
+    'collected',        (select coalesce(sum(amount), 0)     from public.receipt_vouchers),
+    'spent',            (select coalesce(sum(amount), 0)     from public.payment_vouchers),
+    'salaries',         (select coalesce(sum(net_salary), 0) from public.payrolls)
+  ) into v;
+  return v;
+end $stats$;
+
+revoke all on function public.admin_platform_stats() from public, anon;
+grant execute on function public.admin_platform_stats() to authenticated;
+
 commit;
 
 -- ============================================================================
