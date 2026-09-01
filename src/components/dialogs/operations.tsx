@@ -6,6 +6,7 @@ import { notify } from "@/components/toast";
 import { listSuppliers, supplierBalance } from "@/lib/suppliers";
 import { listCustomers, listEmployees, listVehicles, saveInvoice, saveReceipt, savePayment, getReceipt, getPayment, companyInfo, currentVatRate } from "@/lib/repo";
 import { getInvoiceFull, allAccounts, tripsOptions, tripProfit } from "@/lib/calc";
+import type { Customer } from "@/lib/types";
 import { money, todayIso, amountToArabicWords, EXPENSE_TYPES, EXPENSE_SOURCES, EXPENSE_SOURCE_HINTS, PAYMENT_TYPES, RECEIPT_TYPES, VEHICLE_EXPENSES } from "@/lib/format";
 
 type ExpRow = {
@@ -643,13 +644,59 @@ export async function customerInvoiceHtml(invoiceId: number): Promise<{ html: st
   const inv = await getInvoiceFull(invoiceId);
   if (!inv) return null;
   const info = await companyInfo();
+  const { buildZatcaQr, zatcaQrDataUrl, zatcaInvoiceType, zatcaMissingFields, ZATCA_TYPE_LABEL } = await import("@/lib/zatca");
+  const { formatNationalAddress } = await import("@/lib/tax");
+
   const cur = info.currency || "ر.س";
+  const curEn = "SAR";
   const billable = inv.billable_total ?? 0;
   const subtotal = Math.round((inv.trips_total + billable) * 100) / 100;
   const vatRate = inv.vat_rate ?? 0;
   const vat = inv.vat_amount ?? Math.round(subtotal * vatRate) / 100;
   const total = Math.round((subtotal + vat) * 100) / 100;
   const num = String(inv.number).padStart(5, "0");
+
+  // ——— بيانات زاتكا ———
+  type BuyerInfo = Customer & Partial<Record<"name_en" | "tax_number" | "tax_status" | "commercial_reg" | "country" | "region" | "city" | "district" | "street" | "building_no" | "postal_code" | "additional_no", string>>;
+  const buyer = (inv.customer ?? null) as BuyerInfo | null;
+  const invType = zatcaInvoiceType(buyer);
+  const typeLabel = ZATCA_TYPE_LABEL[invType];
+  const sellerVat = String(info.company_tax_number || "");
+  const buyerVat = String(buyer?.tax_number || "");
+  const sellerAddress = formatNationalAddress({
+    country: info.company_country, region: info.company_region, city: info.company_city,
+    district: info.company_district, street: info.company_street, building_no: info.company_building_no,
+    postal_code: info.company_postal_code, additional_no: info.company_additional_no,
+  }) || info.company_address || "";
+  const buyerAddress = buyer
+    ? formatNationalAddress({
+        country: buyer.country, region: buyer.region, city: buyer.city, district: buyer.district,
+        street: buyer.street, building_no: buyer.building_no, postal_code: buyer.postal_code,
+        additional_no: buyer.additional_no,
+      }) || buyer.address || ""
+    : "";
+  const issuedAt = `${inv.date}T00:00:00Z`;
+  const qrPayload = buildZatcaQr({
+    sellerName: info.company_name || "",
+    vatNumber: sellerVat,
+    timestamp: issuedAt,
+    totalWithVat: total,
+    vatAmount: vat,
+  });
+  let qrImg = "";
+  try {
+    qrImg = await zatcaQrDataUrl(qrPayload);
+  } catch {
+    qrImg = "";
+  }
+  const missing = zatcaMissingFields({
+    sellerName: info.company_name, sellerVat, sellerAddress,
+    buyerName: buyer?.name, buyerVat, type: invType, date: inv.date,
+  });
+
+  /** سطر ثنائي اللغة: العربية أعلى والإنجليزية أسفل بخط أصغر. */
+  const bi = (ar: string, en: string) =>
+    `<div style="font-weight:700;">${esc(ar)}</div><div style="font-size:10.5px;color:#64748b;font-weight:600;direction:ltr;">${esc(en)}</div>`;
 
   const cell = (v: string, align = "center", extra = "") =>
     `<td style="padding:9px 10px;border-bottom:1px solid #e6ebf2;text-align:${align};${extra}">${v}</td>`;
@@ -658,12 +705,16 @@ export async function customerInvoiceHtml(invoiceId: number): Promise<{ html: st
   const tripRows = inv.trips.map((t) => {
     idx += 1;
     const desc = `<b>خدمة نقل: ${esc(t.from_loc || "—")} ← ${esc(t.to_loc || "—")}</b>` +
+      `<div style="font-size:10.5px;color:#64748b;direction:ltr;text-align:left;">Transport service</div>` +
       (t.notes ? `<div style="color:#64748b;font-size:11.5px;margin-top:2px;">${esc(t.notes)}</div>` : "");
+    const line = Number(t.price) || 0;
+    const lineVat = Math.round(line * vatRate) / 100;
     const bg = idx % 2 === 0 ? "background:#fafbfd;" : "";
     return `<tr style="${bg}">` +
       cell(String(idx)) + cell(desc, "right") +
       cell(String(t.qty ?? 1)) + cell(money(t.unit_price || t.price)) +
-      cell(money(t.price), "center", "font-weight:700;") + "</tr>";
+      cell(money(line)) + cell(`${vatRate}%`) + cell(money(lineVat)) +
+      cell(money(Math.round((line + lineVat) * 100) / 100), "center", "font-weight:700;") + "</tr>";
   }).join("");
 
   // بنود إضافية يتحمّلها العميل (بلا أي إشارة لمصدر التمويل أو المورد)
@@ -673,118 +724,148 @@ export async function customerInvoiceHtml(invoiceId: number): Promise<{ html: st
       idx += 1;
       const label = esc(e.notes || EXPENSE_TYPES[e.expense_type] || "بند إضافي");
       const desc = `<b>${label}</b><div style="color:#64748b;font-size:11.5px;margin-top:2px;">${esc(t.from_loc || "")} ← ${esc(t.to_loc || "")}</div>`;
+      const line = Number(e.amount) || 0;
+      const lineVat = Math.round(line * vatRate) / 100;
       const bg = idx % 2 === 0 ? "background:#fafbfd;" : "";
       return `<tr style="${bg}">` +
         cell(String(idx)) + cell(desc, "right") +
         cell(String(e.qty ?? 1)) + cell(money(e.unit_amount || e.amount)) +
-        cell(money(e.amount), "center", "font-weight:700;") + "</tr>";
+        cell(money(line)) + cell(`${vatRate}%`) + cell(money(lineVat)) +
+        cell(money(Math.round((line + lineVat) * 100) / 100), "center", "font-weight:700;") + "</tr>";
     }).join("");
 
-  const totalLine = (k: string, v: string, strong = false) =>
+  const totalLine = (ar: string, en: string, v: string, strong = false) =>
     `<tr>
-      <td style="padding:7px 12px;color:${strong ? "#0f172a" : "#475569"};font-weight:${strong ? 800 : 500};font-size:${strong ? "14.5px" : "13px"};">${k}</td>
+      <td style="padding:7px 12px;color:${strong ? "#0f172a" : "#475569"};font-weight:${strong ? 800 : 500};font-size:${strong ? "14px" : "12.5px"};">
+        ${esc(ar)}<div style="font-size:10px;color:#64748b;direction:ltr;">${esc(en)}</div>
+      </td>
       <td style="padding:7px 12px;text-align:left;font-weight:${strong ? 800 : 700};color:${strong ? "#1d4ed8" : "#0f172a"};font-size:${strong ? "15px" : "13px"};white-space:nowrap;">${v}</td>
     </tr>`;
 
-  const infoBox = (title: string, body: string) => `
+  const infoBox = (titleAr: string, titleEn: string, body: string) => `
     <div style="flex:1;border:1px solid #e2e8f0;border-radius:10px;overflow:hidden;">
-      <div style="background:#f1f5f9;padding:6px 12px;font-size:11.5px;font-weight:700;color:#475569;letter-spacing:.2px;">${title}</div>
-      <div style="padding:10px 12px;font-size:13px;line-height:1.9;">${body}</div>
+      <div style="background:#f1f5f9;padding:6px 12px;font-size:11.5px;font-weight:700;color:#475569;display:flex;justify-content:space-between;">
+        <span>${esc(titleAr)}</span><span style="direction:ltr;color:#94a3b8;">${esc(titleEn)}</span>
+      </div>
+      <div style="padding:10px 12px;font-size:12.5px;line-height:1.85;">${body}</div>
     </div>`;
+
+  const kv = (ar: string, en: string, v: string) =>
+    v ? `<div><span style="color:#64748b;">${esc(ar)} <span style="direction:ltr;font-size:10.5px;">/ ${esc(en)}</span>:</span> <b>${esc(v)}</b></div>` : "";
 
   const html = `
   <div style="font-family:'IBM Plex Sans Arabic','Segoe UI',Tahoma,sans-serif;color:#0f172a;direction:rtl;">
 
     <!-- ترويسة -->
-    <table width="100%" style="border-collapse:collapse;margin-bottom:14px;">
+    <table width="100%" style="border-collapse:collapse;margin-bottom:12px;">
       <tr>
         <td style="vertical-align:top;">
-          <div style="font-size:21px;font-weight:800;color:#1d4ed8;line-height:1.4;">${esc(info.company_name || "شركة النقل")}</div>
-          <div style="font-size:12px;color:#64748b;line-height:1.9;">
-            ${info.company_address ? esc(info.company_address) + "<br/>" : ""}
-            ${info.company_phone ? "هاتف: " + esc(info.company_phone) : ""}
+          <div style="font-size:20px;font-weight:800;color:#1d4ed8;line-height:1.35;">${esc(info.company_name || "شركة النقل")}</div>
+          ${info.company_name_en ? `<div style="font-size:12.5px;font-weight:700;color:#475569;direction:ltr;">${esc(info.company_name_en)}</div>` : ""}
+          <div style="font-size:11.5px;color:#64748b;line-height:1.85;margin-top:4px;">
+            ${sellerAddress ? esc(sellerAddress) + "<br/>" : ""}
+            ${info.company_phone ? "هاتف / Tel: " + esc(info.company_phone) + "&nbsp;&nbsp;" : ""}
+            ${info.company_email ? esc(info.company_email) : ""}
+          </div>
+          <div style="font-size:11.5px;color:#0f172a;line-height:1.85;margin-top:4px;">
+            ${kv("الرقم الضريبي", "VAT No.", sellerVat)}
+            ${kv("السجل التجاري", "CR No.", info.company_commercial_reg)}
           </div>
         </td>
-        <td style="vertical-align:top;text-align:left;width:230px;">
+        <td style="vertical-align:top;text-align:left;width:250px;">
           <div style="background:#1d4ed8;color:#fff;border-radius:10px;padding:10px 14px;text-align:center;">
-            <div style="font-size:16px;font-weight:800;letter-spacing:.5px;">فاتورة نقل</div>
-            <div style="font-size:12.5px;opacity:.92;margin-top:2px;">TAX INVOICE</div>
+            <div style="font-size:16px;font-weight:800;letter-spacing:.4px;">${esc(typeLabel.ar)}</div>
+            <div style="font-size:12px;opacity:.92;margin-top:2px;direction:ltr;">${esc(typeLabel.en)}</div>
           </div>
-          <table width="100%" style="margin-top:8px;border-collapse:collapse;font-size:12.5px;">
-            <tr><td style="padding:3px 0;color:#64748b;">رقم الفاتورة</td><td style="padding:3px 0;text-align:left;font-weight:800;">INV-${num}</td></tr>
-            <tr><td style="padding:3px 0;color:#64748b;">التاريخ</td><td style="padding:3px 0;text-align:left;font-weight:700;">${esc(inv.date)}</td></tr>
+          <table width="100%" style="margin-top:8px;border-collapse:collapse;font-size:12px;">
+            <tr><td style="padding:3px 0;color:#64748b;">رقم الفاتورة <span style="direction:ltr;font-size:10px;">/ Invoice No.</span></td><td style="padding:3px 0;text-align:left;font-weight:800;">INV-${num}</td></tr>
+            <tr><td style="padding:3px 0;color:#64748b;">تاريخ الإصدار <span style="direction:ltr;font-size:10px;">/ Issue date</span></td><td style="padding:3px 0;text-align:left;font-weight:700;">${esc(inv.date)}</td></tr>
+            <tr><td style="padding:3px 0;color:#64748b;">العملة <span style="direction:ltr;font-size:10px;">/ Currency</span></td><td style="padding:3px 0;text-align:left;font-weight:700;">${esc(cur)} (${curEn})</td></tr>
           </table>
         </td>
       </tr>
     </table>
 
-    <div style="height:3px;background:linear-gradient(90deg,#1d4ed8,#60a5fa 60%,transparent);border-radius:3px;margin-bottom:14px;"></div>
+    <div style="height:3px;background:linear-gradient(90deg,#1d4ed8,#60a5fa 60%,transparent);border-radius:3px;margin-bottom:12px;"></div>
 
-    <!-- بيانات العميل والدفع -->
-    <div style="display:flex;gap:12px;margin-bottom:14px;">
-      ${infoBox("فاتورة إلى (العميل)", `
-        <div style="font-weight:800;font-size:14px;">${esc(inv.customer?.name ?? "—")}</div>
-        ${inv.customer?.phone ? `<div style="color:#475569;">هاتف: ${esc(inv.customer.phone)}</div>` : ""}
-        ${inv.customer?.address ? `<div style="color:#475569;">${esc(inv.customer.address)}</div>` : ""}
+    <!-- بيانات البائع والمشتري -->
+    <div style="display:flex;gap:12px;margin-bottom:12px;">
+      ${infoBox("فاتورة إلى (المشتري)", "Bill to (Buyer)", `
+        <div style="font-weight:800;font-size:13.5px;">${esc(buyer?.name ?? "—")}</div>
+        ${buyer?.name_en ? `<div style="direction:ltr;color:#475569;font-size:11.5px;">${esc(buyer.name_en)}</div>` : ""}
+        ${kv("الرقم الضريبي", "VAT No.", buyerVat)}
+        ${kv("السجل التجاري", "CR No.", String(buyer?.commercial_reg ?? ""))}
+        ${buyerAddress ? `<div style="color:#475569;">${esc(buyerAddress)}</div>` : ""}
+        ${buyer?.phone ? `<div style="color:#475569;">هاتف / Tel: ${esc(buyer.phone)}</div>` : ""}
       `)}
-      ${infoBox("ملخص الفاتورة", `
-        <div>عدد البنود: <b>${idx}</b></div>
-        <div>العملة: <b>${esc(cur)}</b></div>
-        <div>الإجمالي المستحق: <b style="color:#1d4ed8;">${money(total)} ${esc(cur)}</b></div>
+      ${infoBox("ملخص الفاتورة", "Invoice summary", `
+        <div>عدد البنود <span style="direction:ltr;font-size:10.5px;">/ Line items</span>: <b>${idx}</b></div>
+        <div>نسبة الضريبة <span style="direction:ltr;font-size:10.5px;">/ VAT rate</span>: <b>${vatRate}%</b></div>
+        <div>الإجمالي المستحق <span style="direction:ltr;font-size:10.5px;">/ Total due</span>: <b style="color:#1d4ed8;">${money(total)} ${esc(cur)}</b></div>
       `)}
     </div>
 
     <!-- بنود الفاتورة -->
-    <table width="100%" style="border-collapse:collapse;font-size:13px;border:1px solid #e2e8f0;border-radius:10px;overflow:hidden;">
+    <table width="100%" style="border-collapse:collapse;font-size:12.5px;border:1px solid #e2e8f0;border-radius:10px;overflow:hidden;">
       <thead>
-        <tr style="background:#1d4ed8;color:#fff;">
-          <th style="padding:10px 8px;width:38px;">#</th>
-          <th style="padding:10px 10px;text-align:right;">بيان الخدمة</th>
-          <th style="padding:10px 8px;width:70px;">العدد</th>
-          <th style="padding:10px 8px;width:110px;">سعر الوحدة</th>
-          <th style="padding:10px 8px;width:120px;">الإجمالي (${esc(cur)})</th>
+        <tr style="background:#1d4ed8;color:#fff;font-size:11.5px;">
+          <th style="padding:8px 6px;width:34px;">${bi("#", "No.")}</th>
+          <th style="padding:8px 10px;text-align:right;">${bi("بيان الخدمة", "Description")}</th>
+          <th style="padding:8px 6px;width:56px;">${bi("العدد", "Qty")}</th>
+          <th style="padding:8px 6px;width:88px;">${bi("سعر الوحدة", "Unit price")}</th>
+          <th style="padding:8px 6px;width:92px;">${bi("الإجمالي", "Taxable amount")}</th>
+          <th style="padding:8px 6px;width:56px;">${bi("النسبة", "VAT %")}</th>
+          <th style="padding:8px 6px;width:88px;">${bi("الضريبة", "VAT amount")}</th>
+          <th style="padding:8px 6px;width:100px;">${bi("شامل الضريبة", "Total incl. VAT")}</th>
         </tr>
       </thead>
       <tbody>${tripRows}${billableRows}</tbody>
     </table>
 
-    <!-- الإجماليات -->
-    <table width="100%" style="margin-top:14px;border-collapse:collapse;">
+    <!-- الإجماليات ورمز زاتكا -->
+    <table width="100%" style="margin-top:12px;border-collapse:collapse;">
       <tr>
-        <td style="vertical-align:top;padding-inline-end:12px;">
-          <div style="border:1px solid #e2e8f0;border-radius:10px;padding:10px 12px;font-size:12.5px;background:#f8fafc;">
-            <div style="color:#64748b;font-weight:700;margin-bottom:4px;">المبلغ كتابةً</div>
-            <div style="font-weight:700;line-height:1.9;">${esc(amountToArabicWords(total, cur))}</div>
-          </div>
-          ${inv.notes ? `<div style="margin-top:10px;border:1px solid #e2e8f0;border-radius:10px;padding:10px 12px;font-size:12.5px;">
-            <div style="color:#64748b;font-weight:700;margin-bottom:4px;">ملاحظات</div>
-            <div style="line-height:1.9;">${esc(inv.notes)}</div></div>` : ""}
+        <td style="vertical-align:top;width:150px;text-align:center;">
+          ${qrImg ? `<img src="${qrImg}" alt="ZATCA QR" style="width:120px;height:120px;border:1px solid #e2e8f0;border-radius:8px;padding:4px;background:#fff;"/>
+          <div style="font-size:10px;color:#64748b;margin-top:4px;line-height:1.6;">رمز الفاتورة الإلكترونية<br/><span style="direction:ltr;">ZATCA e-invoice QR</span></div>` : ""}
         </td>
-        <td style="width:300px;vertical-align:top;">
+        <td style="vertical-align:top;padding-inline:12px;">
+          <div style="border:1px solid #e2e8f0;border-radius:10px;padding:9px 12px;font-size:12px;background:#f8fafc;">
+            <div style="color:#64748b;font-weight:700;margin-bottom:4px;">المبلغ كتابةً <span style="direction:ltr;font-size:10px;">/ Amount in words</span></div>
+            <div style="font-weight:700;line-height:1.85;">${esc(amountToArabicWords(total, cur))}</div>
+          </div>
+          ${inv.notes ? `<div style="margin-top:8px;border:1px solid #e2e8f0;border-radius:10px;padding:9px 12px;font-size:12px;">
+            <div style="color:#64748b;font-weight:700;margin-bottom:4px;">ملاحظات <span style="direction:ltr;font-size:10px;">/ Notes</span></div>
+            <div style="line-height:1.85;">${esc(inv.notes)}</div></div>` : ""}
+          ${missing.length ? `<div style="margin-top:8px;border:1px solid #fecaca;background:#fef2f2;color:#b91c1c;border-radius:10px;padding:8px 12px;font-size:11.5px;">
+            بيانات ناقصة لاستيفاء متطلبات زاتكا: ${esc(missing.join("، "))}</div>` : ""}
+        </td>
+        <td style="width:290px;vertical-align:top;">
           <table width="100%" style="border-collapse:collapse;border:1px solid #e2e8f0;border-radius:10px;overflow:hidden;">
-            ${totalLine("الإجمالي قبل الضريبة", `${money(subtotal)} ${esc(cur)}`)}
-            ${totalLine(`ضريبة القيمة المضافة (${vatRate}%)`, `${money(vat)} ${esc(cur)}`)}
+            ${totalLine("الإجمالي الخاضع للضريبة", "Total taxable amount", `${money(subtotal)} ${esc(cur)}`)}
+            ${totalLine(`ضريبة القيمة المضافة (${vatRate}%)`, "VAT", `${money(vat)} ${esc(cur)}`)}
             <tr><td colspan="2" style="padding:0;"><div style="height:2px;background:#1d4ed8;"></div></td></tr>
-            ${totalLine("الإجمالي المستحق", `${money(total)} ${esc(cur)}`, true)}
+            ${totalLine("الإجمالي شامل الضريبة", "Total amount due", `${money(total)} ${esc(cur)}`, true)}
           </table>
         </td>
       </tr>
     </table>
 
     <!-- التوقيعات -->
-    <table width="100%" style="margin-top:26px;border-collapse:collapse;font-size:12.5px;color:#475569;">
+    <table width="100%" style="margin-top:22px;border-collapse:collapse;font-size:12px;color:#475569;">
       <tr>
         <td style="text-align:center;padding-top:6px;">
-          <div style="border-top:1px dashed #94a3b8;padding-top:6px;width:190px;margin:0 auto;">توقيع المستلم</div>
+          <div style="border-top:1px dashed #94a3b8;padding-top:6px;width:190px;margin:0 auto;">توقيع المستلم <span style="direction:ltr;font-size:10px;">/ Receiver</span></div>
         </td>
         <td style="text-align:center;padding-top:6px;">
-          <div style="border-top:1px dashed #94a3b8;padding-top:6px;width:190px;margin:0 auto;">عن الشركة</div>
+          <div style="border-top:1px dashed #94a3b8;padding-top:6px;width:190px;margin:0 auto;">عن الشركة <span style="direction:ltr;font-size:10px;">/ For the company</span></div>
         </td>
       </tr>
     </table>
 
-    <div style="margin-top:16px;border-top:1px solid #e2e8f0;padding-top:8px;font-size:11.5px;color:#64748b;text-align:center;">
-      ${esc(info.company_vat_note || "شكراً لتعاملكم معنا")}
+    <div style="margin-top:14px;border-top:1px solid #e2e8f0;padding-top:8px;font-size:11px;color:#64748b;text-align:center;line-height:1.7;">
+      ${esc(info.company_vat_note || "شكراً لتعاملكم معنا")}<br/>
+      <span style="direction:ltr;">This invoice complies with ZATCA e-invoicing requirements (KSA).</span>
     </div>
   </div>`;
 

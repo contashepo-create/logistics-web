@@ -51,7 +51,8 @@ describe("فاتورة العميل المطبوعة", () => {
     expect(html).toContain("مصانع الدلتا");
     expect(html).toContain("INV-00001");
     expect(html).toContain("2026-03-01");
-    expect(html).toContain("فاتورة نقل");
+    expect(html).toContain("فاتورة ضريبية");
+    expect(html).toContain("Tax Invoice");
   });
 
   it("تعرض بند النقل بالعدد وسعر الوحدة والإجمالي", () => {
