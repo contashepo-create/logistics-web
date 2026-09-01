@@ -201,9 +201,9 @@ begin
       'create policy tenant_isolation on public.%I for all
          using (company_id = public.auth_company_id() and public.is_company_active())
          with check (company_id = public.auth_company_id() and public.is_company_active())', t);
-    execute format(
-      'create policy admin_full_access on public.%I for all
-         using (public.is_admin()) with check (public.is_admin())', t);
+    -- (أُزيلت) admin_full_access — كانت تُجمع بـ OR مع tenant_isolation فتُظهر
+    -- بيانات كل الشركات في حساب المطوّر. انظر migration_admin_privacy_v5.sql.
+    execute format('drop policy if exists admin_full_access on public.%I', t);
   end loop;
 end $$;
 

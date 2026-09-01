@@ -294,3 +294,45 @@ complaint_messages, app_settings, activity_logs` فقط.
 **حماية كلمات المرور المسرّبة**: من Supabase Dashboard →
 Authentication → Policies (Password) → فعّل *Leaked password protection*
 (فحص HaveIBeenPwned)، ويُنصح بحدّ أدنى 8 محارف مع شروط تعقيد.
+
+## v9 — إصلاح عاجل: ظهور بيانات شركة أخرى داخل الحساب
+
+**السبب الجذري:** كانت `schema.sql` و`migration_company_id.sql` و`migration_auth_vat.sql`
+تنشئ على كل جداول التشغيل سياسة ثانية باسم `admin_full_access`:
+
+```sql
+create policy admin_full_access on public.<table> for all
+  using (public.is_admin()) with check (public.is_admin());
+```
+
+سياسات RLS في PostgreSQL **تُجمَع بـ OR**، فالصف يظهر إذا حقّق أي سياسة. لذلك على
+حساب المطوّر (`conta.moha@gmail.com`) كان الشرط `company_id = auth_company_id()`
+يُتجاوز، وتظهر بيانات **كل الشركات** مدمجة داخل الشاشات العادية (العملاء، الفواتير،
+السندات…) وكأنها بيانات شركته.
+
+كان `migration_admin_privacy_v5.sql` يحذف هذه السياسات، لكن إعادة تشغيل أي ملف أقدم
+(`schema.sql` مثلاً بعد v5) يعيد إنشاءها فيعود التسريب.
+
+### الخطوات
+1. **التشخيص أولاً** — نفّذ `supabase/diagnose_tenant_leak.sql` (قراءة فقط).
+   استعلام (1) يؤكد وجود `admin_full_access`؛ (2) يبيّن هل حسابك هو حساب المطوّر؛
+   (3) يكشف أي جدول فيه `company_id` بلا سياسة عزل؛ (5) يكشف صفوفاً بلا `company_id`؛
+   (6) يكشف وجود أكثر من مستخدم مرتبط بنفس الشركة.
+2. **الإصلاح** — نفّذ `supabase/fix_tenant_leak_v9.sql` (آمن التكرار، داخل transaction):
+   - يحذف `admin_full_access` وأي سياسة إدارية أخرى من جداول التشغيل.
+   - يعيد بناء `tenant_isolation` على **كل** جدول فيه `company_id`
+     (بما فيها `suppliers`, `purchase_invoices`, `purchase_items`,
+     `credit_debit_notes`, `year_opening_balances`) مع
+     `force row level security` و`to authenticated` وشرط `company_id is not null`.
+   - يحذف أي سياسة مكرّرة أخرى على تلك الجداول (منعاً لتجميع OR).
+   - يعيد ربط حارس `set_company_id` قبل الإدراج.
+   - يفرض `company_id NOT NULL` حيث لا توجد صفوف يتيمة.
+3. بعد التنفيذ سجّل خروجاً ثم دخولاً (يوجد كاش هوية 60 ثانية في المتصفح).
+
+> بيانات العميل الآخر لم تُنسخ إلى شركتك — كانت تُقرأ فقط عبر السياسة المتساهلة.
+> إن ظهرت صفوف بلا `company_id` في الاستعلام (5) فراجعها يدوياً قبل فرض NOT NULL،
+> ولا تدمج شركات بالتخمين (انظر `migration_repair_tenant_data.sql`).
+
+### احتمال ثانٍ (إن لم يكن حسابك حساب المطوّر)
+استعلاما (3) و(6) في ملف التشخيص يغطّيانه: جدول جديد بلا `tenant_isolation`،
+أو ملفّان شخصيان مرتبطان بنفس `company_id`.

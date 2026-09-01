@@ -97,10 +97,8 @@ begin
       'create policy tenant_isolation on public.%I for all
          using (user_id = auth.uid() and public.is_active_user())
          with check (user_id = auth.uid() and public.is_active_user())', t);
+    -- (أُزيلت) admin_full_access — سبب ظهور بيانات شركة أخرى في حساب المطوّر.
     execute format('drop policy if exists admin_full_access on public.%I', t);
-    execute format(
-      'create policy admin_full_access on public.%I for all
-         using (public.is_admin()) with check (public.is_admin())', t);
   end loop;
 end $$;
 

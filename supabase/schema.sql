@@ -447,9 +447,10 @@ begin
       'create policy tenant_isolation on public.%I for all
          using (company_id = public.auth_company_id() and public.is_company_active())
          with check (company_id = public.auth_company_id() and public.is_company_active())', t);
-    execute format(
-      'create policy admin_full_access on public.%I for all
-         using (public.is_admin()) with check (public.is_admin())', t);
+    -- لا تُنشأ سياسة admin_full_access على جداول التشغيل: سياسات RLS تُجمع بـ OR،
+    -- فكانت تمنح حساب المطوّر رؤية بيانات كل الشركات مدمجة داخل شاشاته العادية
+    -- (تسريب بين المستأجرين). خصوصية العميل مطلوبة، والمطوّر يدير الاشتراكات فقط.
+    execute format('drop policy if exists admin_full_access on public.%I', t);
   end loop;
 end $$;
 
