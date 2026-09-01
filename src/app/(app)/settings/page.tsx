@@ -19,6 +19,10 @@ import {
   type PrintTemplate,
 } from "@/lib/print";
 import { buildReportHtml, printHtml } from "@/lib/exporter";
+import {
+  ENTITY_TYPES, TAX_STATUSES, SA_REGIONS, COUNTRIES,
+  formatNationalAddress, validateTaxProfile,
+} from "@/lib/tax";
 import { docOptions } from "@/lib/exportHelper";
 
 type Tab = "company" | "print" | "appearance" | "about";
@@ -40,6 +44,16 @@ export default function SettingsPage() {
   const [currency, setCurrency] = useState("");
   const [vatNote, setVatNote] = useState("");
   const [vatRate, setVatRate] = useState("15");
+  /** بقية بيانات المنشأة (ضريبية + عنوان وطني) في كائن واحد. */
+  const [org, setOrg] = useState<Record<string, string>>({
+    company_name_en: "", company_email: "", company_website: "",
+    company_tax_number: "", company_commercial_reg: "", company_unified_number: "",
+    company_entity_type: "establishment", company_tax_status: "taxable",
+    company_country: "SA", company_region: "", company_city: "", company_district: "",
+    company_street: "", company_building_no: "", company_postal_code: "",
+    company_additional_no: "", company_address_note: "",
+  });
+  const setOrgField = (k: string, v: string) => setOrg((p) => ({ ...p, [k]: v }));
 
   // الطباعة
   const [ps, setPs] = useState<PrintSettings>(DEFAULT_PRINT_SETTINGS);
@@ -53,6 +67,11 @@ export default function SettingsPage() {
       setCurrency(info.currency);
       setVatNote(info.company_vat_note);
       setVatRate(info.vat_rate ?? "15");
+      setOrg((prev) => {
+        const next = { ...prev };
+        for (const k of Object.keys(prev)) if (info[k] !== undefined) next[k] = info[k];
+        return next;
+      });
     });
     getPrintSettings().then(setPs);
   }, []);
@@ -65,6 +84,21 @@ export default function SettingsPage() {
       await setSetting("currency", currency);
       await setSetting("company_vat_note", vatNote);
       await setSetting("vat_rate", vatRate || "15");
+
+      const problems = validateTaxProfile({
+        tax_number: org.company_tax_number,
+        commercial_reg: org.company_commercial_reg,
+        postal_code: org.company_postal_code,
+        building_no: org.company_building_no,
+        additional_no: org.company_additional_no,
+        tax_status: org.company_tax_status,
+      });
+      if (problems.length) {
+        notify(problems[0], "error");
+        return;
+      }
+      for (const [k, v] of Object.entries(org)) await setSetting(k, v);
+
       notify("تم حفظ الإعدادات بنجاح.", "success");
     } catch (e) {
       notify(e instanceof Error ? e.message : String(e), "error");
@@ -149,20 +183,103 @@ export default function SettingsPage() {
 
       {/* ---------------- بيانات الشركة ---------------- */}
       {tab === "company" && (
-        <div className="group-box" style={{ marginTop: 0 }}>
-          <div className="group-title">بيانات الشركة (تظهر في ترويسة كل التقارير والفواتير)</div>
-          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
-            <Field label="اسم الشركة"><Input value={name} onChange={(e) => setName(e.target.value)} /></Field>
-            <Field label="هاتف الشركة"><Input value={phone} onChange={(e) => setPhone(e.target.value)} dir="ltr" /></Field>
-            <Field label="عنوان الشركة"><Input value={address} onChange={(e) => setAddress(e.target.value)} /></Field>
-            <Field label="رمز العملة"><Input value={currency} onChange={(e) => setCurrency(e.target.value)} /></Field>
-            <Field label="نسبة ضريبة القيمة المضافة %"><Input value={vatRate} onChange={(e) => setVatRate(e.target.value)} dir="ltr" inputMode="decimal" /></Field>
-            <Field label="عبارة أسفل الفواتير"><Input value={vatNote} onChange={(e) => setVatNote(e.target.value)} /></Field>
+        <>
+          <div className="group-box" style={{ marginTop: 0 }}>
+            <div className="group-title">🏢 بيانات المنشأة (تظهر في ترويسة كل التقارير والفواتير)</div>
+            <div className="form-grid-2">
+              <Field label="اسم المنشأة" required><Input value={name} onChange={(e) => setName(e.target.value)} /></Field>
+              <Field label="الاسم بالإنجليزية"><Input dir="ltr" value={org.company_name_en} onChange={(e) => setOrgField("company_name_en", e.target.value)} /></Field>
+            </div>
+            <div className="form-grid-3">
+              <Field label="الهاتف"><Input value={phone} onChange={(e) => setPhone(e.target.value)} dir="ltr" /></Field>
+              <Field label="البريد الإلكتروني"><Input dir="ltr" value={org.company_email} onChange={(e) => setOrgField("company_email", e.target.value)} /></Field>
+              <Field label="الموقع الإلكتروني"><Input dir="ltr" value={org.company_website} onChange={(e) => setOrgField("company_website", e.target.value)} /></Field>
+            </div>
+            <div className="form-grid-3">
+              <Field label="رمز العملة"><Input value={currency} onChange={(e) => setCurrency(e.target.value)} /></Field>
+              <Field label="نسبة ضريبة القيمة المضافة %"><Input value={vatRate} onChange={(e) => setVatRate(e.target.value)} dir="ltr" inputMode="decimal" /></Field>
+              <Field label="عبارة أسفل الفواتير"><Input value={vatNote} onChange={(e) => setVatNote(e.target.value)} /></Field>
+            </div>
           </div>
-          <div style={{ marginTop: 14 }}>
-            <Button variant="primary" onClick={saveCompany}>💾 حفظ بيانات الشركة</Button>
+
+          <div className="group-box">
+            <div className="group-title">🧾 البيانات الضريبية والسجلات الرسمية</div>
+            <div className="form-grid-3">
+              <Field label="الرقم الضريبي (15 رقماً)">
+                <Input dir="ltr" inputMode="numeric" maxLength={15} placeholder="3XXXXXXXXXXXXX3"
+                  value={org.company_tax_number} onChange={(e) => setOrgField("company_tax_number", e.target.value)} />
+                <span className="field-hint">يظهر في الفاتورة الضريبية ورمز الاستجابة السريعة.</span>
+              </Field>
+              <Field label="رقم السجل التجاري (10 أرقام)">
+                <Input dir="ltr" inputMode="numeric" maxLength={10}
+                  value={org.company_commercial_reg} onChange={(e) => setOrgField("company_commercial_reg", e.target.value)} />
+              </Field>
+              <Field label="الرقم الموحّد للمنشأة">
+                <Input dir="ltr" inputMode="numeric" maxLength={10}
+                  value={org.company_unified_number} onChange={(e) => setOrgField("company_unified_number", e.target.value)} />
+              </Field>
+            </div>
+            <div className="form-grid-2">
+              <Field label="نوع المنشأة">
+                <Select value={org.company_entity_type} onChange={(e) => setOrgField("company_entity_type", e.target.value)}>
+                  {ENTITY_TYPES.map((t) => <option key={t.value} value={t.value}>{t.label}</option>)}
+                </Select>
+              </Field>
+              <Field label="الحالة الضريبية">
+                <Select value={org.company_tax_status} onChange={(e) => setOrgField("company_tax_status", e.target.value)}>
+                  {TAX_STATUSES.map((t) => <option key={t.value} value={t.value}>{t.label}</option>)}
+                </Select>
+              </Field>
+            </div>
           </div>
-        </div>
+
+          <div className="group-box">
+            <div className="group-title">📍 العنوان الوطني التفصيلي</div>
+            <div className="form-grid-3">
+              <Field label="الدولة">
+                <Select value={org.company_country} onChange={(e) => setOrgField("company_country", e.target.value)}>
+                  {COUNTRIES.map((c) => <option key={c.code} value={c.code}>{c.label}</option>)}
+                </Select>
+              </Field>
+              <Field label="المنطقة">
+                <Input list="org-regions" value={org.company_region} onChange={(e) => setOrgField("company_region", e.target.value)} />
+                <datalist id="org-regions">{SA_REGIONS.map((r) => <option key={r} value={r} />)}</datalist>
+              </Field>
+              <Field label="المدينة"><Input value={org.company_city} onChange={(e) => setOrgField("company_city", e.target.value)} /></Field>
+            </div>
+            <div className="form-grid-2">
+              <Field label="الحي"><Input value={org.company_district} onChange={(e) => setOrgField("company_district", e.target.value)} /></Field>
+              <Field label="الشارع"><Input value={org.company_street} onChange={(e) => setOrgField("company_street", e.target.value)} /></Field>
+            </div>
+            <div className="form-grid-3">
+              <Field label="رقم المبنى (4 أرقام)"><Input dir="ltr" inputMode="numeric" maxLength={4} value={org.company_building_no} onChange={(e) => setOrgField("company_building_no", e.target.value)} /></Field>
+              <Field label="الرمز البريدي (5 أرقام)"><Input dir="ltr" inputMode="numeric" maxLength={5} value={org.company_postal_code} onChange={(e) => setOrgField("company_postal_code", e.target.value)} /></Field>
+              <Field label="الرقم الإضافي (4 أرقام)"><Input dir="ltr" inputMode="numeric" maxLength={4} value={org.company_additional_no} onChange={(e) => setOrgField("company_additional_no", e.target.value)} /></Field>
+            </div>
+            <Field label="العنوان المختصر (سطر واحد يظهر في الترويسة)">
+              <Input value={address} onChange={(e) => setAddress(e.target.value)} />
+            </Field>
+            {formatNationalAddress({
+              country: org.company_country, region: org.company_region, city: org.company_city,
+              district: org.company_district, street: org.company_street,
+              building_no: org.company_building_no, postal_code: org.company_postal_code,
+              additional_no: org.company_additional_no,
+            }) && (
+              <div className="field-hint" style={{ marginTop: 6 }}>
+                العنوان المُجمّع: <b>{formatNationalAddress({
+                  country: org.company_country, region: org.company_region, city: org.company_city,
+                  district: org.company_district, street: org.company_street,
+                  building_no: org.company_building_no, postal_code: org.company_postal_code,
+                  additional_no: org.company_additional_no,
+                })}</b>
+              </div>
+            )}
+          </div>
+
+          <div className="group-box btn-group">
+            <Button variant="primary" onClick={saveCompany}>💾 حفظ بيانات المنشأة</Button>
+          </div>
+        </>
       )}
 
       {/* ---------------- إعدادات الطباعة ---------------- */}

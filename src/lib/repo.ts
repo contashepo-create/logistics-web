@@ -2,6 +2,7 @@
 // مكافئ حرفي لـ app/core/repo.py
 
 import { supabase } from "./supabase";
+import { normalizeTaxProfile, validateTaxProfile } from "./tax";
 import { num, accountTable, accountKindLabel } from "./calc";
 import type { Company } from "./types";
 import {
@@ -31,21 +32,57 @@ import type {
 // حقول الشركة (تُستخدم في ترويسة الفواتير والتقارير والإعدادات)
 const DEFAULT_SETTINGS: Record<string, string> = {
   company_name: "شركة النقل للخدمات اللوجستية",
+  company_name_en: "",
   company_phone: "",
+  company_email: "",
+  company_website: "",
   company_address: "",
   company_vat_note: "فاتورة مرجعية — ضريبة القيمة المضافة 15%",
   currency: "ر.س",
   vat_rate: "15",
+  // البيانات الضريبية والسجلات الرسمية
+  company_tax_number: "",
+  company_commercial_reg: "",
+  company_unified_number: "",
+  company_entity_type: "establishment",
+  company_tax_status: "taxable",
+  // العنوان الوطني التفصيلي
+  company_country: "SA",
+  company_region: "",
+  company_city: "",
+  company_district: "",
+  company_street: "",
+  company_building_no: "",
+  company_postal_code: "",
+  company_additional_no: "",
+  company_address_note: "",
 };
 
 // خريطة مفاتيح الإعدادات ← أعمدة جدول الشركات
 const COMPANY_FIELDS: Record<string, string> = {
   company_name: "name",
+  company_name_en: "name_en",
   company_phone: "phone",
+  company_email: "email",
+  company_website: "website",
   company_address: "address",
   company_vat_note: "vat_note",
   currency: "currency",
   vat_rate: "vat_rate",
+  company_tax_number: "tax_number",
+  company_commercial_reg: "commercial_reg",
+  company_unified_number: "unified_number",
+  company_entity_type: "entity_type",
+  company_tax_status: "tax_status",
+  company_country: "country",
+  company_region: "region",
+  company_city: "city",
+  company_district: "district",
+  company_street: "street",
+  company_building_no: "building_no",
+  company_postal_code: "postal_code",
+  company_additional_no: "additional_no",
+  company_address_note: "address_note",
 };
 
 // ---------------------------------------------------------------------------
@@ -282,17 +319,44 @@ export async function saveCustomer(data: Record<string, any>, customerId?: numbe
   const notes = txt(data.notes ?? "", "الملاحظات");
   const opening = roundMoney(data.opening_balance ?? 0);
 
+  // البيانات الضريبية والعنوان الوطني (تُطبَّع وتُتحقّق قبل الحفظ)
+  const profile = normalizeTaxProfile({
+    tax_number: String(data.tax_number ?? ""),
+    commercial_reg: String(data.commercial_reg ?? ""),
+    entity_type: String(data.entity_type ?? "company"),
+    tax_status: String(data.tax_status ?? "taxable"),
+    country: String(data.country ?? "SA"),
+    region: String(data.region ?? ""),
+    city: String(data.city ?? ""),
+    district: String(data.district ?? ""),
+    street: String(data.street ?? ""),
+    building_no: String(data.building_no ?? ""),
+    postal_code: String(data.postal_code ?? ""),
+    additional_no: String(data.additional_no ?? ""),
+  });
+  const problems = validateTaxProfile(profile);
+  if (problems.length) throw new RuleError(problems[0]);
+
+  const extra = {
+    ...profile,
+    name_en: txt(data.name_en ?? "", "الاسم بالإنجليزية"),
+    email: txt(data.email ?? "", "البريد الإلكتروني"),
+    contact_person: txt(data.contact_person ?? "", "مسؤول التواصل"),
+    credit_limit: roundMoney(data.credit_limit ?? 0),
+    payment_terms: Math.max(0, Math.trunc(Number(data.payment_terms ?? 0) || 0)),
+  };
+
   if (customerId) {
     const { error } = await supabase
       .from("customers")
-      .update({ name, address, phone, opening_balance: opening, notes })
+      .update({ name, address, phone, opening_balance: opening, notes, ...extra })
       .eq("id", customerId);
     if (error) throw new RuleError(error.message);
     return customerId;
   }
   const { data: inserted, error } = await supabase
     .from("customers")
-    .insert({ name, address, phone, opening_balance: opening, notes })
+    .insert({ name, address, phone, opening_balance: opening, notes, ...extra })
     .select()
     .single();
   if (error) throw new RuleError(error.message);
