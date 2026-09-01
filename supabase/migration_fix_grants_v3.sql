@@ -1,27 +1,77 @@
 -- ============================================================================
--- إصلاحات ما بعد v2 (آمن التكرار) — الصق كاملاً في Supabase SQL Editor > Run
+-- إصلاحات ما بعد v2 — آمن التكرار وآمن التنفيذ على أي قاعدة
+-- الصق الملف كاملاً في: Supabase > SQL Editor > New query > Run
 --
 --  1) إعادة صلاحية القراءة العامة لجدول إعدادات التطبيق (كان يعطي 401 للزوار)
---  2) صلاحيات تنفيذ الدوال العامة الضرورية للتسجيل والدخول
---  3) ضمان أن التسجيل الجديد لا يفشل بسبب حارس البريد أو الفهرس الفريد
+--  2) صلاحيات تنفيذ الدوال (ديناميكياً — يتجاهل أي دالة غير موجودة)
+--  3) إنشاء الدوال المفقودة: is_active_user / is_allowed_email / safe_text
+--  4) حارس الملف الشخصي حتى لا يفشل التسجيل الجديد
+--  5) دالة تشخيص whoami()
 -- ============================================================================
 
+-- ---------------------------------------------------------------------------
 -- 1) الزائر (anon) يحتاج قراءة إعدادات التطبيق فقط — لا شيء غير ذلك
+-- ---------------------------------------------------------------------------
 grant usage on schema public to anon;
-grant select on public.app_settings to anon;
 
--- سياسة القراءة (تأكيد)
-alter table public.app_settings enable row level security;
-drop policy if exists app_settings_read on public.app_settings;
-create policy app_settings_read on public.app_settings
-  for select to anon, authenticated using (true);
+do $settings$
+begin
+  if to_regclass('public.app_settings') is not null then
+    execute 'grant select on public.app_settings to anon, authenticated';
+    execute 'alter table public.app_settings enable row level security';
+    execute 'drop policy if exists app_settings_read on public.app_settings';
+    execute 'create policy app_settings_read on public.app_settings
+               for select to anon, authenticated using (true)';
+  end if;
+end $settings$;
 
--- 2) دوال يحتاجها المستخدم المصادق (وقد أُلغيت صلاحياتها في التشديد)
---    نمنح ديناميكياً حسب الاسم مهما كان توقيع الدالة، ونتجاهل أي دالة غير موجودة
---    (بعض القواعد لم تُنفَّذ عليها كل الترحيلات القديمة).
+-- ---------------------------------------------------------------------------
+-- 2) الدوال الأساسية المفقودة في بعض القواعد — تُنشأ الآن قبل منح الصلاحيات
+-- ---------------------------------------------------------------------------
+
+-- البريد المسموح به (جيميل/ياهو/هوتميل/أوتلوك/آيكلاود فقط)
+create or replace function public.is_allowed_email(p_email text)
+returns boolean
+language sql immutable as $$
+  select lower(coalesce(p_email, '')) ~
+    '^[a-z0-9._%+-]+@(gmail\.com|googlemail\.com|yahoo\.(com|co\.uk)|ymail\.com|hotmail\.(com|co\.uk)|outlook\.com|live\.com|msn\.com|icloud\.com|me\.com|mac\.com)$';
+$$;
+
+-- تنظيف نص من الوسوم ومحارف التحكم مع تحديد الطول
+create or replace function public.safe_text(p_text text, p_max int default 200)
+returns text
+language sql immutable as $$
+  select nullif(
+    left(
+      btrim(
+        regexp_replace(
+          regexp_replace(coalesce(p_text, ''), '<[^>]*>', '', 'g'),
+          '[\x00-\x1F\x7F]', '', 'g'
+        )
+      ),
+      greatest(coalesce(p_max, 200), 1)
+    ),
+    ''
+  );
+$$;
+
+-- هل المستخدم الحالي مفعّل؟
+create or replace function public.is_active_user()
+returns boolean
+language sql stable security definer set search_path = public as $$
+  select coalesce(
+    (select p.is_active from public.profiles p where p.id = auth.uid()),
+    false
+  );
+$$;
+
+-- ---------------------------------------------------------------------------
+-- 3) منح صلاحيات التنفيذ ديناميكياً حسب الاسم مهما كان توقيع الدالة،
+--    مع تجاهل أي دالة غير موجودة (لا يتوقف السكربت).
+-- ---------------------------------------------------------------------------
 do $grants$
 declare
-  r record;
+  r  record;
   fn text;
   wanted text[] := array[
     'register_company','is_admin','auth_company_id','is_company_active',
@@ -52,20 +102,11 @@ begin
   end loop;
 end $grants$;
 
--- 2ب) دالة is_active_user مفقودة في بعض القواعد — ننشئها إن لم تكن موجودة
-create or replace function public.is_active_user() returns boolean
-language sql stable security definer set search_path = public as $$
-  select coalesce(
-    (select p.is_active from public.profiles p where p.id = auth.uid()),
-    false
-  );
-$$;
-grant execute on function public.is_active_user() to authenticated;
-
--- 3) حارس الملف الشخصي: لا يمنع إنشاء ملف لمستخدم موجود مسبقاً ببريد مسموح
---    (نتحقق من البريد فقط عند وجوده، ونتجاهل الفراغ القادم من دوال داخلية)
+-- ---------------------------------------------------------------------------
+-- 4) حارس الملف الشخصي: يتحقق من البريد عند وجوده فقط، ولا يعطّل التسجيل
+-- ---------------------------------------------------------------------------
 create or replace function public.set_profile_guard() returns trigger
-language plpgsql as $$
+language plpgsql as $guard$
 declare v_email text;
 begin
   v_email := lower(coalesce(nullif(auth.jwt() ->> 'email', ''), new.email, ''));
@@ -77,16 +118,24 @@ begin
   new.is_active := coalesce(new.is_active, true);
   new.name := public.safe_text(new.name, 120);
   return new;
-end $$;
+end $guard$;
 
--- 4) تشخيص سريع: هل المستخدم الحالي مطوّر؟ (يُستخدم من الواجهة عند فشل الدخول)
+-- ---------------------------------------------------------------------------
+-- 5) تشخيص سريع: من أنا؟ (يُظهر البريد وهل أنت المطوّر ومعرّف شركتك)
+-- ---------------------------------------------------------------------------
 create or replace function public.whoami()
 returns table (uid uuid, email text, is_admin boolean, company_id uuid)
-language sql stable security definer set search_path = public as $$
+language sql stable security definer set search_path = public as $whoami$
   select auth.uid(),
          lower(coalesce(auth.jwt() ->> 'email', '')),
-         public.is_admin(),
+         coalesce(public.is_admin(), false),
          (select p.company_id from public.profiles p where p.id = auth.uid());
-$$;
+$whoami$;
 revoke execute on function public.whoami() from public, anon;
 grant execute on function public.whoami() to authenticated;
+
+-- ============================================================================
+-- بعد التنفيذ شغّل للتأكد:
+--   select * from public.rls_audit();   -- يجب أن تعود فارغة
+--   select * from public.whoami();      -- يجب أن يظهر بريدك و is_admin
+-- ============================================================================

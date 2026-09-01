@@ -440,50 +440,8 @@ revoke all on all sequences in schema public from anon;
 revoke all on all functions in schema public from anon;
 
 -- ---------------------------------------------------------------------------
--- 10) استثناءات ضرورية بعد التشديد (وإلا يفشل الزائر وصفحة الدخول بـ 401)
+-- 10) استثناءات ضرورية بعد التشديد
 -- ---------------------------------------------------------------------------
-grant usage on schema public to anon;
-grant select on public.app_settings to anon;
-do $grants$
-declare
-  r record;
-  fn text;
-  wanted text[] := array[
-    'register_company','is_admin','auth_company_id','is_company_active',
-    'is_active_user','export_company_data','safe_text','log_activity',
-    'gen_code','admin_update_app_settings','admin_set_company_status',
-    'admin_set_subscription','admin_delete_company','admin_review_activation_request',
-    'admin_set_profile_status','admin_set_profile_role','save_invoice','save_payroll'
-  ];
-begin
-  foreach fn in array wanted loop
-    for r in
-      select p.oid::regprocedure as sig
-      from pg_proc p
-      join pg_namespace n on n.oid = p.pronamespace
-      where n.nspname = 'public' and p.proname = fn
-    loop
-      execute format('grant execute on function %s to authenticated', r.sig);
-    end loop;
-  end loop;
-
-  -- is_allowed_email يحتاجها الزائر أيضاً (تحقق البريد قبل التسجيل)
-  for r in
-    select p.oid::regprocedure as sig
-    from pg_proc p join pg_namespace n on n.oid = p.pronamespace
-    where n.nspname = 'public' and p.proname = 'is_allowed_email'
-  loop
-    execute format('grant execute on function %s to anon, authenticated', r.sig);
-  end loop;
-end $grants$;
-
--- 2ب) دالة is_active_user مفقودة في بعض القواعد — ننشئها إن لم تكن موجودة
-create or replace function public.is_active_user() returns boolean
-language sql stable security definer set search_path = public as $$
-  select coalesce(
-    (select p.is_active from public.profiles p where p.id = auth.uid()),
-    false
-  );
-$$;
-grant execute on function public.is_active_user() to authenticated;
-
+-- نُفِّذت بالكامل (وبصورة آمنة) في الملف المستقل:
+--     supabase/migration_fix_grants_v3.sql
+-- نفّذه مباشرة بعد هذا الملف — وإلا يحصل الزوار على 401 على app_settings.
