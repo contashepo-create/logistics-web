@@ -4,7 +4,7 @@ import { useEffect, useState } from "react";
 import { useRouter, usePathname } from "next/navigation";
 import { Sidebar } from "@/components/Sidebar";
 import { ToastHost } from "@/components/toast";
-import { getSession, getCompany } from "@/lib/auth";
+import { getSession, getCompany, signOut } from "@/lib/auth";
 import { SUPABASE_CONFIGURED } from "@/lib/supabase";
 import { subscriptionState } from "@/lib/subscription";
 import { ThemeToggle } from "@/components/ThemeToggle";
@@ -40,7 +40,8 @@ let gatePassed = false;
 export default function AppLayout({ children }: { children: React.ReactNode }) {
   const router = useRouter();
   const pathname = usePathname();
-  const [state, setState] = useState<"loading" | "ready">(gatePassed ? "ready" : "loading");
+  const [state, setState] = useState<"loading" | "ready" | "error">(gatePassed ? "ready" : "loading");
+  const [errorMsg, setErrorMsg] = useState("");
   const [navOpen, setNavOpen] = useState(false);
 
   useEffect(() => {
@@ -59,7 +60,20 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
         return;
       }
 
-      const company = await getCompany();
+      // نميّز بين «لا توجد شركة» (تهيئة مطلوبة) و«فشل الطلب» (صلاحيات/شبكة).
+      // بلا هذا التمييز كان خطأ 403 يُقرأ كأنه غياب شركة، فيُعاد التوجيه إلى
+      // /onboarding بلا نهاية رغم امتلاك المستخدم شركة بالفعل.
+      let company;
+      try {
+        company = await getCompany();
+      } catch (e) {
+        if (!cancelled) {
+          setErrorMsg(e instanceof Error ? e.message : String(e));
+          setState("error");
+        }
+        return;
+      }
+
       if (!company) {
         if (!cancelled) router.replace("/onboarding");
         return;
@@ -96,6 +110,27 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
     return (
       <div style={{ minHeight: "100vh", display: "flex", alignItems: "center", justifyContent: "center", background: "var(--bg)" }}>
         <div className="spinner" />
+      </div>
+    );
+  }
+
+  // فشل الوصول للبيانات — نعرض السبب بدل إعادة التوجيه في حلقة
+  if (state === "error") {
+    return (
+      <div style={{ minHeight: "100vh", display: "flex", alignItems: "center", justifyContent: "center", background: "var(--bg)", padding: 16 }}>
+        <div className="auth-card" style={{ textAlign: "center" }}>
+          <div className="auth-brand">⚠️</div>
+          <h1 className="auth-title">تعذّر تحميل بيانات شركتك</h1>
+          <p className="auth-sub">{errorMsg}</p>
+          <div style={{ display: "grid", gap: 10, marginTop: 14 }}>
+            <button className="btn btn-primary auth-btn" onClick={() => window.location.reload()}>
+              إعادة المحاولة
+            </button>
+            <button className="btn" onClick={async () => { await signOut(); router.replace("/login"); }}>
+              تسجيل الخروج
+            </button>
+          </div>
+        </div>
       </div>
     );
   }

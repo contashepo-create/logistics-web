@@ -266,3 +266,137 @@ complaint_messages, app_settings, activity_logs` فقط.
 الملف يضيف الأعمدة الناقصة (البيانات الضريبية، العنوان الوطني، `print_settings`) ثم
 يمنح `authenticated` صلاحية تحديث أعمدة الإعدادات التشغيلية فقط، ويُبقي أعمدة
 الاشتراك والحالة و`client_code` تحت إشراف المطوّر (`service_role` / `is_admin`).
+
+## v8 — معالجة تنبيهات مدقّق أمان Supabase
+
+نفّذ `supabase/migration_linter_hardening_v8.sql` بعد v7 (آمن التكرار).
+
+يعالج تنبيهات Database Linter:
+- **0011 search_path متغيّر**: يثبّت `search_path = public, pg_temp` لكل دوال المخطط
+  `public` (بما فيها `is_admin`, `safe_text`, `set_company_id`, `gen_code`,
+  `is_allowed_email`, `check_tax_identifiers`, `set_profile_guard`،
+  `clean_activation_request`, `guard_supplier_delete`, `set_client_code`).
+  كما حُدِّثت ملفات الترحيل الأصلية حتى لا يعود التنبيه عند إعادة تنفيذها.
+- **0025 دلو عام يسمح بالسرد**: تُحذف سياسة `receipts_read_public` على
+  `storage.objects`. الدلو عام، لذا روابط الملفات تبقى تعمل، لكن لم يعد بإمكان
+  أي عميل سرد محتويات الدلو.
+- **0028 / 0029 دوال SECURITY DEFINER مكشوفة**: سحب `EXECUTE` من `public/anon/authenticated`
+  عن كل الدوال، ثم منحه فقط لِـ:
+  - `anon`: `is_allowed_email` (تحقق البريد قبل التسجيل).
+  - `authenticated`: دوال RPC التي تستدعيها الواجهة فعلاً
+    (`register_company`, `export_company_data`, `create_next_financial_year`,
+    `save_invoice`, `save_payroll`, `save_purchase_invoice`, ودوال `admin_*`، `whoami`).
+  - دوال الـ trigger والدوال الداخلية (`auth_company_id`, `is_company_active`,
+    `is_active_user`, `log_activity`, `rls_audit`, `gen_code`, `safe_text`)
+    لم تعد قابلة للاستدعاء عبر REST؛ تعمل داخلياً عبر السياسات والمشغّلات.
+
+### إعداد يدوي مطلوب (لا يُضبط بـ SQL)
+**حماية كلمات المرور المسرّبة**: من Supabase Dashboard →
+Authentication → Policies (Password) → فعّل *Leaked password protection*
+(فحص HaveIBeenPwned)، ويُنصح بحدّ أدنى 8 محارف مع شروط تعقيد.
+
+## v9 — إصلاح عاجل: ظهور بيانات شركة أخرى داخل الحساب
+
+**السبب الجذري:** كانت `schema.sql` و`migration_company_id.sql` و`migration_auth_vat.sql`
+تنشئ على كل جداول التشغيل سياسة ثانية باسم `admin_full_access`:
+
+```sql
+create policy admin_full_access on public.<table> for all
+  using (public.is_admin()) with check (public.is_admin());
+```
+
+سياسات RLS في PostgreSQL **تُجمَع بـ OR**، فالصف يظهر إذا حقّق أي سياسة. لذلك على
+حساب المطوّر (`conta.moha@gmail.com`) كان الشرط `company_id = auth_company_id()`
+يُتجاوز، وتظهر بيانات **كل الشركات** مدمجة داخل الشاشات العادية (العملاء، الفواتير،
+السندات…) وكأنها بيانات شركته.
+
+كان `migration_admin_privacy_v5.sql` يحذف هذه السياسات، لكن إعادة تشغيل أي ملف أقدم
+(`schema.sql` مثلاً بعد v5) يعيد إنشاءها فيعود التسريب.
+
+### الخطوات
+1. **التشخيص أولاً** — نفّذ `supabase/diagnose_tenant_leak.sql` (قراءة فقط).
+   استعلام (1) يؤكد وجود `admin_full_access`؛ (2) يبيّن هل حسابك هو حساب المطوّر؛
+   (3) يكشف أي جدول فيه `company_id` بلا سياسة عزل؛ (5) يكشف صفوفاً بلا `company_id`؛
+   (6) يكشف وجود أكثر من مستخدم مرتبط بنفس الشركة.
+2. **الإصلاح** — نفّذ `supabase/fix_tenant_leak_v9.sql` (آمن التكرار، داخل transaction):
+   - يحذف `admin_full_access` وأي سياسة إدارية أخرى من جداول التشغيل.
+   - يعيد بناء `tenant_isolation` على **كل** جدول فيه `company_id`
+     (بما فيها `suppliers`, `purchase_invoices`, `purchase_items`,
+     `credit_debit_notes`, `year_opening_balances`) مع
+     `force row level security` و`to authenticated` وشرط `company_id is not null`.
+   - يحذف أي سياسة مكرّرة أخرى على تلك الجداول (منعاً لتجميع OR).
+   - يعيد ربط حارس `set_company_id` قبل الإدراج.
+   - يفرض `company_id NOT NULL` حيث لا توجد صفوف يتيمة.
+3. بعد التنفيذ سجّل خروجاً ثم دخولاً (يوجد كاش هوية 60 ثانية في المتصفح).
+
+**تم التأكيد على قاعدتك الفعلية:** الاستعلام (1) أرجع 14 جدول تشغيل عليها
+`admin_full_access ... using (is_admin())` — وهذا هو السبب المؤكد.
+والاستعلام (7) يُظهر شركتين مختلفتين لكل منهما عميل واحد، فكان حساب المطوّر
+يرى العميلين معاً في شاشة واحدة.
+
+### أثر جانبي عولج مع الإصلاح
+`adminStats()` في `src/lib/admin.ts` كانت تَعُدّ صفوف
+`customers/invoices/receipt_vouchers/...` مباشرة، وهو ما كان ينجح **فقط** بفضل
+الثغرة. بعد إغلاقها كانت ستعرض أصفاراً. لذلك:
+- أضاف `fix_tenant_leak_v9.sql` دالة `admin_platform_stats()`
+  (SECURITY DEFINER + فحص `is_admin()`) تُرجع **أرقاماً مجمّعة فقط** — أعداداً
+  ومجاميع لا تكشف أي صف أو تفصيل تشغيلي لأي عميل.
+- حُدّثت `adminStats()` لتستدعيها عبر RPC بدل قراءة الجداول، مع اختبارين
+  يضمنان أنها لا تلمس الجداول مباشرة أبداً.
+
+> بيانات العميل الآخر لم تُنسخ إلى شركتك — كانت تُقرأ فقط عبر السياسة المتساهلة.
+> إن ظهرت صفوف بلا `company_id` في الاستعلام (5) فراجعها يدوياً قبل فرض NOT NULL،
+> ولا تدمج شركات بالتخمين (انظر `migration_repair_tenant_data.sql`).
+
+### احتمال ثانٍ (إن لم يكن حسابك حساب المطوّر)
+استعلاما (3) و(6) في ملف التشخيص يغطّيانه: جدول جديد بلا `tenant_isolation`،
+أو ملفّان شخصيان مرتبطان بنفس `company_id`.
+
+## v10 — إصلاح عاجل: 403 على companies وحلقة «أنشئ شركة جديدة»
+
+**السبب: خطأ في `migration_linter_hardening_v8.sql`.**
+
+v8 سحبت `EXECUTE` من الدور `authenticated` عن دوال SECURITY DEFINER الداخلية
+اعتماداً على افتراض خاطئ بأنها «لا تُستدعى عبر REST». الحقيقة أن **تعبيرات
+سياسات RLS تُقيَّم بصلاحيات الدور المستدعي** (`authenticated`) لا بصلاحيات مالك
+الجدول. فحين فقد الدور صلاحية تنفيذ:
+
+```
+auth_company_id() · is_company_active() · is_admin() · is_active_user()
+```
+
+صارت كل سياسة تستدعيها ترمي `permission denied for function`، فأعاد PostgREST
+**403** على `companies` وعلى كل جداول التشغيل.
+
+**كيف تحوّل ذلك إلى حلقة لا نهائية:** `getCompany()` كانت تتجاهل حقل `error`
+وتُرجع `null`، و`AppLayout` يقرأ `null` على أنه «لا توجد شركة» فيحوّل إلى
+`/onboarding`. المستخدم ينشئ شركة، و`register_company` تنجح فعلاً لأنها
+SECURITY DEFINER وتعمل بصلاحيات مالكها — لكن القراءة التالية تفشل بـ 403 مجدداً
+فيعود إلى `/onboarding`. النتيجة: شركات مكرّرة وحلقة لا تنتهي.
+
+### الخطوات
+1. نفّذ `supabase/fix_policy_functions_v10.sql` — يعيد `EXECUTE` للدوال الأربع
+   وللمساعدات التي تستدعيها المُشغّلات (`safe_text`, `is_allowed_email`,
+   `gen_code`, `log_activity`)، ويتحقق من سياسات `companies`/`profiles`.
+2. سجّل خروجاً ثم دخولاً.
+3. **راجع الشركات المكرّرة** التي أُنشئت أثناء الحلقة:
+   ```sql
+   select c.id, c.name, c.created_at,
+          (select count(*) from public.customers x where x.company_id = c.id) as customers
+     from public.companies c order by c.created_at desc;
+   ```
+   احذف الفارغة عبر لوحة المطوّر أو `admin_delete_company(id)` — **لا تحذف أي
+   شركة عليها بيانات.** ملفك الشخصي مرتبط بشركة واحدة فقط
+   (`select company_id from public.profiles where id = auth.uid()`).
+
+> **ملاحظة أمنية:** إعادة هذه الصلاحيات لا تفتح أي ثغرة. الدوال لا تكشف بيانات —
+> كلها تُرجع قيمة عن المستخدم المتصل نفسه (معرّف شركته، هل هو مطوّر، هل اشتراكه
+> فعّال). تنبيهات المدقّق 0028/0029 عليها **مقبولة ومقصودة** لأنها شرط تشغيل RLS.
+> العزل الفعلي تفرضه سياسات `tenant_isolation` وليس حجب هذه الدوال.
+
+### تحصين الواجهة (حتى لا تتكرر الحلقة أبداً)
+- `getProfile()` و`getCompany()` صارتا **ترميان** عند خطأ الاستعلام بدل ابتلاعه.
+- `AppLayout` وصفحة `/onboarding` تميّزان «لا توجد شركة» عن «فشل الطلب»، وتعرضان
+  شاشة خطأ واضحة مع «إعادة المحاولة» و«تسجيل الخروج» بدل إعادة التوجيه في حلقة.
+- صفحة `/onboarding` تحذّر صراحة من إنشاء شركة قبل حلّ المشكلة.
+- 3 اختبارات انحدار جديدة تضمن عدم عودة السلوك (المجموع 389 اختباراً).

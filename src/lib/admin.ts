@@ -109,39 +109,26 @@ export async function listActivityLogs(): Promise<ActivityLog[]> {
   return (data ?? []) as ActivityLog[];
 }
 
-async function countAll(table: string, where?: { col: string; val: unknown }): Promise<number> {
-  let q = supabase.from(table).select("id", { count: "exact", head: true });
-  if (where) q = q.eq(where.col, where.val);
-  const { count } = await q;
-  return count ?? 0;
-}
-
-async function sumAll(table: string, col: string): Promise<number> {
-  const { data } = await supabase.from(table).select(col);
-  return (data ?? []).reduce((a, r) => a + num((r as unknown as Record<string, unknown>)[col]), 0);
-}
-
-/** إحصاءات عامة لكل النظام. */
+/**
+ * إحصاءات عامة لكل النظام (أرقام مجمّعة فقط).
+ *
+ * تمر عبر `admin_platform_stats()` — دالة SECURITY DEFINER محمية بفحص is_admin().
+ * سابقاً كانت هذه الدالة تَعُدّ صفوف customers/invoices/... مباشرة من الجداول،
+ * وهو ما كان ينجح فقط بسبب سياسة `admin_full_access` التي كانت تُسرّب بيانات
+ * كل الشركات إلى حساب المطوّر (انظر supabase/fix_tenant_leak_v9.sql).
+ * بعد إغلاق تلك الثغرة لم يعد للمطوّر وصول لصفوف بيانات العملاء — فقط أعداد
+ * ومجاميع لا تكشف أي تفصيل تشغيلي.
+ */
 export async function adminStats(): Promise<Record<string, number>> {
-  const [companies, activeCompanies, customers, invoices, receipts, payments, payrolls, trips] = await Promise.all([
-    countAll("companies"),
-    countAll("companies", { col: "is_active", val: true }),
-    countAll("customers"),
-    countAll("invoices"),
-    countAll("receipt_vouchers"),
-    countAll("payment_vouchers"),
-    countAll("payrolls"),
-    countAll("invoice_trips"),
-  ]);
-  const revenue = await sumAll("invoice_trips", "price");
-  const collected = await sumAll("receipt_vouchers", "amount");
-  const spent = await sumAll("payment_vouchers", "amount");
-  const salaries = await sumAll("payrolls", "net_salary");
-  return {
-    companies, active_companies: activeCompanies, customers, invoices, trips,
-    receipts, payments, payrolls,
-    revenue, collected, spent, salaries,
-  };
+  const { data, error } = await supabase.rpc("admin_platform_stats");
+  if (error) throw new Error(error.message);
+  const s = (data ?? {}) as Record<string, unknown>;
+  const keys = [
+    "companies", "active_companies", "customers", "invoices", "trips",
+    "receipts", "payments", "payrolls",
+    "revenue", "collected", "spent", "salaries",
+  ];
+  return Object.fromEntries(keys.map((k) => [k, num(s[k])]));
 }
 
 /**

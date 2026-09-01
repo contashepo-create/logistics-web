@@ -6,7 +6,7 @@
 
 -- دوال الصلاحيات
 create or replace function public.is_admin() returns boolean
-language sql stable as $$
+language sql stable set search_path = public, pg_temp as $$
   select coalesce((auth.jwt() ->> 'email'), '') = 'conta.moha@gmail.com';
 $$;
 
@@ -56,7 +56,7 @@ alter table public.invoices add column if not exists vat_rate double precision n
 
 -- دالة الحالة النشطة (بعد إنشاء profiles)
 create or replace function public.is_active_user() returns boolean
-language sql stable security definer as $$
+language sql stable security definer set search_path = public, pg_temp as $$
   select coalesce(
     (select p.is_active from public.profiles p where p.id = auth.uid()),
     true
@@ -97,16 +97,14 @@ begin
       'create policy tenant_isolation on public.%I for all
          using (user_id = auth.uid() and public.is_active_user())
          with check (user_id = auth.uid() and public.is_active_user())', t);
+    -- (أُزيلت) admin_full_access — سبب ظهور بيانات شركة أخرى في حساب المطوّر.
     execute format('drop policy if exists admin_full_access on public.%I', t);
-    execute format(
-      'create policy admin_full_access on public.%I for all
-         using (public.is_admin()) with check (public.is_admin())', t);
   end loop;
 end $$;
 
 -- صلاحية المطوّر تلقائياً
 create or replace function public.set_admin_role() returns trigger
-language plpgsql as $$
+language plpgsql set search_path = public, pg_temp as $$
 begin
   if new.email = 'conta.moha@gmail.com' then
     new.role := 'admin';

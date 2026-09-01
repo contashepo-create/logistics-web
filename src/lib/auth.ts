@@ -156,7 +156,10 @@ export async function getProfile(force = false): Promise<Profile | null> {
   const promise = (async () => {
     const user = await getCurrentUser();
     if (!user) return null;
-    const { data } = await supabase.from("profiles").select("*").eq("id", user.id).maybeSingle();
+    const { data, error } = await supabase.from("profiles").select("*").eq("id", user.id).maybeSingle();
+    // مهم: لا نبتلع الأخطاء. ابتلاعها كان يحوّل خطأ صلاحيات (403) إلى «لا يوجد
+    // ملف شخصي» فيُعاد توجيه المستخدم إلى /onboarding في حلقة لا تنتهي.
+    if (error) throw new Error(translateDbError(error.message));
     return (data as Profile) ?? null;
   })();
 
@@ -179,7 +182,10 @@ export async function getCompany(force = false): Promise<Company | null> {
   const promise = (async () => {
     const profile = await getProfile(force);
     if (!profile?.company_id) return null;
-    const { data } = await supabase.from("companies").select("*").eq("id", profile.company_id).maybeSingle();
+    const { data, error } = await supabase.from("companies").select("*").eq("id", profile.company_id).maybeSingle();
+    // خطأ صلاحيات/شبكة ≠ «لا توجد شركة». التمييز بينهما ضروري وإلا دخل
+    // المستخدم حلقة إنشاء شركة متكرّرة رغم امتلاكه شركة فعلاً.
+    if (error) throw new Error(translateDbError(error.message));
     return (data as Company) ?? null;
   })();
 

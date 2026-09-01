@@ -134,6 +134,7 @@ create policy "receipts_upload_own" on storage.objects
   for insert to authenticated
   with check (bucket_id = 'receipts');
 
+-- ملاحظة أمنية (Supabase linter 0025_public_bucket_allows_listing):
+-- الدلو عام، لذا روابط الكائنات تعمل بلا سياسة SELECT. أي سياسة SELECT واسعة
+-- تسمح للعملاء بسرد كل ملفات الدلو، لذلك تُحذف ولا يُعاد إنشاؤها.
 drop policy if exists "receipts_read_public" on storage.objects;
-create policy "receipts_read_public" on storage.objects
-  for select using (bucket_id = 'receipts');

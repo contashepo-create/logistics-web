@@ -151,7 +151,7 @@ end $active$;
 --    نستخدم jsonb حتى نضبط الأعمدة الموجودة فقط.
 -- ---------------------------------------------------------------------------
 create or replace function public.set_profile_guard() returns trigger
-language plpgsql as $guard$
+language plpgsql set search_path = public, pg_temp as $guard$
 declare
   v_email text;
   j jsonb;

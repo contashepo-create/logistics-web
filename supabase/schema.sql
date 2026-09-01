@@ -17,7 +17,7 @@ grant usage on schema public to anon, authenticated, service_role;
 --   لذلك يُعرَّفان بعد إنشاء الجدولين (PostgreSQL 14+ يفحص جسم دوال SQL عند الإنشاء).
 -- ---------------------------------------------------------------------------
 create or replace function public.is_admin() returns boolean
-language sql stable as $$
+language sql stable set search_path = public, pg_temp as $$
   select coalesce((auth.jwt() ->> 'email'), '') = 'conta.moha@gmail.com';
 $$;
 
@@ -382,7 +382,7 @@ create unique index if not exists uq_payrolls_company_number on public.payrolls(
 -- حارس فرض company_id عند الإدراج (يمنع أي عميل من تزوير الشركة)
 -- ---------------------------------------------------------------------------
 create or replace function public.set_company_id() returns trigger
-language plpgsql as $$
+language plpgsql set search_path = public, pg_temp as $$
 begin
   new.company_id := public.auth_company_id();
   return new;
@@ -447,9 +447,10 @@ begin
       'create policy tenant_isolation on public.%I for all
          using (company_id = public.auth_company_id() and public.is_company_active())
          with check (company_id = public.auth_company_id() and public.is_company_active())', t);
-    execute format(
-      'create policy admin_full_access on public.%I for all
-         using (public.is_admin()) with check (public.is_admin())', t);
+    -- لا تُنشأ سياسة admin_full_access على جداول التشغيل: سياسات RLS تُجمع بـ OR،
+    -- فكانت تمنح حساب المطوّر رؤية بيانات كل الشركات مدمجة داخل شاشاته العادية
+    -- (تسريب بين المستأجرين). خصوصية العميل مطلوبة، والمطوّر يدير الاشتراكات فقط.
+    execute format('drop policy if exists admin_full_access on public.%I', t);
   end loop;
 end $$;
 
@@ -880,6 +881,7 @@ create policy "receipts_upload_own" on storage.objects
   for insert to authenticated
   with check (bucket_id = 'receipts');
 
+-- ملاحظة أمنية (Supabase linter 0025_public_bucket_allows_listing):
+-- الدلو عام، لذا روابط الكائنات تعمل بلا سياسة SELECT. أي سياسة SELECT واسعة
+-- تسمح للعملاء بسرد كل ملفات الدلو، لذلك تُحذف ولا يُعاد إنشاؤها.
 drop policy if exists "receipts_read_public" on storage.objects;
-create policy "receipts_read_public" on storage.objects
-  for select using (bucket_id = 'receipts');
