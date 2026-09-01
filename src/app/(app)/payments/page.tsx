@@ -34,6 +34,7 @@ export default function PaymentsPage() {
       else if (v.voucher_type === "advance") target = `سلفة: ${v.employee_name || "—"}`;
       else if (v.voucher_type === "vehicle") target = `سيارة: ${v.plate_number || "—"}`;
       else if (v.voucher_type === "supplier") target = `مورّد: ${v.supplier_name || "—"}`;
+      else if (v.voucher_type === "owner") target = "صاحب المنشأة (سحب نقدي)";
       return [voucherNumberLabel("PV", v.number), v.date, PAYMENT_TYPES[v.voucher_type] ?? "—", target, v.account_name || "—", money(v.amount), v.description || "—"];
     }),
     [data]
@@ -48,6 +49,10 @@ export default function PaymentsPage() {
       await deletePayment(id);
       notify("تم الحذف بنجاح.", "success");
       qc.invalidateQueries({ queryKey: ["payments"] });
+      qc.invalidateQueries({ queryKey: ["report-trips"] });
+      qc.invalidateQueries({ queryKey: ["report-pnl"] });
+      qc.invalidateQueries({ queryKey: ["customers"] });
+      qc.invalidateQueries({ queryKey: ["invoices"] });
     } catch (e) { notify(e instanceof Error ? e.message : String(e), "error"); }
   };
 
@@ -81,7 +86,7 @@ export default function PaymentsPage() {
           </div>
         </>
       )}
-      {dialog && <PaymentDialog id={dialog.id} readOnly={dialog.mode === "view"} onClose={(saved) => { setDialog(null); if (saved) qc.invalidateQueries({ queryKey: ["payments"] }); }} />}
+      {dialog && <PaymentDialog id={dialog.id} readOnly={dialog.mode === "view"} onClose={(saved) => { setDialog(null); if (saved) { qc.invalidateQueries({ queryKey: ["payments"] }); qc.invalidateQueries({ queryKey: ["report-trips"] }); qc.invalidateQueries({ queryKey: ["report-pnl"] }); qc.invalidateQueries({ queryKey: ["customers"] }); qc.invalidateQueries({ queryKey: ["invoices"] }); } }} />}
     </PageFrame>
   );
 }

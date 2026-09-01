@@ -15,6 +15,9 @@
 --     الفريد — راجع/وحّد الأرقام المكررة أولاً ثم أعد التشغيل.
 -- ============================================================================
 
+-- 0) حقل رقم الحاوية على الفاتورة (اختياري — يُدخل عند إصدار الفاتورة)
+alter table public.invoices add column if not exists container_number text default '';
+
 -- 1) قيود فريدة على (company_id, number) — ضمانة قاطعة ضد تكرار الأرقام
 create unique index if not exists uq_invoices_company_number
   on public.invoices(company_id, number);
@@ -33,7 +36,8 @@ create or replace function public.save_invoice(
   p_vat_rate    double precision,
   p_notes       text default '',
   p_attachments jsonb default '[]'::jsonb,
-  p_trips       jsonb default '[]'::jsonb
+  p_trips       jsonb default '[]'::jsonb,
+  p_container_number text default ''
 ) returns bigint
 language plpgsql security definer set search_path = public as $$
 declare
@@ -70,8 +74,8 @@ begin
     end if;
     select coalesce(max(number), 0) + 1 into v_number
       from public.invoices where company_id = v_cid;
-    insert into public.invoices (company_id, number, date, customer_id, vat_rate, notes, attachments)
-    values (v_cid, v_number, p_date, p_customer_id, p_vat_rate, p_notes, p_attachments)
+    insert into public.invoices (company_id, number, date, customer_id, vat_rate, notes, attachments, container_number)
+    values (v_cid, v_number, p_date, p_customer_id, p_vat_rate, p_notes, p_attachments, coalesce(p_container_number, ''))
     returning id into v_invoice_id;
   else
     select date into v_old_date from public.invoices
@@ -91,7 +95,8 @@ begin
     end if;
     update public.invoices
     set date = p_date, customer_id = p_customer_id, vat_rate = p_vat_rate,
-        notes = p_notes, attachments = p_attachments
+        notes = p_notes, attachments = p_attachments,
+        container_number = coalesce(p_container_number, '')
     where id = v_invoice_id;
   end if;
 
@@ -289,7 +294,7 @@ begin
 end $$;
 
 -- 4) أقل امتياز للدوال الجديدة
-revoke execute on function public.save_invoice(bigint, date, bigint, double precision, text, jsonb, jsonb) from public, anon;
+revoke execute on function public.save_invoice(bigint, date, bigint, double precision, text, jsonb, jsonb, text) from public, anon;
 revoke execute on function public.save_payroll(bigint, date, bigint, int, int, text, bigint, double precision, double precision, text, double precision, double precision, text, jsonb) from public, anon;
-grant execute on function public.save_invoice(bigint, date, bigint, double precision, text, jsonb, jsonb) to authenticated, service_role;
+grant execute on function public.save_invoice(bigint, date, bigint, double precision, text, jsonb, jsonb, text) to authenticated, service_role;
 grant execute on function public.save_payroll(bigint, date, bigint, int, int, text, bigint, double precision, double precision, text, double precision, double precision, text, jsonb) to authenticated, service_role;

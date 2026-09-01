@@ -49,7 +49,7 @@ describe("أداء تحميل الشاشات (منع N+1)", () => {
 
     expect(few).toHaveLength(3);
     expect(many).toHaveLength(12);
-    expect(qFew).toBeLessThanOrEqual(5);
+    expect(qFew).toBeLessThanOrEqual(7); // 4 استعلامات أساسية + إشعارات المدين/الدائن
     expect(qMany).toBe(qFew); // ثابت — لا يزيد بزيادة السجلات
   });
 

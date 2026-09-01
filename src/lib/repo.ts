@@ -2,6 +2,7 @@
 // مكافئ حرفي لـ app/core/repo.py
 
 import { supabase } from "./supabase";
+import { translateDbError } from "./db";
 import { normalizeTaxProfile, validateTaxProfile } from "./tax";
 import { num, accountTable, accountKindLabel } from "./calc";
 import type { Company } from "./types";
@@ -18,6 +19,7 @@ import {
 import type {
   Bank,
   Cashbox,
+  CreditDebitNote,
   Customer,
   Employee,
   FinancialYear,
@@ -129,7 +131,7 @@ export async function updateCompany(fields: Record<string, unknown>): Promise<vo
   if (!c) throw new RuleError("لا توجد شركة مرتبطة بحسابك.");
   const { error } = await supabase.from("companies").update(fields).eq("id", c.id);
   invalidateCompanyCache();
-  if (error) throw new RuleError(error.message);
+  if (error) throw new RuleError(translateDbError(error.message));
 }
 
 function settingFrom(c: Company | null, key: string, def: string): string {
@@ -147,6 +149,18 @@ export async function setSetting(key: string, value: string): Promise<void> {
   if (!col) throw new RuleError(`إعداد غير معروف: ${key}`);
   const v = col === "vat_rate" ? Number(value) : value;
   await updateCompany({ [col]: v });
+}
+
+/** حفظ كل إعدادات المنشأة في طلب واحد (بدل عشرات التحديثات المتتالية). */
+export async function saveCompanySettings(values: Record<string, string>): Promise<void> {
+  const fields: Record<string, unknown> = {};
+  for (const [key, value] of Object.entries(values)) {
+    const col = COMPANY_FIELDS[key];
+    if (!col) throw new RuleError(`إعداد غير معروف: ${key}`);
+    fields[col] = col === "vat_rate" ? Number(value) : value;
+  }
+  if (!Object.keys(fields).length) return;
+  await updateCompany(fields);
 }
 
 /** كل بيانات الشركة باستعلام واحد (كانت تُنفَّذ رحلة شبكة لكل إعداد). */
@@ -219,12 +233,98 @@ async function count(
 export async function saveCreditDebitNote(data: Record<string, any>): Promise<number> {
   if (data.note_type !== "credit" && data.note_type !== "debit") throw new RuleError("نوع الإشعار غير صالح.");
   if (!data.invoice_id || !data.customer_id || Number(data.amount) <= 0) throw new RuleError("أكمل الفاتورة والعميل والمبلغ.");
-  const { data: inserted, error } = await supabase.from("credit_debit_notes").insert({
-    note_type: data.note_type, invoice_id: Number(data.invoice_id), customer_id: Number(data.customer_id),
-    date: String(data.date), amount: roundMoney(data.amount), vat_rate: num(data.vat_rate ?? 15), reason: txt(data.reason ?? "", "سبب الإشعار"),
-  }).select().single();
-  if (error) throw new RuleError(error.message);
+  if (!String(data.reason ?? "").trim()) throw new RuleError("سبب الإشعار إلزامي للمراجعة المحاسبية.");
+  const { data: inv } = await supabase
+    .from("invoices")
+    .select("customer_id, date")
+    .eq("id", Number(data.invoice_id))
+    .maybeSingle();
+  if (!inv) throw new RuleError("الفاتورة المرتبطة غير موجودة.");
+  if (Number(inv.customer_id) !== Number(data.customer_id)) {
+    throw new RuleError("العميل المحدد لا يطابق عميل الفاتورة.");
+  }
+  if (data.date && String(data.date) < String(inv.date)) {
+    throw new RuleError("تاريخ الإشعار لا يجوز أن يسبق تاريخ الفاتورة.");
+  }
+  const vat = num(data.vat_rate ?? 15);
+  if (vat < 0) throw new RuleError("نسبة الضريبة يجب ألا تكون سالبة.");
+  const row = {
+    note_type: data.note_type,
+    invoice_id: Number(data.invoice_id),
+    customer_id: Number(data.customer_id),
+    date: String(data.date),
+    amount: roundMoney(data.amount),
+    vat_rate: vat,
+    reason: txt(data.reason ?? "", "سبب الإشعار"),
+  };
+  const inserted = await insertNumbered<{ id: number }>("credit_debit_notes", row);
   return Number(inserted.id);
+}
+
+export async function listCreditDebitNotes(
+  dFrom?: string | null,
+  dTo?: string | null,
+  noteType?: "credit" | "debit" | null
+): Promise<CreditDebitNote[]> {
+  let q = supabase.from("credit_debit_notes")
+    .select("*, invoices(number), customers(id, name, code)")
+    .order("date", { ascending: false })
+    .order("number", { ascending: false });
+  if (dFrom) q = q.gte("date", dFrom);
+  if (dTo) q = q.lte("date", dTo);
+  if (noteType) q = q.eq("note_type", noteType);
+  const { data, error } = await q;
+  if (error) throw new RuleError(error.message);
+
+  return (data ?? []).map((n: any) => ({
+    ...n,
+    invoice_number: Array.isArray(n.invoices) ? (n.invoices[0] as any)?.number : (n.invoices as any)?.number,
+    customer_name: Array.isArray(n.customers) ? (n.customers[0] as any)?.name : (n.customers as any)?.name,
+    customer_code: Array.isArray(n.customers) ? (n.customers[0] as any)?.code : (n.customers as any)?.code,
+    total: roundMoney(num(n.amount) + roundMoney((num(n.amount) * num(n.vat_rate)) / 100)),
+  }));
+}
+
+export async function listCreditDebitNotesForInvoice(invoiceId: number): Promise<CreditDebitNote[]> {
+  const { data, error } = await supabase
+    .from("credit_debit_notes")
+    .select("*, invoices(number), customers(id, name, code)")
+    .eq("invoice_id", invoiceId)
+    .order("date", { ascending: false })
+    .order("number", { ascending: false });
+  if (error) throw new RuleError(error.message);
+  return (data ?? []).map((n: any) => ({
+    ...n,
+    invoice_number: Array.isArray(n.invoices) ? (n.invoices[0] as any)?.number : (n.invoices as any)?.number,
+    customer_name: Array.isArray(n.customers) ? (n.customers[0] as any)?.name : (n.customers as any)?.name,
+    customer_code: Array.isArray(n.customers) ? (n.customers[0] as any)?.code : (n.customers as any)?.code,
+    total: roundMoney(num(n.amount) + roundMoney((num(n.amount) * num(n.vat_rate)) / 100)),
+  }));
+}
+
+export async function getCreditDebitNote(noteId: number): Promise<CreditDebitNote | null> {
+  const { data } = await supabase
+    .from("credit_debit_notes")
+    .select("*, invoices(number), customers(id, name, code)")
+    .eq("id", noteId)
+    .maybeSingle();
+  const n = data as any;
+  if (!n) return null;
+  return {
+    ...n,
+    invoice_number: Array.isArray(n.invoices) ? (n.invoices[0] as any)?.number : (n.invoices as any)?.number,
+    customer_name: Array.isArray(n.customers) ? (n.customers[0] as any)?.name : (n.customers as any)?.name,
+    customer_code: Array.isArray(n.customers) ? (n.customers[0] as any)?.code : (n.customers as any)?.code,
+    total: roundMoney(num(n.amount) + roundMoney((num(n.amount) * num(n.vat_rate)) / 100)),
+  };
+}
+
+export async function deleteCreditDebitNote(noteId: number): Promise<void> {
+  const { data: n } = await supabase.from("credit_debit_notes").select("id, date").eq("id", noteId).maybeSingle();
+  if (!n) return;
+  await ensureMovementEditable(n.date);
+  const { error } = await supabase.from("credit_debit_notes").delete().eq("id", noteId);
+  if (error) throw new RuleError(error.message);
 }
 
 // ---------------------------------------------------------------------------
@@ -661,6 +761,7 @@ export async function saveInvoice(data: Record<string, any>, invoiceId?: number 
   const trips: Record<string, any>[] = data.trips ?? [];
   if (!trips.length) throw new RuleError("أضف نقلة واحدة على الأقل للفاتورة.");
   const notes = txt(data.notes ?? "", "ملاحظات الفاتورة");
+  const containerNumber = txt(data.container_number ?? "", "رقم الحاوية");
 
   for (const t of trips) {
     t.from_loc = txt(t.from_loc ?? "", "مكان الانطلاق");
@@ -766,6 +867,7 @@ export async function saveInvoice(data: Record<string, any>, invoiceId?: number 
     p_notes: notes,
     p_attachments: attachments,
     p_trips: tripsPayload,
+    p_container_number: containerNumber,
   });
   if (error) throw new RuleError(error.message);
   return savedId as number;
@@ -930,7 +1032,7 @@ export async function listPayments(
 
 async function validatePayment(data: Record<string, any>): Promise<void> {
   const vt = data.voucher_type;
-  if (!["trip", "advance", "vehicle", "general", "supplier"].includes(vt)) {
+  if (!["trip", "advance", "vehicle", "general", "supplier", "owner"].includes(vt)) {
     throw new RuleError("اختر نوع السند.");
   }
   const amount = roundMoney(data.amount ?? 0);
@@ -939,17 +1041,23 @@ async function validatePayment(data: Record<string, any>): Promise<void> {
     throw new RuleError("اختر جهة الصرف (خزينة أو بنك).");
   }
   await ensureAccountExists(data.account_kind, data.account_id);
-  if (vt === "trip" && !data.trip_id) throw new RuleError("اختر الرحلة (النقلة) التي يخصها المصروف.");
+  if (vt === "trip" && !data.trip_id) throw new RuleError("اختر الفاتورة ثم الرحلة (النقلة) التي يخصها المصروف.");
   if (vt === "advance" && !data.employee_id) throw new RuleError("اختر الموظف/السائق للسلفة.");
   if (vt === "vehicle" && !data.vehicle_id) throw new RuleError("اختر السيارة لمصروف الصيانة.");
   if (vt === "supplier" && !data.supplier_id) throw new RuleError("اختر المورّد المستفيد من السداد.");
+  if (vt === "owner" && !String(data.description ?? "").trim()) {
+    throw new RuleError("اكتب بيان السحب/المصروف الخاص بصاحب المنشأة (إلزامي).");
+  }
   if (vt === "supplier") {
     const { data: sup } = await supabase.from("suppliers").select("id").eq("id", data.supplier_id).maybeSingle();
     if (!sup) throw new RuleError("المورّد المحدد غير موجود.");
   }
   if (data.trip_id) {
-    const { data: t } = await supabase.from("invoice_trips").select("id").eq("id", data.trip_id).single();
+    const { data: t } = await supabase.from("invoice_trips").select("id, invoice_id").eq("id", data.trip_id).single();
     if (!t) throw new RuleError("الرحلة المحددة غير موجودة.");
+    if (data.invoice_id && Number(data.invoice_id) !== Number(t.invoice_id)) {
+      throw new RuleError("الرحلة المحددة لا تنتمي إلى الفاتورة المختارة.");
+    }
   }
   if (vt === "advance" && !(await getEmployee(data.employee_id))) {
     throw new RuleError("الموظف المحدد غير موجود.");
@@ -976,7 +1084,12 @@ export async function savePayment(data: Record<string, any>, voucherId?: number 
     supplier_id: data.voucher_type === "supplier" ? data.supplier_id ?? null : null,
     purchase_invoice_id: data.voucher_type === "supplier" ? data.purchase_invoice_id ?? null : null,
     amount: roundMoney(data.amount ?? 0),
-    description: txt(data.description ?? "", "البيان"),
+    description: txt(
+      data.voucher_type === "owner"
+        ? (String(data.description ?? "").trim() || "سحب نقدي لصاحب المنشأة")
+        : (data.description ?? ""),
+      "البيان"
+    ),
   };
 
   if (voucherId) {

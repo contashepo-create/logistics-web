@@ -23,7 +23,7 @@ async function seed() {
   const drv = await repo.saveEmployee({ name: "سائق سرّي", emp_type: "driver" });
   const cb = await repo.saveAccount("cashbox", { name: "الخزينة", created_date: "2026-01-01", opening_balance: 10000 });
   const inv = await repo.saveInvoice({
-    date: "2026-03-01", customer_id: cust, notes: "الدفع خلال ٣٠ يوماً", attachments: [],
+    date: "2026-03-01", customer_id: cust, notes: "الدفع خلال ٣٠ يوماً", container_number: "MSCU9876543", attachments: [],
     trips: [{
       driver_id: drv, from_loc: "المنصورة", to_loc: "الإسكندرية", qty: 3, unit_price: 1500, notes: "حمولة أسمنت",
       expenses: [
@@ -51,8 +51,11 @@ describe("فاتورة العميل المطبوعة", () => {
     expect(html).toContain("مصانع الدلتا");
     expect(html).toContain("INV-00001");
     expect(html).toContain("2026-03-01");
+    expect(html).toContain("MSCU9876543");
     expect(html).toContain("فاتورة ضريبية");
-    expect(html).toContain("Tax Invoice");
+    // التسميات بلغة واحدة فقط (الافتراضي: العربية) — لا تُعرض لغة ثانية بجوارها
+    expect(html).not.toContain("Tax Invoice");
+    expect(html).not.toContain("Tel:");
   });
 
   it("تعرض بند النقل بالعدد وسعر الوحدة والإجمالي", () => {

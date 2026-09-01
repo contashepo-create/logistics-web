@@ -117,10 +117,16 @@ export async function exportDataPdf(): Promise<void> {
   const data = await exportCompanyData();
   const company = (data.company ?? {}) as Row;
   const companyName = String(company.name ?? "الشركة");
+  const { printMeta } = await import("./exportHelper");
+  const meta = await printMeta();
+  const esc = (v: unknown) => String(v ?? "").replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
 
   let html = `<div dir="rtl" style="font-family:'IBM Plex Sans Arabic',sans-serif;color:#111;">
-    <h2 style="color:#2563eb;text-align:center;">${companyName} — نسخة بيانات النظام</h2>
-    <p style="text-align:center;color:#555;">تصدير كامل لبيانات الشركة</p>`;
+    <div style="text-align:center;border-bottom:2px solid #1d4ed8;padding-bottom:8px;margin-bottom:8px;">
+      <div style="font-size:18px;font-weight:800;color:#1d4ed8;">${esc(companyName)}</div>
+      <div style="font-size:13px;color:#334155;margin-top:4px;">نسخة بيانات النظام</div>
+      <div style="font-size:11px;color:#64748b;margin-top:4px;">تاريخ ووقت الطباعة: ${esc(meta.printedAt)}${meta.printedBy ? ` | طُبع بواسطة: ${esc(meta.printedBy)}` : ""}</div>
+    </div>`;
 
   for (const t of TABLES) {
     const rows = (data[t.key] ?? []) as Row[];

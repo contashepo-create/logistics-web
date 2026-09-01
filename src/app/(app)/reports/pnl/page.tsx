@@ -24,6 +24,8 @@ export default function PnlReportPage() {
   const rows: [string, number][] = [
     ["إيرادات النقلات", d.transport_revenue ?? 0],
     ["الإيرادات الأخرى (خردة / متنوع)", d.other_revenue ?? 0],
+    ["إشعارات مدين (زيادة إيراد)", d.debit_notes_adjust ?? 0],
+    ["إشعارات دائن (حسم / تخفيض إيراد)", d.credit_notes_adjust ?? 0],
     ["إجمالي الإيرادات", d.total_revenue ?? 0],
     ["مصروفات النقلات المباشرة (تريب/بنزين/كارتة)", d.direct_expenses ?? 0],
     ["سندات صرف على النقلات (يدوية)", d.trip_payments ?? 0],
@@ -31,6 +33,7 @@ export default function PnlReportPage() {
     ["إجمالي السلفيات المسجلة", d.advances ?? 0],
     ["مصاريف الصيانة (سندات السيارات)", d.maintenance ?? 0],
     ["المصاريف العامة (إيجار / كهرباء ...)", d.general_expenses ?? 0],
+    ["سحب نقدي لصاحب المنشأة (مصاريف خاصة بالمالك)", d.owner_withdrawals ?? 0],
     ["إجمالي المصروفات", d.total_expenses ?? 0],
     ["ضريبة القيمة المضافة المحصلة (مرجعي — ليست ربحاً)", d.vat_collected ?? 0],
     ["صافي الربح / (الخسارة) للفترة", d.net ?? 0],
@@ -44,7 +47,7 @@ export default function PnlReportPage() {
   ];
 
   return (
-    <PageFrame title="تقرير الأرباح والخسائر الشامل (P&L)" subtitle="(إيرادات النقلات + الإيرادات الأخرى) − (المصروفات المباشرة + الرواتب الصافية + السلفيات + الصيانة + المصاريف العامة)"
+    <PageFrame title="تقرير الأرباح والخسائر الشامل (P&L)" subtitle="(إيرادات النقلات + الإيرادات الأخرى) − (المصروفات المباشرة + الرواتب + السلفيات + الصيانة + المصاريف العامة + سحب المالك)"
       toolbar={<FilterRow dFrom={dFrom} dTo={dTo} onFrom={setDFrom} onTo={setDTo} onRefresh={() => qc.invalidateQueries({ queryKey: ["report-pnl"] })} />}
       exportBar={<ExportBar
         onExcel={() => exportPage({ title: "تقرير الأرباح والخسائر الشامل (P&L)", subtitle, headers: ["البيان", "القيمة"], rows: rows.map(([k, v]) => [k, money(v)]), summaryLines: summary, mode: "excel" })}

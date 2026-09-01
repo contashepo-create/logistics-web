@@ -28,12 +28,13 @@ const collisionCounters: Record<string, number> = {};
 export function forceCollision(name: string, times = 1): void {
   collisionCounters[name] = (collisionCounters[name] ?? 0) + times;
 }
-const NUMBERED_TABLES = new Set(["invoices", "receipt_vouchers", "payment_vouchers", "payrolls"]);
+const NUMBERED_TABLES = new Set(["invoices", "receipt_vouchers", "payment_vouchers", "payrolls", "credit_debit_notes"]);
 // جداول العزل: يحاكي حارس set_company_id (يفرض company_id من المستخدم الحالي)
 const TENANT_TABLES = new Set([
   "financial_years", "customers", "employees", "vehicles", "cashboxes", "banks",
   "invoices", "invoice_trips", "trip_expenses", "receipt_vouchers",
   "payment_vouchers", "payrolls", "advance_settlements", "year_snapshots", "activation_requests",
+  "credit_debit_notes",
 ]);
 
 // ---------------------------------------------------------------------------
@@ -42,6 +43,7 @@ const TENANT_TABLES = new Set([
 const EMBED_FK: Record<string, Record<string, string>> = {
   payrolls: { employees: "employee_id" },
   advance_settlements: { payrolls: "payroll_id", payment_vouchers: "payment_voucher_id" },
+  credit_debit_notes: { invoices: "invoice_id", customers: "customer_id" },
 };
 
 function resolveEmbeds(parentTable: string, row: Row, selectCols: string[]): Row {
@@ -392,13 +394,13 @@ function rpcSaveInvoice(args: any): { data: any; error: any } {
     if (!openYearContains(cid, args.p_date)) return err("لا يمكن تسجيل حركة بهذا التاريخ: خارج نطاق أي سنة مالية مفتوحة.");
     const number = table("invoices").filter((r) => r.company_id === cid).reduce((m, r) => Math.max(m, r.number ?? 0), 0) + 1;
     invoiceId = nextId("invoices");
-    table("invoices").push({ id: invoiceId, company_id: cid, number, date: args.p_date, customer_id: args.p_customer_id, vat_rate: args.p_vat_rate, notes: args.p_notes ?? "", attachments: args.p_attachments ?? [] });
+    table("invoices").push({ id: invoiceId, company_id: cid, number, date: args.p_date, customer_id: args.p_customer_id, vat_rate: args.p_vat_rate, notes: args.p_notes ?? "", attachments: args.p_attachments ?? [], container_number: args.p_container_number ?? "" });
   } else {
     const inv = table("invoices").find((r) => r.id === args.p_invoice_id && r.company_id === cid);
     if (!inv) return err("الفاتورة غير موجودة.");
     if (!openYearContains(cid, inv.date)) return err("لا يمكن تعديل حركة بتاريخ قديم خارج السنة المالية المفتوحة.");
     if (!openYearContains(cid, args.p_date)) return err("لا يمكن تسجيل حركة بهذا التاريخ: خارج نطاق أي سنة مالية مفتوحة.");
-    Object.assign(inv, { date: args.p_date, customer_id: args.p_customer_id, vat_rate: args.p_vat_rate, notes: args.p_notes ?? "", attachments: args.p_attachments ?? [] });
+    Object.assign(inv, { date: args.p_date, customer_id: args.p_customer_id, vat_rate: args.p_vat_rate, notes: args.p_notes ?? "", attachments: args.p_attachments ?? [], container_number: args.p_container_number ?? "" });
     invoiceId = inv.id;
   }
 

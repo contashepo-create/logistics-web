@@ -42,6 +42,7 @@ export const PAYMENT_TYPES: Record<string, string> = {
   advance: "سلفة موظف/سائق",
   vehicle: "مصروف لسيارة",
   supplier: "سداد لمورّد",
+  owner: "سحب نقدي لصاحب المنشأة",
   general: "مصروف عام",
 };
 

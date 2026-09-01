@@ -182,6 +182,51 @@ describe("الحسابات — مطابقة التطبيق المكتبي الم
   });
 });
 
+describe("سحب نقدي لصاحب المنشأة", () => {
+  it("يُسجَّل كسند دفع، يخصم من الخزينة، ويُخصم من أرباح تقرير P&L", async () => {
+    setupCompany(0);
+    await repo.saveYear({ year: 2026, date_from: "2026-01-01", date_to: "2026-12-31" });
+    const cust = await repo.saveCustomer({ name: "عميل", opening_balance: 0 });
+    const cb = await repo.saveAccount("cashbox", { name: "الخزينة", created_date: "2026-01-01", opening_balance: 10000 });
+    const inv = await repo.saveInvoice({
+      date: "2026-05-05", customer_id: cust, attachments: [],
+      trips: [{ from_loc: "أ", to_loc: "ب", price: 2000, expenses: [] }],
+    });
+    expect(await calc.accountBalance("cashbox", cb)).toBeCloseTo(10000, 2);
+
+    await repo.savePayment({
+      date: "2026-05-06", account_kind: "cashbox", account_id: cb,
+      voucher_type: "owner", amount: 500, description: "مصاريف شخصية لصاحب المنشأة",
+    });
+
+    // يخرج فعلياً من الخزينة
+    expect(await calc.accountBalance("cashbox", cb)).toBeCloseTo(9500, 2);
+
+    // يُحتسب ضمن مصروفات تقرير الأرباح والخسائر (خصم من الأرباح)
+    const p = await calc.pnlReport("1900-01-01", "2999-12-31");
+    expect(p.transport_revenue).toBeCloseTo(2000, 2);
+    expect(p.owner_withdrawals).toBeCloseTo(500, 2);
+    expect(p.total_expenses).toBeCloseTo(500, 2);
+    expect(p.net).toBeCloseTo(1500, 2);
+
+    // يظهر في كشف حساب الخزينة كنوع سحب مالك
+    const st = await calc.accountStatement("cashbox", cb, "1900-01-01", "2999-12-31");
+    const last = st.rows[st.rows.length - 1];
+    expect(last.kind).toBe("payment");
+    expect(last.out).toBeCloseTo(500, 2);
+    expect(last.desc).toContain("صاحب المنشأة");
+  });
+
+  it("يرفض سحب المالك بدون بيان", async () => {
+    setupCompany(0);
+    await repo.saveYear({ year: 2026, date_from: "2026-01-01", date_to: "2026-12-31" });
+    const cb = await repo.saveAccount("cashbox", { name: "الخزينة", created_date: "2026-01-01", opening_balance: 10000 });
+    await expect(
+      repo.savePayment({ date: "2026-05-06", account_kind: "cashbox", account_id: cb, voucher_type: "owner", amount: 500, description: "" })
+    ).rejects.toThrow(/بيان/);
+  });
+});
+
 describe("ضريبة القيمة المضافة (مرجعية)", () => {
   it("تُضاف الضريبة لإجمالي العميل ولا تدخل في إيراد الربح", async () => {
     setupCompany(15);

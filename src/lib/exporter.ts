@@ -20,6 +20,10 @@ export interface DocOptions {
   footerText?: string;
   showSignature?: boolean;
   signatureLabel?: string;
+  /** اسم من قام بالطباعة (يظهر في ترويسة كل المطبوعات). */
+  printedBy?: string;
+  /** نص تاريخ/وقت الطباعة جاهز إن لم يُمرَّر. */
+  printedAt?: string;
 }
 
 export function companyHeaderHtml(info: Record<string, string>, o: DocOptions = {}): string {
@@ -79,8 +83,11 @@ export function buildReportHtml(opts: {
   }
   body.push(`<div class='doc-title'>${esc(title)}</div>`);
   if (subtitle) body.push(`<div class='doc-sub'>${esc(subtitle)}</div>`);
-  if (o.showDate) {
-    body.push(`<div class='doc-meta'><span>تاريخ الطباعة: ${new Date().toLocaleString("ar-EG")}</span><span></span></div>`);
+  // متطلبات إلزامية: كل المطبوعات تُظهر تاريخ/وقت الطباعة واسم الطابِع.
+  if (o.showDate || o.printedBy || o.printedAt) {
+    const at = o.printedAt ?? new Date().toLocaleString("ar-EG");
+    const by = o.printedBy ? ` | طُبع بواسطة: ${esc(o.printedBy)}` : "";
+    body.push(`<div class='doc-meta'><span>تاريخ ووقت الطباعة: ${at}${by}</span><span></span></div>`);
   }
   if (summaryLines && summaryLines.length) {
     body.push(

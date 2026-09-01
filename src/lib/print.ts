@@ -2,7 +2,8 @@
 // وتُطبَّق على كل مخرجات الطباعة و PDF (التقارير، الجداول، كشوف الحسابات).
 
 import { supabase } from "./supabase";
-import { getCompany } from "./repo";
+import { getCompany, invalidateCompanyCache } from "./repo";
+import { translateDbError } from "./db";
 
 export type PaperSize = "A4" | "A5" | "Letter";
 export type Orientation = "portrait" | "landscape";
@@ -10,8 +11,10 @@ export type Orientation = "portrait" | "landscape";
 export type PrintTemplate = "modern" | "classic" | "elegant" | "compact" | "minimal";
 
 export interface PrintSettings {
-  /** القالب الاحترافي المستخدم في كل المستندات */
+  /** القالب الاحترافي المستخدم في الفواتير */
   template: PrintTemplate;
+  /** لغة تسميات الحقول في المطبوعات: عربي أو إنجليزي فقط (لا تُعرض معاً) */
+  label_language: "ar" | "en";
   /** اللون الرئيسي للقالب */
   accent_color: string;
   paper: PaperSize;
@@ -41,10 +44,29 @@ export interface PrintSettings {
   header_color: string;
   /** علامة مائية اختيارية */
   watermark: string;
+
+  // ---------- بيانات الفاتورة المطبوعة (تظهر/تختفي حسب تفعيلك) ----------
+  invoice_show_company_name: boolean;
+  invoice_show_company_tax_number: boolean;
+  invoice_show_company_cr: boolean;
+  invoice_show_company_address: boolean;
+  invoice_show_company_phone: boolean;
+  invoice_show_company_email: boolean;
+  invoice_show_company_website: boolean;
+  invoice_show_company_unified: boolean;
+  invoice_show_customer_name: boolean;
+  invoice_show_customer_code: boolean;
+  invoice_show_customer_tax_number: boolean;
+  invoice_show_customer_cr: boolean;
+  invoice_show_customer_address: boolean;
+  invoice_show_customer_phone: boolean;
+  invoice_show_barcode: boolean;
+  invoice_show_currency: boolean;
 }
 
 export const DEFAULT_PRINT_SETTINGS: PrintSettings = {
   template: "modern",
+  label_language: "ar",
   accent_color: "#1d4ed8",
   paper: "A4",
   orientation: "portrait",
@@ -65,6 +87,22 @@ export const DEFAULT_PRINT_SETTINGS: PrintSettings = {
   grid_lines: true,
   header_color: "#1f4e79",
   watermark: "",
+  invoice_show_company_name: true,
+  invoice_show_company_tax_number: true,
+  invoice_show_company_cr: true,
+  invoice_show_company_address: true,
+  invoice_show_company_phone: true,
+  invoice_show_company_email: false,
+  invoice_show_company_website: false,
+  invoice_show_company_unified: false,
+  invoice_show_customer_name: true,
+  invoice_show_customer_code: true,
+  invoice_show_customer_tax_number: true,
+  invoice_show_customer_cr: true,
+  invoice_show_customer_address: true,
+  invoice_show_customer_phone: true,
+  invoice_show_barcode: true,
+  invoice_show_currency: true,
 };
 
 export const PAPER_SIZES: { value: PaperSize; label: string }[] = [
@@ -128,7 +166,8 @@ export async function savePrintSettings(ps: PrintSettings): Promise<void> {
   const c = await getCompany();
   if (!c) throw new Error("لا توجد شركة مرتبطة بحسابك.");
   const { error } = await supabase.from("companies").update({ print_settings: normalize(ps) }).eq("id", c.id);
-  if (error) throw new Error(error.message);
+  invalidateCompanyCache();
+  if (error) throw new Error(translateDbError(error.message));
 }
 
 /** أبعاد الورق بالمليمتر (عرض × ارتفاع) بعد مراعاة الاتجاه. */

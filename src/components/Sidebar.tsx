@@ -62,6 +62,7 @@ const NAV_SECTIONS: NavSection[] = [
       { label: "فواتير المشتريات", href: "/purchases", icon: "🛒" },
       { label: "سندات القبض", href: "/receipts", icon: "⬇️" },
       { label: "سندات الدفع", href: "/payments", icon: "⬆️" },
+      { label: "إشعارات مدين/دائن", href: "/notes", icon: "🧾" },
     ],
   },
   {
@@ -77,7 +78,7 @@ const NAV_SECTIONS: NavSection[] = [
     icon: "📊",
     accent: "#0891b2",
     items: [
-      { label: "أرباح الفواتير والرحلات", href: "/reports/trips", icon: "📈" },
+      { label: "أرباح وخسائر كل رحلة", href: "/reports/trips", icon: "📈" },
       { label: "كشف حساب عميل", href: "/reports/customer-statement", icon: "📄" },
       { label: "كشف حساب مورّد", href: "/reports/supplier-statement", icon: "📑" },
       { label: "أعمار الديون", href: "/reports/aging", icon: "⏳" },

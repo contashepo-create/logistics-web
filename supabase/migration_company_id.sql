@@ -278,4 +278,4 @@ grant usage, select on all sequences in schema public to authenticated, service_
 revoke update on public.profiles from authenticated;
 grant update (name) on public.profiles to authenticated;
 revoke update on public.companies from authenticated;
-grant update (name, phone, address, currency, vat_rate, vat_note) on public.companies to authenticated;
+grant update (name, phone, email, address, currency, vat_rate, vat_note) on public.companies to authenticated;
