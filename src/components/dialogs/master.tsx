@@ -70,18 +70,21 @@ export function CustomerDialog({ id, readOnly, onClose }: Props) {
 
 /* ============================ الموظف ============================ */
 export function EmployeeDialog({ id, readOnly, onClose }: Props) {
-  const [f, setF] = useState({ name: "", nationality: "", phone: "", emp_type: "driver", notes: "" });
+  const [f, setF] = useState({ name: "", nationality: "", phone: "", emp_type: "driver", base_salary: "", notes: "" });
   const [saving, setSaving] = useState(false);
 
   useEffect(() => {
-    if (id) getEmployee(id).then((e) => e && setF({ name: e.name, nationality: e.nationality, phone: e.phone, emp_type: e.emp_type, notes: e.notes }));
+    if (id) getEmployee(id).then((e) => e && setF({
+      name: e.name, nationality: e.nationality, phone: e.phone, emp_type: e.emp_type,
+      base_salary: e.base_salary ? String(e.base_salary) : "", notes: e.notes,
+    }));
   }, [id]);
 
   const save = async () => {
     if (!f.name.trim()) return notify("اسم الموظف مطلوب.", "error");
     setSaving(true);
     try {
-      await saveEmployee({ ...f, name: f.name.trim() }, id);
+      await saveEmployee({ ...f, name: f.name.trim(), base_salary: parseFloat(f.base_salary || "0") || 0 }, id);
       notify("تم حفظ الموظف بنجاح.", "success");
       onClose(true);
     } catch (e) {
@@ -98,12 +101,17 @@ export function EmployeeDialog({ id, readOnly, onClose }: Props) {
         <Field label="الجنسية"><Input value={f.nationality} onChange={(e) => setF({ ...f, nationality: e.target.value })} readOnly={readOnly} /></Field>
         <Field label="الهاتف"><Input value={f.phone} onChange={(e) => setF({ ...f, phone: e.target.value })} readOnly={readOnly} /></Field>
       </div>
-      <Field label="النوع">
-        <Select value={f.emp_type} onChange={(e) => setF({ ...f, emp_type: e.target.value })} disabled={readOnly}>
-          <option value="driver">سائق</option>
-          <option value="admin">إداري</option>
-        </Select>
-      </Field>
+      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
+        <Field label="النوع">
+          <Select value={f.emp_type} onChange={(e) => setF({ ...f, emp_type: e.target.value })} disabled={readOnly}>
+            <option value="driver">سائق</option>
+            <option value="admin">إداري</option>
+          </Select>
+        </Field>
+        <Field label="الراتب الشهري الأساسي" hint="يظهر تلقائياً عند إصدار مسير الراتب ويمكن تعديله">
+          <AmountInput value={f.base_salary} onChange={(v) => setF({ ...f, base_salary: v })} />
+        </Field>
+      </div>
       <Field label="ملاحظات"><Textarea value={f.notes} onChange={(e) => setF({ ...f, notes: e.target.value })} readOnly={readOnly} /></Field>
       {!readOnly && <div style={{ marginTop: 14 }}><Button variant="primary" onClick={save} disabled={saving}>💾 حفظ</Button></div>}
     </Modal>

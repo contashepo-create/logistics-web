@@ -29,7 +29,7 @@ export default function EmployeeStatementReportPage() {
   const allowHeaders = ["الفاتورة", "التاريخ", "الرحلة", "سعر النقلة", "بدل التريب"];
 
   const salRows = (st?.salaries ?? []).map((p) => [voucherNumberLabel("PAY", p.number), p.date, periodLabel(p.period_year, p.period_month), money(p.base_salary), money(p.additions), money(p.advance_deduction), money(p.other_deductions), money(p.net_salary)]);
-  const advRows = (st?.advances ?? []).map((a) => [voucherNumberLabel("PV", a.number), a.date, money(a.amount), money(a.settled), money(a.remaining), (a.settlements ?? []).map((s: any) => `${s.pdate}: ${money(s.amount)}`).join("؛ ") || "لم يُسدد بعد"]);
+  const advRows = (st?.advances ?? []).map((a) => [voucherNumberLabel("PV", a.number), a.date, money(a.amount), money(a.settled), money(a.remaining), (a.settlements ?? []).map((s: any) => `مسير PAY-${String(s.pnum ?? "").padStart(5, "0")}${s.period ? ` (${s.period})` : ""} بتاريخ ${s.pdate}: ${money(s.amount)}`).join(" | ") || "لم يُخصم منها شيء بعد"]);
   const allowRows = (st?.allowances ?? []).map((a: any) => [invoiceNumberLabel(a.inv_number), a.inv_date, a.route, money(a.price), money(a.trip_allowance)]);
 
   const t = st?.totals ?? { salaries_net: 0, advances_total: 0, advances_remaining: 0, allowances_total: 0 };

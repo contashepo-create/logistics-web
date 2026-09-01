@@ -60,6 +60,8 @@ export interface Employee {
   nationality: string;
   phone: string;
   emp_type: "driver" | "admin";
+  /** الراتب الشهري الأساسي المسجّل (يُقترح تلقائياً في المسير) */
+  base_salary: number;
   notes: string;
   created_at?: string;
 }

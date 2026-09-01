@@ -47,7 +47,7 @@ const EMBED_FK: Record<string, Record<string, string>> = {
 function resolveEmbeds(parentTable: string, row: Row, selectCols: string[]): Row {
   const out = { ...row };
   for (const col of selectCols) {
-    const m = col.match(/^([a-z_]+)\(([^)]*)\)$/);
+    const m = col.match(/^([a-z_]+)\s*\(([^)]*)\)$/);
     if (!m) continue;
     const rel = m[1];
     const fk = EMBED_FK[parentTable]?.[rel];
@@ -116,7 +116,17 @@ class MemQuery {
 
   select(cols: string | Record<string, unknown> = "*", opts?: { count?: string; head?: boolean }): MemQuery {
     if (typeof cols === "string") {
-      this.selectCols = cols.split(",").map((s) => s.trim()).filter(Boolean);
+      // تقسيم يحترم الأقواس: "a, b, rel(x, y)" ⇒ ["a","b","rel(x, y)"]
+      const parts: string[] = [];
+      let depth = 0, cur = "";
+      for (const ch of cols) {
+        if (ch === "(") depth++;
+        if (ch === ")") depth--;
+        if (ch === "," && depth === 0) { parts.push(cur); cur = ""; continue; }
+        cur += ch;
+      }
+      parts.push(cur);
+      this.selectCols = parts.map((s) => s.trim()).filter(Boolean);
     } else {
       this.selectCols = ["*"];
     }
@@ -181,8 +191,8 @@ class MemQuery {
 
   private project(row: Row): Row {
     const cols = this.selectCols;
-    const embedCols = cols.filter((c) => /^[a-z_]+\([^)]*\)$/.test(c));
-    const explicit = cols.filter((c) => c !== "*" && !/^[a-z_]+\([^)]*\)$/.test(c));
+    const embedCols = cols.filter((c) => /^[a-z_]+\s*\([^)]*\)$/.test(c));
+    const explicit = cols.filter((c) => c !== "*" && !/^[a-z_]+\s*\([^)]*\)$/.test(c));
     const hasStar = cols.includes("*");
     const out: Row = {};
     if (hasStar || explicit.length === 0) Object.assign(out, row);

@@ -166,3 +166,29 @@ export function amountToArabicWords(amount: number, currency = "جنيه", fract
   out += " فقط لا غير";
   return negative ? `سالب ${out}` : out;
 }
+
+// ---------------------------------------------------------------------------
+// عرض أرصدة العملاء: «عليه» (مدين للشركة) / «له» (دائن) / «مسدَّد»
+// ---------------------------------------------------------------------------
+export type BalanceSide = "debit" | "credit" | "zero";
+
+export function balanceSide(value: number): BalanceSide {
+  const v = Math.round((Number(value) || 0) * 100) / 100;
+  if (v > 0) return "debit";
+  if (v < 0) return "credit";
+  return "zero";
+}
+
+/** نص جانب الرصيد: عليه / له / مسدَّد */
+export function balanceSideLabel(value: number): string {
+  const s = balanceSide(value);
+  return s === "debit" ? "عليه" : s === "credit" ? "له" : "مسدَّد";
+}
+
+/** رصيد منسّق مع بيان الجانب: «1,500.00 (عليه)» */
+export function balanceText(value: number): string {
+  const v = Math.abs(Math.round((Number(value) || 0) * 100) / 100);
+  const s = balanceSide(value);
+  if (s === "zero") return `${money(0)} (مسدَّد)`;
+  return `${money(v)} (${s === "debit" ? "عليه" : "له"})`;
+}

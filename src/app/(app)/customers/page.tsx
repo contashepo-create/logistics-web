@@ -3,13 +3,13 @@
 import { useMemo, useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { DataTable } from "@/components/DataTable";
-import { PageFrame, Spinner, ExportBar } from "@/components/ui";
+import { PageFrame, Spinner, ExportBar, Balance } from "@/components/ui";
 import { CustomerDialog } from "@/components/dialogs/master";
 import { CustomerStatementDialog } from "@/components/statements";
 import { customersWithBalance } from "@/lib/calc";
 import { deleteCustomer } from "@/lib/repo";
 import { notify } from "@/components/toast";
-import { money } from "@/lib/format";
+import { money, balanceText } from "@/lib/format";
 import { exportPage } from "@/lib/exportHelper";
 import { matchesSearch } from "@/components/ui";
 
@@ -21,17 +21,25 @@ export default function CustomersPage() {
 
   const { data, isLoading } = useQuery({ queryKey: ["customers"], queryFn: customersWithBalance });
 
-  const rows = useMemo(() => {
-    return (data ?? []).map((c) => [c.code, c.name, c.phone || "—", c.address || "—", money(c.opening_balance), money(c.balance)]);
-  }, [data]);
+  // صفوف نصية (للبحث والتصدير) وصفوف معروضة (بالرصيد الملوّن)
+  const textRows = useMemo(
+    () => (data ?? []).map((c) => [c.code, c.name, c.phone || "—", c.address || "—", money(c.opening_balance), balanceText(c.balance)]),
+    [data]
+  );
+  const viewRows = useMemo(
+    () => (data ?? []).map((c, i) => [...textRows[i].slice(0, 5), <Balance key={c.id} value={c.balance} pill />]),
+    [data, textRows]
+  );
 
   const filtered = useMemo(() => {
-    if (!search.trim()) return { ids: (data ?? []).map((c) => c.id), rows };
-    const pairs = (data ?? []).map((c, i) => ({ id: c.id, row: rows[i] })).filter((p) => matchesSearch(search, p.row));
-    return { ids: pairs.map((p) => p.id), rows: pairs.map((p) => p.row) };
-  }, [data, rows, search]);
+    if (!search.trim()) return { ids: (data ?? []).map((c) => c.id), rows: viewRows, text: textRows };
+    const pairs = (data ?? [])
+      .map((c, i) => ({ id: c.id, row: viewRows[i], text: textRows[i] }))
+      .filter((p) => matchesSearch(search, p.text));
+    return { ids: pairs.map((p) => p.id), rows: pairs.map((p) => p.row), text: pairs.map((p) => p.text) };
+  }, [data, viewRows, textRows, search]);
 
-  const headers = ["الكود", "اسم العميل", "رقم الهاتف", "العنوان", "الرصيد الافتتاحي", "الرصيد الحالي"];
+  const headers = ["الكود", "اسم العميل", "رقم الهاتف", "العنوان", "الرصيد الافتتاحي", "الرصيد الحالي (له/عليه)"];
 
   const onDelete = async (id: number) => {
     if (!window.confirm("هل أنت متأكد من حذف هذا العميل؟")) return;
@@ -52,9 +60,9 @@ export default function CustomersPage() {
       onSearch={setSearch}
       exportBar={
         <ExportBar
-          onExcel={() => exportPage({ title: "جدول العملاء", headers, rows: filtered.rows, mode: "excel" })}
-          onPdf={() => exportPage({ title: "جدول العملاء", headers, rows: filtered.rows, mode: "pdf" })}
-          onPrint={() => exportPage({ title: "جدول العملاء", headers, rows: filtered.rows, mode: "print" })}
+          onExcel={() => exportPage({ title: "جدول العملاء", headers, rows: filtered.text, mode: "excel" })}
+          onPdf={() => exportPage({ title: "جدول العملاء", headers, rows: filtered.text, mode: "pdf" })}
+          onPrint={() => exportPage({ title: "جدول العملاء", headers, rows: filtered.text, mode: "print" })}
         />
       }
     >

@@ -20,7 +20,7 @@ export function DataTable({
   loading = false,
 }: {
   headers: string[];
-  rows: (string | number)[][];
+  rows: React.ReactNode[][];
   ids: (number | string)[];
   actions?: string[];
   extra?: RowAction[];

@@ -489,6 +489,195 @@ export interface StmtRow {
   balance?: number;
 }
 
+// ---------------------------------------------------------------------------
+// تخصيص تحصيلات العميل على فواتيره بالأقدمية (FIFO)
+// ملاحظة: لا تُعرض «حالة الفاتورة» للمستخدم — التخصيص لأغراض بيان الكشف فقط.
+// ---------------------------------------------------------------------------
+export interface AllocationPart { invoice_id: number; number: number; date: string; amount: number }
+export interface CustomerAllocations {
+  /** لكل سند قبض: على أي فواتير وُزّع */
+  byReceipt: Map<number, AllocationPart[]>;
+  /** لكل فاتورة: المسدَّد منها والمتبقي */
+  byInvoice: Map<number, { number: number; date: string; total: number; paid: number; remaining: number }>;
+  /** دفعات غير مخصَّصة (زيادة عن قيمة الفواتير) */
+  unallocated: number;
+}
+
+export async function customerAllocations(customerId: number): Promise<CustomerAllocations> {
+  const { data: invs } = await supabase
+    .from("invoices")
+    .select("id, number, date")
+    .eq("customer_id", customerId)
+    .order("date")
+    .order("number");
+
+  const queue: { invoice_id: number; number: number; date: string; total: number; paid: number }[] = [];
+  for (const inv of invs ?? []) {
+    const t = await invoiceTotals(inv.id);
+    queue.push({ invoice_id: inv.id, number: inv.number, date: inv.date, total: t.customer_total, paid: 0 });
+  }
+
+  const { data: recs } = await supabase
+    .from("receipt_vouchers")
+    .select("id, number, date, amount")
+    .eq("voucher_type", "customer")
+    .eq("customer_id", customerId)
+    .order("date")
+    .order("id");
+
+  const byReceipt = new Map<number, AllocationPart[]>();
+  let unallocated = 0;
+  for (const r of recs ?? []) {
+    let left = num(r.amount);
+    const parts: AllocationPart[] = [];
+    for (const inv of queue) {
+      if (left <= 0.0001) break;
+      const due = round2(inv.total - inv.paid);
+      if (due <= 0.0001) continue;
+      const take = Math.min(due, left);
+      inv.paid = round2(inv.paid + take);
+      left = round2(left - take);
+      parts.push({ invoice_id: inv.invoice_id, number: inv.number, date: inv.date, amount: take });
+    }
+    if (left > 0.0001) unallocated = round2(unallocated + left);
+    byReceipt.set(r.id, parts);
+  }
+
+  const byInvoice = new Map<number, { number: number; date: string; total: number; paid: number; remaining: number }>();
+  for (const inv of queue) {
+    byInvoice.set(inv.invoice_id, {
+      number: inv.number, date: inv.date, total: round2(inv.total),
+      paid: round2(inv.paid), remaining: round2(inv.total - inv.paid),
+    });
+  }
+  return { byReceipt, byInvoice, unallocated };
+}
+
+// ---------------------------------------------------------------------------
+// كشف حساب العميل الاحترافي (تفصيلي وجاهز للإرسال للمطابقة)
+// ---------------------------------------------------------------------------
+export interface CustomerStatementRow {
+  date: string;
+  doc: string;
+  desc: string;
+  detail: string;
+  debit: number;
+  credit: number;
+  balance: number;
+  kind: string;
+}
+export interface CustomerStatementFull {
+  customer: Customer | null;
+  from: string;
+  to: string;
+  opening: number;
+  rows: CustomerStatementRow[];
+  invoiced: number;
+  collected: number;
+  closing: number;
+  /** فواتير عليها متبقٍ (بالأقدمية) لبيان تركيبة الرصيد */
+  openItems: { number: number; date: string; total: number; paid: number; remaining: number }[];
+}
+
+export async function customerStatementFull(
+  customerId: number,
+  dFrom: string,
+  dTo: string
+): Promise<CustomerStatementFull> {
+  const { data: cust } = await supabase.from("customers").select("*").eq("id", customerId).single();
+  const opening = await customerBalance(customerId, dFrom);
+  const alloc = await customerAllocations(customerId);
+
+  const rows: CustomerStatementRow[] = [];
+
+  const { data: invs } = await supabase
+    .from("invoices")
+    .select("id, number, date, notes")
+    .eq("customer_id", customerId)
+    .gte("date", dFrom)
+    .lte("date", dTo)
+    .order("date")
+    .order("number");
+
+  for (const inv of invs ?? []) {
+    const t = await invoiceTotals(inv.id);
+    const { data: trips } = await supabase
+      .from("invoice_trips")
+      .select("from_loc, to_loc, qty")
+      .eq("invoice_id", inv.id)
+      .order("id");
+    const legs = (trips ?? [])
+      .map((x) => `${x.from_loc || "—"} ← ${x.to_loc || "—"}${num(x.qty) > 1 ? ` ×${num(x.qty)}` : ""}`)
+      .join("، ");
+    const vatPart = t.vat_amount > 0 ? ` • ضريبة ${t.vat_amount.toFixed(2)}` : "";
+    rows.push({
+      date: inv.date,
+      doc: `فاتورة ${invoiceNumberLabel(inv.number)}`,
+      desc: legs || "خدمات نقل",
+      detail: `قيمة قبل الضريبة ${(t.trips_total + t.billable_total).toFixed(2)}${vatPart}`,
+      debit: t.customer_total,
+      credit: 0,
+      balance: 0,
+      kind: "invoice",
+    });
+  }
+
+  const { data: recs } = await supabase
+    .from("receipt_vouchers")
+    .select("id, number, date, amount, description")
+    .eq("voucher_type", "customer")
+    .eq("customer_id", customerId)
+    .gte("date", dFrom)
+    .lte("date", dTo)
+    .order("date")
+    .order("id");
+
+  for (const r of recs ?? []) {
+    const parts = alloc.byReceipt.get(r.id) ?? [];
+    const detail = parts.length
+      ? "سداد: " + parts.map((p) => `${invoiceNumberLabel(p.number)} (${p.amount.toFixed(2)})`).join("، ")
+      : "دفعة تحت الحساب";
+    rows.push({
+      date: r.date,
+      doc: `سند قبض ${voucherNumberLabel("RV", r.number)}`,
+      desc: r.description || "تحصيل من العميل",
+      detail,
+      debit: 0,
+      credit: num(r.amount),
+      balance: 0,
+      kind: "receipt",
+    });
+  }
+
+  rows.sort((a, b) => {
+    if (a.date !== b.date) return a.date < b.date ? -1 : 1;
+    const order: Record<string, number> = { invoice: 0, receipt: 1 };
+    return (order[a.kind] ?? 0) - (order[b.kind] ?? 0);
+  });
+
+  let balance = opening;
+  for (const r of rows) {
+    balance = round2(balance + r.debit - r.credit);
+    r.balance = balance;
+  }
+
+  const openItems = [...alloc.byInvoice.values()]
+    .filter((i) => i.remaining > 0.0001)
+    .sort((a, b) => (a.date === b.date ? a.number - b.number : a.date < b.date ? -1 : 1));
+
+  return {
+    customer: (cust ?? null) as Customer | null,
+    from: dFrom,
+    to: dTo,
+    opening: round2(opening),
+    rows,
+    invoiced: round2(rows.reduce((a, r) => a + r.debit, 0)),
+    collected: round2(rows.reduce((a, r) => a + r.credit, 0)),
+    closing: round2(balance),
+    openItems,
+  };
+}
+
 export async function accountStatement(
   kind: string,
   accountId: number,
@@ -654,6 +843,96 @@ export async function tripProfitsReport(
 // ---------------------------------------------------------------------------
 // تقرير 3: كشف حساب موظف/سائق
 // ---------------------------------------------------------------------------
+// ---------------------------------------------------------------------------
+// أرشيف السلفيات: متى صُرفت، وكم خُصم، ومن أي مسير/شهر، وما المتبقي
+// ---------------------------------------------------------------------------
+export interface AdvanceSettlementRow {
+  payroll_id: number;
+  payroll_number: number;
+  payroll_date: string;
+  period_year: number;
+  period_month: number;
+  period_label: string;
+  amount: number;
+}
+export interface AdvanceArchiveRow {
+  id: number;
+  number: number;
+  date: string;
+  amount: number;
+  settled: number;
+  remaining: number;
+  status: "open" | "partial" | "closed";
+  account_label: string;
+  description: string;
+  settlements: AdvanceSettlementRow[];
+  /** تاريخ آخر خصم (إن وُجد) */
+  last_settled_date: string | null;
+}
+
+export async function advanceArchive(employeeId: number): Promise<AdvanceArchiveRow[]> {
+  const { data: advs } = await supabase
+    .from("payment_vouchers")
+    .select("*")
+    .eq("voucher_type", "advance")
+    .eq("employee_id", employeeId)
+    .order("date")
+    .order("id");
+
+  const out: AdvanceArchiveRow[] = [];
+  for (const a of advs ?? []) {
+    const { data: rows } = await supabase
+      .from("advance_settlements")
+      .select("amount, payroll_id, payrolls(number, date, period_year, period_month)")
+      .eq("payment_voucher_id", a.id)
+      .order("payroll_id");
+
+    const settlements: AdvanceSettlementRow[] = (rows ?? []).map((r) => {
+      const p = (Array.isArray(r.payrolls) ? (r.payrolls as any[])[0] : (r.payrolls as any)) ?? {};
+      return {
+        payroll_id: r.payroll_id,
+        payroll_number: num(p.number),
+        payroll_date: p.date ?? "",
+        period_year: num(p.period_year),
+        period_month: num(p.period_month),
+        period_label: p.period_year ? periodLabel(num(p.period_year), num(p.period_month)) : "—",
+        amount: num(r.amount),
+      };
+    });
+    settlements.sort((x, y) => (x.payroll_date < y.payroll_date ? -1 : x.payroll_date > y.payroll_date ? 1 : 0));
+
+    const settled = round2(sum(settlements.map((x) => x.amount)));
+    const amount = num(a.amount);
+    const remaining = round2(amount - settled);
+    out.push({
+      id: a.id,
+      number: num(a.number),
+      date: a.date,
+      amount,
+      settled,
+      remaining,
+      status: settled <= 0.009 ? "open" : remaining <= 0.009 ? "closed" : "partial",
+      account_label: await accountName(a.account_kind, a.account_id),
+      description: a.description ?? "",
+      settlements,
+      last_settled_date: settlements.length ? settlements[settlements.length - 1].payroll_date : null,
+    });
+  }
+  return out;
+}
+
+/** إجماليات أرشيف السلف لموظف */
+export function advanceArchiveTotals(rows: AdvanceArchiveRow[]): {
+  total: number; settled: number; remaining: number; open_count: number;
+} {
+  return {
+    total: round2(sum(rows.map((r) => r.amount))),
+    settled: round2(sum(rows.map((r) => r.settled))),
+    remaining: round2(sum(rows.map((r) => r.remaining))),
+    open_count: rows.filter((r) => r.remaining > 0.009).length,
+  };
+}
+
 export async function employeeStatement(
   employeeId: number,
   dFrom?: string | null,
@@ -689,7 +968,7 @@ export async function employeeStatement(
     const settled = sum((settles ?? []).map((s) => num(s.amount)));
     const { data: srows } = await supabase
       .from("advance_settlements")
-      .select("amount, payroll_id, payrolls(date, number)")
+      .select("amount, payroll_id, payrolls(date, number, period_year, period_month)")
       .eq("payment_voucher_id", r.id)
       .order("payroll_id");
     const settlements = (srows ?? []).map((s) => ({
@@ -697,6 +976,10 @@ export async function employeeStatement(
       payroll_id: s.payroll_id,
       pdate: Array.isArray(s.payrolls) ? (s.payrolls as any[])[0]?.date : (s.payrolls as any)?.date,
       pnum: Array.isArray(s.payrolls) ? (s.payrolls as any[])[0]?.number : (s.payrolls as any)?.number,
+      period: (() => {
+        const p2: any = Array.isArray(s.payrolls) ? (s.payrolls as any[])[0] : (s.payrolls as any);
+        return p2?.period_year ? periodLabel(num(p2.period_year), num(p2.period_month)) : "";
+      })(),
     }));
     advances.push({
       ...r,

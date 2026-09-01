@@ -9,6 +9,7 @@ import {
   ensureDateInOpenYear,
   ensureMovementEditable,
   ensureNotBlank,
+  ensureSufficientFunds,
   ensurePositive,
   roundMoney,
   txt,
@@ -336,6 +337,8 @@ export async function saveEmployee(data: Record<string, any>, employeeId?: numbe
   const nationality = txt(data.nationality ?? "", "الجنسية");
   const phone = txt(data.phone ?? "", "الهاتف");
   const notes = txt(data.notes ?? "", "الملاحظات");
+  const baseSalary = roundMoney(data.base_salary ?? 0);
+  if (baseSalary < 0) throw new RuleError("الراتب الأساسي لا يمكن أن يكون سالباً.");
 
   if (employeeId) {
     const old = await getEmployee(employeeId);
@@ -353,14 +356,14 @@ export async function saveEmployee(data: Record<string, any>, employeeId?: numbe
     }
     const { error } = await supabase
       .from("employees")
-      .update({ name, nationality, phone, emp_type: data.emp_type, notes })
+      .update({ name, nationality, phone, emp_type: data.emp_type, base_salary: baseSalary, notes })
       .eq("id", employeeId);
     if (error) throw new RuleError(error.message);
     return employeeId;
   }
   const { data: inserted, error } = await supabase
     .from("employees")
-    .insert({ name, nationality, phone, emp_type: data.emp_type, notes })
+    .insert({ name, nationality, phone, emp_type: data.emp_type, base_salary: baseSalary, notes })
     .select()
     .single();
   if (error) throw new RuleError(error.message);
@@ -612,6 +615,32 @@ export async function saveInvoice(data: Record<string, any>, invoiceId?: number 
     })),
   }));
 
+  // منع الرصيد السالب: مجموع المصروفات النقدية لكل جهة صرف (مع استثناء
+  // السندات التلقائية القديمة لهذه الفاتورة لأنها ستُستبدل)
+  const cashNeeded = new Map<string, number>();
+  for (const t of tripsPayload) {
+    for (const e of t.expenses) {
+      if (e.source !== "cash" || !e.account_kind || !e.account_id) continue;
+      const key = `${e.account_kind}:${e.account_id}`;
+      cashNeeded.set(key, (cashNeeded.get(key) ?? 0) + e.amount);
+    }
+  }
+  if (cashNeeded.size) {
+    let oldExpenseIds: number[] = [];
+    if (invoiceId) {
+      const { data: oldTrips } = await supabase.from("invoice_trips").select("id").eq("invoice_id", invoiceId);
+      const oldTripIds = (oldTrips ?? []).map((t) => t.id);
+      if (oldTripIds.length) {
+        const { data: oldExps } = await supabase.from("trip_expenses").select("id").in("trip_id", oldTripIds);
+        oldExpenseIds = (oldExps ?? []).map((e) => e.id);
+      }
+    }
+    for (const [key, amount] of cashNeeded) {
+      const [kind, accId] = key.split(":");
+      await ensureSufficientFunds(kind, Number(accId), amount, { sourceExpenseIds: oldExpenseIds });
+    }
+  }
+
   const { data: savedId, error } = await supabase.rpc("save_invoice", {
     p_invoice_id: invoiceId ?? null,
     p_date: date,
@@ -856,11 +885,13 @@ export async function savePayment(data: Record<string, any>, voucherId?: number 
       }
     }
     await ensureMovementEditable(old.date, date);
+    await ensureSufficientFunds(row.account_kind, row.account_id, row.amount, { paymentId: voucherId });
     const { error } = await supabase.from("payment_vouchers").update(row).eq("id", voucherId);
     if (error) throw new RuleError(error.message);
     return voucherId;
   }
   await ensureDateInOpenYear(date);
+  await ensureSufficientFunds(row.account_kind, row.account_id, row.amount);
   const inserted = await insertNumbered<{ id: number }>("payment_vouchers", row);
   return inserted.id;
 }
@@ -1036,6 +1067,8 @@ export async function savePayroll(data: Record<string, any>, payrollId?: number 
   } else {
     await ensureDateInOpenYear(date);
   }
+
+  await ensureSufficientFunds(data.account_kind, data.account_id, net, { payrollId: payrollId ?? null });
 
   // حفظ ذرّي (صف الراتب + تسويات السلف + ترقيم مُقفَل) في معاملة واحدة
   const { data: savedId, error } = await supabase.rpc("save_payroll", {

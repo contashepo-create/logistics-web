@@ -6,8 +6,14 @@ import { getCompany } from "./repo";
 
 export type PaperSize = "A4" | "A5" | "Letter";
 export type Orientation = "portrait" | "landscape";
+/** قوالب الطباعة الاحترافية الخمسة */
+export type PrintTemplate = "modern" | "classic" | "elegant" | "compact" | "minimal";
 
 export interface PrintSettings {
+  /** القالب الاحترافي المستخدم في كل المستندات */
+  template: PrintTemplate;
+  /** اللون الرئيسي للقالب */
+  accent_color: string;
   paper: PaperSize;
   orientation: Orientation;
   margin_mm: number;
@@ -38,6 +44,8 @@ export interface PrintSettings {
 }
 
 export const DEFAULT_PRINT_SETTINGS: PrintSettings = {
+  template: "modern",
+  accent_color: "#1d4ed8",
   paper: "A4",
   orientation: "portrait",
   margin_mm: 12,
@@ -64,6 +72,26 @@ export const PAPER_SIZES: { value: PaperSize; label: string }[] = [
   { value: "A5", label: "A5 (14.8 × 21 سم)" },
   { value: "Letter", label: "Letter (21.6 × 27.9 سم)" },
 ];
+
+export interface PrintTemplateDef {
+  id: PrintTemplate;
+  name: string;
+  description: string;
+  /** لون افتراضي مقترح للقالب */
+  accent: string;
+}
+
+export const PRINT_TEMPLATES: PrintTemplateDef[] = [
+  { id: "modern",  name: "عصري (Modern)",   description: "ترويسة ملوّنة بشريط تدرّج، رؤوس جداول ملوّنة، وحواف دائرية — الأنسب للعملاء.", accent: "#1d4ed8" },
+  { id: "classic", name: "كلاسيكي (Classic)", description: "إطار كامل وخطوط شبكية واضحة بنمط الفواتير التقليدية الرسمية.", accent: "#1f4e79" },
+  { id: "elegant", name: "أنيق (Elegant)",  description: "خطوط رفيعة، مسافات واسعة، وخط عنوان مميز — مظهر راقٍ وهادئ.", accent: "#0f766e" },
+  { id: "compact", name: "مضغوط (Compact)", description: "كثافة عالية لعدد سجلات أكبر في الصفحة — الأنسب للتقارير الطويلة.", accent: "#334155" },
+  { id: "minimal", name: "بسيط (Minimal)",  description: "بلا ألوان تقريباً وبأقل خطوط ممكنة — مثالي للطباعة بالأبيض والأسود.", accent: "#111827" },
+];
+
+export function getTemplate(id: string): PrintTemplateDef {
+  return PRINT_TEMPLATES.find((t) => t.id === id) ?? PRINT_TEMPLATES[0];
+}
 
 export const ORIENTATIONS: { value: Orientation; label: string }[] = [
   { value: "portrait", label: "طولي (Portrait)" },
@@ -110,31 +138,70 @@ export function paperDimensions(ps: PrintSettings): { w: number; h: number } {
   return ps.orientation === "landscape" ? { w: h, h: w } : { w, h };
 }
 
-/** ورقة الأنماط المستخدمة في نافذة الطباعة و PDF. */
+/** ورقة الأنماط المستخدمة في نافذة الطباعة و PDF (تختلف بحسب القالب). */
 export function printCss(ps: PrintSettings): string {
   const { w, h } = paperDimensions(ps);
+  const fs = ps.font_size_pt;
+  const accent = ps.accent_color || "#1d4ed8";
+  const t = ps.template ?? "modern";
+
+  // فروق القوالب: كثافة، حدود، ألوان الرؤوس، وشكل الترويسة
+  const pad = t === "compact" ? "2.5px 5px" : t === "elegant" ? "6px 8px" : "4px 6px";
+  const scale = t === "compact" ? -0.7 : t === "elegant" ? 0.4 : 0;
+  const size = (d = 0) => `${(fs + scale + d).toFixed(1)}pt`;
+
+  const gridBorder =
+    t === "minimal" ? "border: none; border-bottom: 0.4pt solid #d5dde5;"
+    : t === "elegant" ? "border: none; border-bottom: 0.5pt solid #cbd5e1;"
+    : ps.grid_lines ? "border: 0.6pt solid #9fb0c2;" : "border: none;";
+
+  const theadStyle =
+    t === "minimal" ? `background: transparent; color: #111827; border-bottom: 1.2pt solid #111827;`
+    : t === "elegant" ? `background: transparent; color: ${accent}; border-bottom: 1.2pt solid ${accent};`
+    : t === "classic" ? `background: ${accent}; color: #fff;`
+    : t === "compact" ? `background: ${accent}; color: #fff;`
+    : `background: ${accent}; color: #fff;`;
+
+  const headBlock =
+    t === "modern"
+      ? `.doc-head { text-align: center; padding-bottom: 6px; border-bottom: 2.5pt solid ${accent}; }`
+      : t === "classic"
+      ? `.doc-head { text-align: center; padding: 6px; border: 1pt solid ${accent}; }`
+      : t === "elegant"
+      ? `.doc-head { text-align: center; padding-bottom: 8px; border-bottom: 0.6pt solid ${accent}; letter-spacing: .4px; }`
+      : `.doc-head { text-align: center; margin-bottom: 4px; }`;
+
+  const zebra = ps.zebra && t !== "minimal" && t !== "elegant"
+    ? "tbody tr:nth-child(even) td { background: #f2f6fa; }" : "";
+
   return `
     @page { size: ${w}mm ${h}mm; margin: ${ps.margin_mm}mm; }
     body {
       font-family: 'IBM Plex Sans Arabic','Segoe UI',Tahoma,sans-serif;
-      color: #10202f; font-size: ${ps.font_size_pt}pt; margin: 0; padding: ${ps.margin_mm}mm;
+      color: #10202f; font-size: ${size()}; margin: 0; padding: ${ps.margin_mm}mm;
+      ${t === "elegant" ? "line-height: 1.85;" : ""}
     }
-    .doc-head { text-align: center; margin-bottom: 8px; }
-    .doc-logo { max-height: 70px; margin-bottom: 6px; }
-    .doc-company { font-size: ${ps.font_size_pt + 6}pt; font-weight: 700; }
-    .doc-contact { font-size: ${ps.font_size_pt - 1}pt; color: #33475b; }
-    .doc-note { font-size: ${ps.font_size_pt - 1}pt; color: #33475b; margin-top: 2px; }
-    .doc-title { text-align: center; font-size: ${ps.font_size_pt + 3}pt; font-weight: 700; margin: 8px 0 2px; }
-    .doc-sub { text-align: center; font-size: ${ps.font_size_pt - 0.5}pt; color: #33475b; margin-bottom: 8px; }
-    .doc-meta { display: flex; justify-content: space-between; font-size: ${ps.font_size_pt - 1.5}pt; color: #5a6b7d; margin-bottom: 6px; }
+    ${headBlock}
+    .doc-logo { max-height: ${t === "compact" ? 46 : 70}px; margin-bottom: 6px; }
+    .doc-company { font-size: ${size(t === "compact" ? 3 : 6)}; font-weight: 800; color: ${t === "minimal" ? "#111827" : accent}; }
+    .doc-contact { font-size: ${size(-1)}; color: #33475b; }
+    .doc-note { font-size: ${size(-1)}; color: #33475b; margin-top: 2px; }
+    .doc-title {
+      text-align: center; font-size: ${size(3)}; font-weight: 800; margin: ${t === "compact" ? "5px 0 2px" : "10px 0 2px"};
+      ${t === "modern" ? `color: ${accent};` : ""}
+      ${t === "elegant" ? "letter-spacing: 1px; font-weight: 600;" : ""}
+    }
+    .doc-sub { text-align: center; font-size: ${size(-0.5)}; color: #33475b; margin-bottom: 8px; }
+    .doc-meta { display: flex; justify-content: space-between; font-size: ${size(-1.5)}; color: #5a6b7d; margin-bottom: 6px; }
     hr { border: none; border-top: 1px solid #b9c6d4; margin: 6px 0; }
-    table { border-collapse: collapse; width: 100%; font-size: ${ps.font_size_pt}pt; }
-    table td, table th { ${ps.grid_lines ? "border: 0.6pt solid #9fb0c2;" : "border: none;"} padding: 4px 6px; }
+    table { border-collapse: collapse; width: 100%; font-size: ${size()}; }
+    table td, table th { ${gridBorder} padding: ${pad}; }
     thead { display: table-header-group; }
+    thead th { ${theadStyle} font-weight: 800; }
     tr { page-break-inside: avoid; }
-    ${ps.zebra ? "tbody tr:nth-child(even) td { background: #f2f6fa; }" : ""}
-    .doc-foot { margin-top: 10px; font-size: ${ps.font_size_pt - 1}pt; color: #33475b; text-align: center; }
-    .doc-sign { margin-top: 26px; text-align: left; font-size: ${ps.font_size_pt - 0.5}pt; }
+    ${zebra}
+    .doc-foot { margin-top: 10px; font-size: ${size(-1)}; color: #33475b; text-align: center; }
+    .doc-sign { margin-top: ${t === "compact" ? 16 : 26}px; text-align: left; font-size: ${size(-0.5)}; }
     .doc-sign span { display: inline-block; border-top: 1px solid #64748b; padding-top: 4px; min-width: 180px; text-align: center; }
     .doc-watermark {
       position: fixed; inset: 0; display: flex; align-items: center; justify-content: center;
