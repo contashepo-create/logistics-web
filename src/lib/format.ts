@@ -41,6 +41,7 @@ export const PAYMENT_TYPES: Record<string, string> = {
   trip: "مصروف يخص رحلة",
   advance: "سلفة موظف/سائق",
   vehicle: "مصروف لسيارة",
+  supplier: "سداد لمورّد",
   general: "مصروف عام",
 };
 

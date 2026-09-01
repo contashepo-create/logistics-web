@@ -174,7 +174,10 @@ export interface PaymentVoucher {
   date: string;
   account_kind: "cashbox" | "bank";
   account_id: number;
-  voucher_type: "trip" | "advance" | "vehicle" | "general";
+  voucher_type: "trip" | "advance" | "vehicle" | "general" | "supplier";
+  supplier_id?: number | null;
+  supplier_name?: string | null;
+  purchase_invoice_id?: number | null;
   trip_id: number | null;
   employee_id: number | null;
   vehicle_id: number | null;

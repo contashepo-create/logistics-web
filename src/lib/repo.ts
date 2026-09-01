@@ -863,7 +863,9 @@ export async function listPayments(
   const { data: custs } = await supabase.from("customers").select("id, name");
   const { data: cbs } = await supabase.from("cashboxes").select("id, name");
   const { data: bks } = await supabase.from("banks").select("id, name");
+  const { data: sups } = await supabase.from("suppliers").select("id, name");
 
+  const supMap = new Map((sups ?? []).map((x) => [x.id, x.name]));
   const empMap = new Map((emps ?? []).map((e) => [e.id, e.name]));
   const vehMap = new Map((vehs ?? []).map((v) => [v.id, v.plate_number]));
   const tripMap = new Map((trips ?? []).map((t) => [t.id, t.invoice_id]));
@@ -881,6 +883,7 @@ export async function listPayments(
       plate_number: vehMap.get(v.vehicle_id ?? 0) ?? null,
       inv_number: inv?.number ?? null,
       customer_name: inv ? custMap.get(inv.customer_id) ?? null : null,
+      supplier_name: supMap.get(v.supplier_id ?? 0) ?? null,
       account_name: v.account_kind === "cashbox" ? cbMap.get(v.account_id) ?? null : bkMap.get(v.account_id) ?? null,
     };
   });
@@ -888,7 +891,7 @@ export async function listPayments(
 
 async function validatePayment(data: Record<string, any>): Promise<void> {
   const vt = data.voucher_type;
-  if (!["trip", "advance", "vehicle", "general"].includes(vt)) {
+  if (!["trip", "advance", "vehicle", "general", "supplier"].includes(vt)) {
     throw new RuleError("اختر نوع السند.");
   }
   const amount = roundMoney(data.amount ?? 0);
@@ -900,6 +903,11 @@ async function validatePayment(data: Record<string, any>): Promise<void> {
   if (vt === "trip" && !data.trip_id) throw new RuleError("اختر الرحلة (النقلة) التي يخصها المصروف.");
   if (vt === "advance" && !data.employee_id) throw new RuleError("اختر الموظف/السائق للسلفة.");
   if (vt === "vehicle" && !data.vehicle_id) throw new RuleError("اختر السيارة لمصروف الصيانة.");
+  if (vt === "supplier" && !data.supplier_id) throw new RuleError("اختر المورّد المستفيد من السداد.");
+  if (vt === "supplier") {
+    const { data: sup } = await supabase.from("suppliers").select("id").eq("id", data.supplier_id).maybeSingle();
+    if (!sup) throw new RuleError("المورّد المحدد غير موجود.");
+  }
   if (data.trip_id) {
     const { data: t } = await supabase.from("invoice_trips").select("id").eq("id", data.trip_id).single();
     if (!t) throw new RuleError("الرحلة المحددة غير موجودة.");
@@ -926,6 +934,8 @@ export async function savePayment(data: Record<string, any>, voucherId?: number 
     employee_id: data.voucher_type === "advance" ? data.employee_id ?? null : null,
     vehicle_id: data.voucher_type === "vehicle" ? data.vehicle_id ?? null : null,
     vehicle_expense: data.voucher_type === "vehicle" ? data.vehicle_expense ?? "" : "",
+    supplier_id: data.voucher_type === "supplier" ? data.supplier_id ?? null : null,
+    purchase_invoice_id: data.voucher_type === "supplier" ? data.purchase_invoice_id ?? null : null,
     amount: roundMoney(data.amount ?? 0),
     description: txt(data.description ?? "", "البيان"),
   };

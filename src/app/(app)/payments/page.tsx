@@ -32,6 +32,7 @@ export default function PaymentsPage() {
       if (v.voucher_type === "trip") target = `رحلة بفاتورة ${invoiceNumberLabel(v.inv_number ?? 0)} (${v.customer_name || "—"})`;
       else if (v.voucher_type === "advance") target = `سلفة: ${v.employee_name || "—"}`;
       else if (v.voucher_type === "vehicle") target = `سيارة: ${v.plate_number || "—"}`;
+      else if (v.voucher_type === "supplier") target = `مورّد: ${v.supplier_name || "—"}`;
       return [voucherNumberLabel("PV", v.number), v.date, PAYMENT_TYPES[v.voucher_type] ?? "—", target, v.account_name || "—", money(v.amount), v.description || "—"];
     }),
     [data]

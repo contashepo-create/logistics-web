@@ -10,54 +10,94 @@ import { ThemeToggle } from "@/components/ThemeToggle";
 import { stateLabel, subscriptionState } from "@/lib/subscription";
 import type { Company } from "@/lib/types";
 
-const NAV_SECTIONS: { title: string; items: { label: string; href: string }[] }[] = [
+interface NavItem {
+  label: string;
+  href: string;
+  icon: string;
+}
+
+interface NavSection {
+  /** معرّف ثابت لحفظ حالة الطيّ */
+  id: string;
+  title: string;
+  icon: string;
+  /** لون القسم — يميّز الرئيسي عن الفرعي بصرياً */
+  accent: string;
+  items: NavItem[];
+}
+
+const NAV_SECTIONS: NavSection[] = [
   {
-    title: "📁 البيانات الأساسية",
+    id: "master",
+    title: "البيانات الأساسية",
+    icon: "📁",
+    accent: "#2563eb",
     items: [
-      { label: "العملاء", href: "/customers" },
-      { label: "الموظفون والسائقون", href: "/employees" },
-      { label: "السيارات", href: "/vehicles" },
-      { label: "السنوات المالية", href: "/years" },
+      { label: "العملاء", href: "/customers", icon: "👥" },
+      { label: "الموردون", href: "/suppliers", icon: "🏭" },
+      { label: "الموظفون والسائقون", href: "/employees", icon: "🧑‍✈️" },
+      { label: "السيارات", href: "/vehicles", icon: "🚚" },
+      { label: "السنوات المالية", href: "/years", icon: "🗓️" },
     ],
   },
   {
-    title: "🏦 الخزائن والبنوك",
+    id: "treasury",
+    title: "الخزائن والبنوك",
+    icon: "🏦",
+    accent: "#0d9488",
     items: [
-      { label: "الخزائن", href: "/cashboxes" },
-      { label: "البنوك", href: "/banks" },
+      { label: "الخزائن", href: "/cashboxes", icon: "💵" },
+      { label: "البنوك", href: "/banks", icon: "🏛️" },
     ],
   },
   {
-    title: "🔄 العمليات اليومية",
+    id: "ops",
+    title: "العمليات اليومية",
+    icon: "🔄",
+    accent: "#7c3aed",
     items: [
-      { label: "فواتير النقل", href: "/invoices" },
-      { label: "سندات القبض", href: "/receipts" },
-      { label: "سندات الدفع", href: "/payments" },
+      { label: "فواتير النقل", href: "/invoices", icon: "🧾" },
+      { label: "فواتير المشتريات", href: "/purchases", icon: "🛒" },
+      { label: "سندات القبض", href: "/receipts", icon: "⬇️" },
+      { label: "سندات الدفع", href: "/payments", icon: "⬆️" },
     ],
   },
   {
-    title: "💰 الرواتب",
-    items: [{ label: "إدارة الرواتب", href: "/payroll" }],
+    id: "payroll",
+    title: "الرواتب",
+    icon: "💰",
+    accent: "#d97706",
+    items: [{ label: "إدارة الرواتب", href: "/payroll", icon: "🧮" }],
   },
   {
-    title: "📊 التقارير الذكية",
+    id: "reports",
+    title: "التقارير الذكية",
+    icon: "📊",
+    accent: "#0891b2",
     items: [
-      { label: "أرباح الفواتير والرحلات", href: "/reports/trips" },
-      { label: "كشف حساب عميل", href: "/reports/customer-statement" },
-      { label: "كشف حساب موظف/سائق", href: "/reports/employee-statement" },
-      { label: "أداء السيارات", href: "/reports/vehicles" },
-      { label: "الأرباح والخسائر (P&L)", href: "/reports/pnl" },
+      { label: "أرباح الفواتير والرحلات", href: "/reports/trips", icon: "📈" },
+      { label: "كشف حساب عميل", href: "/reports/customer-statement", icon: "📄" },
+      { label: "كشف حساب مورّد", href: "/reports/supplier-statement", icon: "📑" },
+      { label: "أعمار الديون", href: "/reports/aging", icon: "⏳" },
+      { label: "كشف حساب موظف/سائق", href: "/reports/employee-statement", icon: "🧾" },
+      { label: "أداء السيارات", href: "/reports/vehicles", icon: "🚛" },
+      { label: "الأرباح والخسائر (P&L)", href: "/reports/pnl", icon: "💹" },
     ],
   },
   {
-    title: "⚙️ النظام",
+    id: "system",
+    title: "النظام",
+    icon: "⚙️",
+    accent: "#64748b",
     items: [
-      { label: "الإعدادات", href: "/settings" },
-      { label: "الاشتراك والباقات", href: "/subscription" },
-      { label: "حول التطبيق", href: "/about" },
+      { label: "الإعدادات", href: "/settings", icon: "🛠️" },
+      { label: "الاشتراك والباقات", href: "/subscription", icon: "💳" },
+      { label: "حول التطبيق", href: "/about", icon: "ℹ️" },
     ],
   },
 ];
+
+const STORAGE_KEY = "nav.collapsed";
 
 export function Sidebar({ open = false, onClose }: { open?: boolean; onClose?: () => void } = {}) {
   const pathname = usePathname();
@@ -66,55 +106,126 @@ export function Sidebar({ open = false, onClose }: { open?: boolean; onClose?: (
   const openList = (years ?? []).filter((y) => y.status === "open").map((y) => String(y.year));
   const [company, setCompany] = useState<Company | null>(null);
   const [admin, setAdmin] = useState(false);
+  const [collapsed, setCollapsed] = useState<Record<string, boolean>>({});
 
   useEffect(() => {
     getCompany().then(setCompany);
     isAdmin().then(setAdmin);
+    try {
+      const raw = localStorage.getItem(STORAGE_KEY);
+      if (raw) setCollapsed(JSON.parse(raw) as Record<string, boolean>);
+    } catch {
+      /* تجاهل */
+    }
   }, []);
+
+  const toggle = (id: string) => {
+    setCollapsed((prev) => {
+      const next = { ...prev, [id]: !prev[id] };
+      try {
+        localStorage.setItem(STORAGE_KEY, JSON.stringify(next));
+      } catch {
+        /* تجاهل */
+      }
+      return next;
+    });
+  };
 
   const logout = async () => {
     await signOut();
     router.replace("/login");
   };
 
+  const state = company ? subscriptionState(company) : null;
+
   return (
     <aside className={`sidebar ${open ? "open" : ""}`}>
-      <div className="sidebar-brand">🚛 النظام المحاسبي<br />لشركة النقل</div>
-      <nav style={{ flex: 1, overflowY: "auto" }}>
-        {NAV_SECTIONS.map((section) => (
-          <div key={section.title}>
-            <div className="nav-section-title">{section.title}</div>
-            {section.items.map((item) => (
-              <Link key={item.href} href={item.href} onClick={onClose} className={`nav-item ${pathname === item.href ? "active" : ""}`}>
-                {item.label}
-              </Link>
-            ))}
-          </div>
-        ))}
+      <div className="sidebar-brand">
+        <span className="brand-logo">🚛</span>
+        <span className="brand-text">
+          النظام المحاسبي
+          <small>لشركات النقل واللوجستيات</small>
+        </span>
+      </div>
+
+      <nav className="sidebar-nav">
+        {NAV_SECTIONS.map((section) => {
+          const isCollapsed = !!collapsed[section.id];
+          const hasActive = section.items.some((i) => pathname === i.href);
+          return (
+            <section
+              key={section.id}
+              className={`nav-group${hasActive ? " has-active" : ""}`}
+              style={{ ["--nav-accent" as string]: section.accent }}
+            >
+              <button
+                type="button"
+                className="nav-group-head"
+                onClick={() => toggle(section.id)}
+                aria-expanded={!isCollapsed}
+              >
+                <span className="nav-group-icon">{section.icon}</span>
+                <span className="nav-group-title">{section.title}</span>
+                <span className={`nav-group-caret${isCollapsed ? " closed" : ""}`}>⌄</span>
+              </button>
+
+              {!isCollapsed && (
+                <div className="nav-group-body">
+                  {section.items.map((item) => (
+                    <Link
+                      key={item.href}
+                      href={item.href}
+                      onClick={onClose}
+                      className={`nav-item ${pathname === item.href ? "active" : ""}`}
+                    >
+                      <span className="nav-item-icon">{item.icon}</span>
+                      <span className="nav-item-label">{item.label}</span>
+                    </Link>
+                  ))}
+                </div>
+              )}
+            </section>
+          );
+        })}
+
         {admin && (
-          <div>
-            <div className="nav-section-title">🛡️ الإدارة</div>
-            <Link href="/zerocold" onClick={onClose} className={`nav-item ${pathname.startsWith("/zerocold") ? "active" : ""}`}>
-              لوحة المطور
-            </Link>
-          </div>
+          <section className="nav-group nav-group-admin" style={{ ["--nav-accent" as string]: "#dc2626" }}>
+            <div className="nav-group-head static">
+              <span className="nav-group-icon">🛡️</span>
+              <span className="nav-group-title">الإدارة</span>
+            </div>
+            <div className="nav-group-body">
+              <Link
+                href="/zerocold"
+                onClick={onClose}
+                className={`nav-item ${pathname.startsWith("/zerocold") ? "active" : ""}`}
+              >
+                <span className="nav-item-icon">🧭</span>
+                <span className="nav-item-label">لوحة المطوّر</span>
+              </Link>
+            </div>
+          </section>
         )}
       </nav>
-      <div className="nav-year-info">
-        السنوات المفتوحة: {openList.length ? openList.join("، ") : "لا يوجد ⚠️"}
-      </div>
-      <div className="nav-user">
-        <div className="nav-user-company">{company?.name || "شركتي"}</div>
-        <div
-          className="nav-user-plan"
-          style={{
-            color: company && subscriptionState(company) === "trial" ? "var(--warning, #b45309)" : undefined,
-          }}
-        >
-          {company ? stateLabel(company) : ""}
+
+      <div className="sidebar-foot">
+        <div className="nav-year-info">
+          <span className="nav-year-dot" data-ok={openList.length > 0} />
+          السنوات المفتوحة: {openList.length ? openList.join("، ") : "لا يوجد ⚠️"}
         </div>
-        <div style={{ margin: "8px 0" }}><ThemeToggle /></div>
-        <button className="nav-logout" onClick={logout}>تسجيل الخروج</button>
+
+        <div className="nav-user">
+          <div className="nav-user-company" title={company?.name ?? ""}>
+            {company?.name || "شركتي"}
+          </div>
+          <div className={`nav-user-plan plan-${state ?? "none"}`}>{company ? stateLabel(company) : ""}</div>
+          <div className="nav-user-actions">
+            <ThemeToggle />
+            <button className="nav-logout" onClick={logout}>
+              🚪 خروج
+            </button>
+          </div>
+        </div>
       </div>
     </aside>
   );

@@ -3,6 +3,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { Modal, Field, Input, Select, Textarea, AmountInput, DateInput, Button, AccountSelect } from "@/components/ui";
 import { notify } from "@/components/toast";
+import { listSuppliers, supplierBalance } from "@/lib/suppliers";
 import { listCustomers, listEmployees, listVehicles, saveInvoice, saveReceipt, savePayment, getReceipt, getPayment, companyInfo, currentVatRate } from "@/lib/repo";
 import { getInvoiceFull, allAccounts, tripsOptions, tripProfit } from "@/lib/calc";
 import { money, todayIso, amountToArabicWords, EXPENSE_TYPES, EXPENSE_SOURCES, EXPENSE_SOURCE_HINTS, PAYMENT_TYPES, RECEIPT_TYPES, VEHICLE_EXPENSES } from "@/lib/format";
@@ -486,7 +487,9 @@ export function PaymentDialog({ id, readOnly, onClose }: { id?: number | null; r
   const [tripOpts, setTripOpts] = useState<{ id: number; label: string }[]>([]);
   const [employees, setEmployees] = useState<{ id: number; name: string }[]>([]);
   const [vehicles, setVehicles] = useState<{ id: number; plate_number: string }[]>([]);
-  const [f, setF] = useState({ account_kind: "cashbox", account_id: "", voucher_type: "trip", trip_id: "", employee_id: "", vehicle_id: "", vehicle_expense: "maintenance", amount: "", description: "", date: todayIso() });
+  const [suppliers, setSuppliers] = useState<{ id: number; code: string; name: string }[]>([]);
+  const [supplierDue, setSupplierDue] = useState<number | null>(null);
+  const [f, setF] = useState({ account_kind: "cashbox", account_id: "", voucher_type: "trip", trip_id: "", employee_id: "", vehicle_id: "", vehicle_expense: "maintenance", supplier_id: "", amount: "", description: "", date: todayIso() });
   const [tripInfo, setTripInfo] = useState<{ price: number; direct: number; later: number; net: number } | null>(null);
   const [saving, setSaving] = useState(false);
 
@@ -497,9 +500,10 @@ export function PaymentDialog({ id, readOnly, onClose }: { id?: number | null; r
       setTripOpts(await tripsOptions());
       setEmployees(await listEmployees());
       setVehicles(await listVehicles());
+      setSuppliers((await listSuppliers()).map((x) => ({ id: x.id, code: x.code, name: x.name })));
       if (id) {
         const v = await getPayment(id);
-        if (v) setF({ account_kind: v.account_kind, account_id: String(v.account_id), voucher_type: v.voucher_type, trip_id: v.trip_id ? String(v.trip_id) : "", employee_id: v.employee_id ? String(v.employee_id) : "", vehicle_id: v.vehicle_id ? String(v.vehicle_id) : "", vehicle_expense: v.vehicle_expense || "maintenance", amount: String(v.amount), description: v.description, date: v.date });
+        if (v) setF({ account_kind: v.account_kind, account_id: String(v.account_id), voucher_type: v.voucher_type, trip_id: v.trip_id ? String(v.trip_id) : "", employee_id: v.employee_id ? String(v.employee_id) : "", vehicle_id: v.vehicle_id ? String(v.vehicle_id) : "", vehicle_expense: v.vehicle_expense || "maintenance", supplier_id: (v as { supplier_id?: number | null }).supplier_id ? String((v as { supplier_id?: number | null }).supplier_id) : "", amount: String(v.amount), description: v.description, date: v.date });
       } else if (accs.length) setF((old) => ({ ...old, account_kind: accs[0].kind, account_id: String(accs[0].id) }));
     })();
   }, [id]);
@@ -509,6 +513,13 @@ export function PaymentDialog({ id, readOnly, onClose }: { id?: number | null; r
       tripProfit(Number(f.trip_id)).then(setTripInfo);
     } else setTripInfo(null);
   }, [f.voucher_type, f.trip_id]);
+
+  // المستحق الحالي للمورّد المختار (مساعدة بصرية قبل الصرف)
+  useEffect(() => {
+    if (f.voucher_type === "supplier" && f.supplier_id) {
+      supplierBalance(Number(f.supplier_id)).then(setSupplierDue).catch(() => setSupplierDue(null));
+    } else setSupplierDue(null);
+  }, [f.voucher_type, f.supplier_id]);
 
   const save = async () => {
     if (!f.account_id) return notify("اختر الحساب.", "error");
@@ -523,6 +534,7 @@ export function PaymentDialog({ id, readOnly, onClose }: { id?: number | null; r
         employee_id: f.voucher_type === "advance" && f.employee_id ? Number(f.employee_id) : null,
         vehicle_id: f.voucher_type === "vehicle" && f.vehicle_id ? Number(f.vehicle_id) : null,
         vehicle_expense: f.voucher_type === "vehicle" ? f.vehicle_expense : "",
+        supplier_id: f.voucher_type === "supplier" && f.supplier_id ? Number(f.supplier_id) : null,
         amount: amt, description: f.description,
       }, id);
       notify("تم حفظ سند الدفع بنجاح.", "success");
@@ -541,6 +553,22 @@ export function PaymentDialog({ id, readOnly, onClose }: { id?: number | null; r
           {Object.entries(PAYMENT_TYPES).map(([k, v]) => <option key={k} value={k}>{v}</option>)}
         </Select>
       </Field>
+
+      {f.voucher_type === "supplier" && (
+        <>
+          <Field label="المورّد" required>
+            <Select value={f.supplier_id} onChange={(e) => setF({ ...f, supplier_id: e.target.value })} disabled={readOnly}>
+              <option value="">— اختر المورّد —</option>
+              {suppliers.map((sp) => <option key={sp.id} value={sp.id}>{sp.code} - {sp.name}</option>)}
+            </Select>
+          </Field>
+          {supplierDue != null && (
+            <div className="field-hint" style={{ marginBottom: 8 }}>
+              المستحق حالياً لهذا المورّد: <b>{money(supplierDue)}</b>
+            </div>
+          )}
+        </>
+      )}
 
       {f.voucher_type === "trip" && (
         <>
