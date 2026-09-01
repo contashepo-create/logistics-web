@@ -5,25 +5,33 @@ import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { DataTable } from "@/components/DataTable";
 import {
   PageFrame, Spinner, ExportBar, Modal, Field, Input, Select, Textarea, Button,
-  AmountInput, DictSelect, TotalsBar, matchesSearch,
+  AmountInput, AccountSelect, DictSelect, TotalsBar, matchesSearch,
 } from "@/components/ui";
 import { notify } from "@/components/toast";
-import { money, todayIso } from "@/lib/format";
+import { money, todayIso, PURCHASE_EXPENSE_CATEGORIES } from "@/lib/format";
 import { exportPage } from "@/lib/exportHelper";
 import { listSuppliers } from "@/lib/suppliers";
 import {
   listPurchaseInvoices, getPurchaseInvoice, savePurchaseInvoice, deletePurchaseInvoice,
   purchaseTotals, type PurchaseItem,
 } from "@/lib/suppliers";
-import { currentVatRate } from "@/lib/repo";
+import { currentVatRate, listVehicles } from "@/lib/repo";
+import { allAccounts } from "@/lib/calc";
 
 const EMPTY_ITEM: PurchaseItem = { item_name: "", unit: "", qty: 1, unit_price: 0, vat_rate: 15 };
 
 function PurchaseDialog({ id, readOnly, onClose }: { id?: number; readOnly?: boolean; onClose: (saved?: boolean) => void }) {
   const { data: suppliers } = useQuery({ queryKey: ["suppliers-list"], queryFn: listSuppliers });
+  const { data: vehicles } = useQuery({ queryKey: ["vehicles"], queryFn: listVehicles });
+  const { data: accounts } = useQuery({ queryKey: ["all-accounts"], queryFn: allAccounts });
   const [date, setDate] = useState(todayIso());
+  const [purchaseType, setPurchaseType] = useState<"credit" | "cash">("credit");
   const [supplierId, setSupplierId] = useState<number | null>(null);
   const [supplierRef, setSupplierRef] = useState("");
+  const [expenseCategory, setExpenseCategory] = useState("other");
+  const [vehicleId, setVehicleId] = useState<number | null>(null);
+  const [accountKind, setAccountKind] = useState<"cashbox" | "bank">("cashbox");
+  const [accountId, setAccountId] = useState<number | null>(null);
   const [vatRate, setVatRate] = useState(15);
   const [vatIncluded, setVatIncluded] = useState(false);
   const [notes, setNotes] = useState("");
@@ -41,8 +49,13 @@ function PurchaseDialog({ id, readOnly, onClose }: { id?: number; readOnly?: boo
       const inv = await getPurchaseInvoice(id);
       if (inv) {
         setDate(inv.date);
+        setPurchaseType(inv.purchase_type);
         setSupplierId(inv.supplier_id);
         setSupplierRef(inv.supplier_ref);
+        setExpenseCategory(inv.expense_category);
+        setVehicleId(inv.vehicle_id);
+        setAccountKind(inv.account_kind ?? "cashbox");
+        setAccountId(inv.account_id);
         setVatRate(inv.vat_rate);
         setVatIncluded(inv.vat_included);
         setNotes(inv.notes);
@@ -50,6 +63,13 @@ function PurchaseDialog({ id, readOnly, onClose }: { id?: number; readOnly?: boo
       }
     })();
   }, [id]);
+
+  useEffect(() => {
+    if (!id && !accountId && accounts?.length) {
+      setAccountKind(accounts[0].kind === "bank" ? "bank" : "cashbox");
+      setAccountId(accounts[0].id);
+    }
+  }, [accounts, accountId, id]);
 
   const setItem = (i: number, patch: Partial<PurchaseItem>) =>
     setItems((prev) => prev.map((it, idx) => (idx === i ? { ...it, ...patch } : it)));
@@ -60,7 +80,13 @@ function PurchaseDialog({ id, readOnly, onClose }: { id?: number; readOnly?: boo
     setSaving(true);
     try {
       await savePurchaseInvoice({
-        id, date, supplier_id: supplierId ?? 0, supplier_ref: supplierRef,
+        id, date, purchase_type: purchaseType,
+        supplier_id: purchaseType === "credit" ? supplierId : null,
+        supplier_ref: supplierRef,
+        expense_category: expenseCategory,
+        vehicle_id: vehicleId,
+        account_kind: purchaseType === "cash" ? accountKind : null,
+        account_id: purchaseType === "cash" ? accountId : null,
         vat_rate: vatRate, vat_included: vatIncluded, notes, items,
       });
       notify("تم حفظ فاتورة المشتريات بنجاح.", "success");
@@ -74,24 +100,64 @@ function PurchaseDialog({ id, readOnly, onClose }: { id?: number; readOnly?: boo
 
   return (
     <Modal title={id ? "تعديل فاتورة مشتريات" : "فاتورة مشتريات جديدة"} onClose={() => onClose()} width={1040}>
-      <div className="form-grid-4">
-        <Field label="التاريخ" required><Input type="date" dir="ltr" value={date} onChange={(e) => setDate(e.target.value)} readOnly={readOnly} /></Field>
-        <Field label="المورّد" required>
-          <DictSelect
-            value={supplierId}
-            onChange={setSupplierId}
-            options={(suppliers ?? []).map((s) => ({ id: s.id, label: `${s.code} - ${s.name}` }))}
-          />
-        </Field>
-        <Field label="رقم فاتورة المورّد"><Input dir="ltr" value={supplierRef} onChange={(e) => setSupplierRef(e.target.value)} readOnly={readOnly} /></Field>
-        <Field label="نسبة الضريبة %">
-          <Input type="number" dir="ltr" min={0} max={100} value={vatRate}
-            onChange={(e) => {
-              const v = Number(e.target.value) || 0;
-              setVatRate(v);
-              setItems((prev) => prev.map((it) => ({ ...it, vat_rate: v })));
-            }} readOnly={readOnly} />
-        </Field>
+      <div className="purchase-routing-card">
+        <div className="form-grid-4">
+          <Field label="طريقة الشراء" required>
+            <Select value={purchaseType} disabled={readOnly} onChange={(e) => setPurchaseType(e.target.value === "cash" ? "cash" : "credit")}>
+              <option value="credit">آجل على مورّد</option>
+              <option value="cash">نقدي مباشر بدون مورّد</option>
+            </Select>
+          </Field>
+          <Field label="التاريخ" required><Input type="date" dir="ltr" value={date} onChange={(e) => setDate(e.target.value)} readOnly={readOnly} /></Field>
+          <Field label="بند المصروف في الأرباح والخسائر" required>
+            <Select value={expenseCategory} disabled={readOnly} onChange={(e) => setExpenseCategory(e.target.value)}>
+              {Object.entries(PURCHASE_EXPENSE_CATEGORIES).map(([key, label]) => <option key={key} value={key}>{label}</option>)}
+            </Select>
+          </Field>
+          <Field label="تحميل على سيارة (اختياري)">
+            <Select value={vehicleId ?? ""} disabled={readOnly} onChange={(e) => setVehicleId(e.target.value ? Number(e.target.value) : null)}>
+              <option value="">— بدون سيارة —</option>
+              {(vehicles ?? []).map((v) => <option key={v.id} value={v.id}>{v.code} - {v.plate_number}</option>)}
+            </Select>
+          </Field>
+        </div>
+
+        <div className="form-grid-3" style={{ marginTop: 12 }}>
+          {purchaseType === "credit" ? (
+            <Field label="المورّد" required>
+              <DictSelect
+                value={supplierId}
+                onChange={setSupplierId}
+                options={(suppliers ?? []).map((s) => ({ id: s.id, label: `${s.code} - ${s.name}` }))}
+                disabled={readOnly}
+              />
+            </Field>
+          ) : (
+            <Field label="الدفع المباشر من" required hint="يُنشئ حركة صرف تلقائية ويخصم الإجمالي فوراً من الرصيد.">
+              <AccountSelect
+                value={accountId ? { kind: accountKind, id: accountId } : null}
+                onChange={(v) => { setAccountKind(v?.kind === "bank" ? "bank" : "cashbox"); setAccountId(v?.id ?? null); }}
+                options={accounts ?? []}
+                disabled={readOnly}
+              />
+            </Field>
+          )}
+          <Field label={purchaseType === "credit" ? "رقم فاتورة المورّد" : "رقم الإيصال / المرجع"}>
+            <Input dir="ltr" value={supplierRef} onChange={(e) => setSupplierRef(e.target.value)} readOnly={readOnly} />
+          </Field>
+          <Field label="نسبة الضريبة %">
+            <Input type="number" dir="ltr" min={0} max={100} value={vatRate}
+              onChange={(e) => {
+                const v = Number(e.target.value) || 0;
+                setVatRate(v);
+                setItems((prev) => prev.map((it) => ({ ...it, vat_rate: v })));
+              }} readOnly={readOnly} />
+          </Field>
+        </div>
+        <div className="field-hint" style={{ marginTop: 8 }}>
+          تُحمَّل الفاتورة على بند «{PURCHASE_EXPENSE_CATEGORIES[expenseCategory]}» في الأرباح والخسائر
+          {vehicleId ? " وعلى السيارة المختارة في تقرير أداء السيارات." : " دون تحميلها على سيارة."}
+        </div>
       </div>
 
       <div className="group-box">
@@ -163,8 +229,10 @@ export default function PurchasesPage() {
 
   const rows = useMemo(
     () => (data ?? []).map((p) => [
-      String(p.number), p.date, p.supplier_name ?? "—", p.supplier_ref || "—",
-      money(p.net), money(p.vat), money(p.total),
+      String(p.number), p.date, p.purchase_type === "cash" ? "نقدي مباشر" : "آجل",
+      p.supplier_name ?? "—", PURCHASE_EXPENSE_CATEGORIES[p.expense_category] ?? "أخرى",
+      p.vehicle_plate || "—", p.purchase_type === "cash" ? (p.account_name || "—") : "ذمم الموردين",
+      p.supplier_ref || "—", money(p.net), money(p.vat), money(p.total),
     ]),
     [data]
   );
@@ -175,7 +243,7 @@ export default function PurchasesPage() {
     return { ids: pairs.map((p) => p.id), rows: pairs.map((p) => p.row) };
   }, [data, rows, search]);
 
-  const headers = ["رقم", "التاريخ", "المورّد", "مرجع المورّد", "قبل الضريبة", "الضريبة", "الإجمالي"];
+  const headers = ["رقم", "التاريخ", "النوع", "المورّد", "بند P&L", "السيارة", "طريقة السداد", "المرجع", "قبل الضريبة", "الضريبة", "الإجمالي"];
 
   const totals = useMemo(() => {
     const src = (data ?? []).filter((_, i) => filtered.ids.includes((data ?? [])[i].id));
@@ -192,6 +260,11 @@ export default function PurchasesPage() {
       await deletePurchaseInvoice(id);
       notify("تم الحذف بنجاح.", "success");
       qc.invalidateQueries({ queryKey: ["purchases"] });
+      qc.invalidateQueries({ queryKey: ["payments"] });
+      qc.invalidateQueries({ queryKey: ["cashbox"] });
+      qc.invalidateQueries({ queryKey: ["bank"] });
+      qc.invalidateQueries({ queryKey: ["report-pnl"] });
+      qc.invalidateQueries({ queryKey: ["report-vehicles"] });
     } catch (e) {
       notify(e instanceof Error ? e.message : String(e), "error");
     }
@@ -200,7 +273,7 @@ export default function PurchasesPage() {
   return (
     <PageFrame
       title="فواتير المشتريات"
-      subtitle="مشترياتك من الموردين بضريبة القيمة المضافة — تُرحَّل تلقائياً إلى حساب المورّد"
+      subtitle="فاتورة آجلة على مورّد أو شراء نقدي مباشر من الخزينة/البنك — مع توجيه المصروف إلى P&L والسيارة اختيارياً"
       addText="➕ فاتورة مشتريات"
       onAdd={() => setDialog({ mode: "add" })}
       search={search}
@@ -243,6 +316,11 @@ export default function PurchasesPage() {
             if (saved) {
               qc.invalidateQueries({ queryKey: ["purchases"] });
               qc.invalidateQueries({ queryKey: ["suppliers"] });
+              qc.invalidateQueries({ queryKey: ["payments"] });
+              qc.invalidateQueries({ queryKey: ["cashbox"] });
+              qc.invalidateQueries({ queryKey: ["bank"] });
+              qc.invalidateQueries({ queryKey: ["report-pnl"] });
+              qc.invalidateQueries({ queryKey: ["report-vehicles"] });
             }
           }}
         />

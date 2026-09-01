@@ -444,7 +444,7 @@ describe("تدقيق محاسبي: سلامة القيم والتقريب وال
   it("التقريب لخانتين لا يسرّب فروقاً في الإجماليات", async () => {
     setupCompany(14);
     await repo.saveYear({ year: 2026, date_from: "2026-01-01", date_to: "2026-12-31" });
-    const cust = await repo.saveCustomer({ name: "عميل", opening_balance: 0 });
+    const cust = await repo.saveCustomer({ name: "شركة العميل", opening_balance: 0 });
     const cb = await repo.saveAccount("cashbox", { name: "خزينة", created_date: "2026-01-01", opening_balance: 1000 });
     const inv = await repo.saveInvoice({
       date: "2026-05-01", customer_id: cust, attachments: [],
@@ -464,7 +464,7 @@ describe("تدقيق محاسبي: سلامة القيم والتقريب وال
   it("لا يقبل مبالغ سالبة أو صفرية في النقلات والمصروفات", async () => {
     setupCompany(0);
     await repo.saveYear({ year: 2026, date_from: "2026-01-01", date_to: "2026-12-31" });
-    const cust = await repo.saveCustomer({ name: "عميل", opening_balance: 0 });
+    const cust = await repo.saveCustomer({ name: "شركة العميل", opening_balance: 0 });
     await expect(repo.saveInvoice({
       date: "2026-05-01", customer_id: cust, attachments: [],
       trips: [{ from_loc: "أ", to_loc: "ب", qty: 1, unit_price: 0, expenses: [] }],
@@ -478,7 +478,7 @@ describe("تدقيق محاسبي: سلامة القيم والتقريب وال
   it("لا يمكن صرف سند بمصدر تمويل غير معروف", async () => {
     setupCompany(0);
     await repo.saveYear({ year: 2026, date_from: "2026-01-01", date_to: "2026-12-31" });
-    const cust = await repo.saveCustomer({ name: "عميل", opening_balance: 0 });
+    const cust = await repo.saveCustomer({ name: "شركة العميل", opening_balance: 0 });
     await expect(repo.saveInvoice({
       date: "2026-05-01", customer_id: cust, attachments: [],
       trips: [{ from_loc: "أ", to_loc: "ب", qty: 1, unit_price: 100, expenses: [{ expense_type: "fuel", qty: 1, unit_amount: 50, source: "loan" }] }],

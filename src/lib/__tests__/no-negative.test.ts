@@ -16,7 +16,7 @@ async function seed(opening = 1000) {
   seedTable("profiles", [{ id: "u1", company_id: "c1", email: "o@t.com", name: "م" }]);
   seedTable("companies", [{ id: "c1", name: "شركة", currency: "ج.م", vat_rate: 0, plan_type: "open", is_active: true }]);
   await repo.saveYear({ year: 2026, date_from: "2026-01-01", date_to: "2026-12-31" });
-  const cust = await repo.saveCustomer({ name: "عميل", opening_balance: 0 });
+  const cust = await repo.saveCustomer({ name: "شركة العميل", opening_balance: 0 });
   const emp = await repo.saveEmployee({ name: "موظف", emp_type: "admin" });
   const cb = await repo.saveAccount("cashbox", { name: "الخزينة", created_date: "2026-01-01", opening_balance: opening });
   const bnk = await repo.saveAccount("bank", { name: "البنك", created_date: "2026-01-01", opening_balance: 0 });
@@ -41,6 +41,17 @@ describe("منع الرصيد السالب", () => {
       voucher_type: "general", amount: 1000, description: "إيجار",
     });
     expect(await calc.accountBalance("cashbox", s.cb)).toBeCloseTo(0, 2);
+  });
+
+  it("يحسب إجمالي سند الصرف من العدد × قيمة الوحدة ويحفظهما", async () => {
+    const id = await repo.savePayment({
+      date: "2026-02-01", account_kind: "cashbox", account_id: s.cb,
+      voucher_type: "general", quantity: 2, unit_amount: 200, amount: 999,
+      description: "بنزين",
+    });
+    const voucher = await repo.getPayment(id);
+    expect(voucher).toMatchObject({ quantity: 2, unit_amount: 200, amount: 400 });
+    expect(await calc.accountBalance("cashbox", s.cb)).toBeCloseTo(600, 2);
   });
 
   it("الصرف من حساب رصيده صفر مرفوض", async () => {

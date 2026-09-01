@@ -4,6 +4,7 @@
 // supabase/migration_developer_info.sql
 
 import { supabase, SUPABASE_CONFIGURED } from "./supabase";
+import { safeEmail, safeField, safePhone, safeUrl } from "./security";
 
 /** أنواع الحقول الإضافية: تحدد شكل العرض والرابط الناتج. */
 export type CustomFieldType = "text" | "phone" | "whatsapp" | "telegram" | "email" | "link";
@@ -146,13 +147,20 @@ export function displayPhone(phone: string): string {
 
 /** رابط حقل إضافي حسب نوعه (يُعيد null للنص العادي). */
 export function customFieldHref(f: CustomField): string | null {
-  switch (f.type) {
-    case "phone": return telLink(f.value);
-    case "whatsapp": return whatsappLink(f.value);
-    case "telegram": return telegramLink(f.value);
-    case "email": return `mailto:${f.value.trim()}`;
-    case "link": return f.value.trim().startsWith("http") ? f.value.trim() : `https://${f.value.trim()}`;
-    default: return null;
+  try {
+    switch (f.type) {
+      case "phone": return telLink(safePhone(f.value, true));
+      case "whatsapp": return whatsappLink(safePhone(f.value, true));
+      case "telegram": return telegramLink(safeField(f.value, { label: "تليجرام", max: 120, required: true }));
+      case "email": return `mailto:${safeEmail(f.value, true)}`;
+      case "link": {
+        const raw = f.value.trim();
+        return safeUrl(/^https?:\/\//i.test(raw) ? raw : `https://${raw}`, "الرابط", true);
+      }
+      default: return null;
+    }
+  } catch {
+    return "#";
   }
 }
 
@@ -166,12 +174,79 @@ export function newCustomField(): CustomField {
   return { id: `f_${Date.now().toString(36)}${Math.random().toString(36).slice(2, 6)}`, label: "", value: "", type: "text", enabled: true };
 }
 
-function normalize(raw: Partial<AppSettings>): AppSettings {
-  const merged = { ...DEFAULT_SETTINGS, ...raw };
+const CUSTOM_TYPES = new Set<CustomFieldType>(CUSTOM_FIELD_TYPES.map((item) => item.value));
+
+function normalize(raw: Partial<AppSettings>, strict = false): AppSettings {
+  const text = (key: keyof AppSettings, max: number): string => {
+    const fallback = String(DEFAULT_SETTINGS[key] ?? "");
+    try { return safeField(raw[key] ?? fallback, { label: String(key), max }); }
+    catch (error) { if (strict) throw error; return fallback; }
+  };
+  const contact = (key: "phone" | "whatsapp"): string => {
+    const fallback = DEFAULT_SETTINGS[key];
+    try { return safePhone(raw[key] ?? fallback, Boolean(raw[key] ?? fallback)); }
+    catch (error) { if (strict) throw error; return fallback; }
+  };
+  let email = DEFAULT_SETTINGS.email;
+  try { email = safeEmail(raw.email ?? email, true); }
+  catch (error) { if (strict) throw error; }
+
+  const visibility: Record<string, boolean> = { ...DEFAULT_SETTINGS.visibility };
+  if (raw.visibility && typeof raw.visibility === "object" && !Array.isArray(raw.visibility)) {
+    for (const field of SETTINGS_FIELDS) {
+      const value = raw.visibility[field.key];
+      if (typeof value === "boolean") visibility[field.key] = value;
+      else if (strict && value != null) throw new Error(`قيمة إظهار الحقل ${field.key} غير صالحة.`);
+    }
+  } else if (strict && raw.visibility != null) throw new Error("إعدادات إظهار الحقول غير صالحة.");
+
+  const customFields: CustomField[] = [];
+  if (Array.isArray(raw.custom_fields)) {
+    if (raw.custom_fields.length > 20) {
+      if (strict) throw new Error("الحد الأقصى للحقول الإضافية هو 20 حقلاً.");
+    }
+    for (const item of raw.custom_fields.slice(0, 20)) {
+      try {
+        if (!item || typeof item !== "object") throw new Error("حقل إضافي غير صالح.");
+        const id = String(item.id ?? "");
+        if (!/^f_[a-z0-9]{4,40}$/i.test(id)) throw new Error("معرّف الحقل الإضافي غير صالح.");
+        if (!CUSTOM_TYPES.has(item.type)) throw new Error("نوع الحقل الإضافي غير صالح.");
+        if (typeof item.enabled !== "boolean") throw new Error("حالة الحقل الإضافي غير صالحة.");
+        const label = safeField(item.label, { label: "مسمى الحقل الإضافي", max: 80, required: true });
+        let value = safeField(item.value, { label, max: 500 });
+        if (value) {
+          if (item.type === "phone" || item.type === "whatsapp") value = safePhone(value, true);
+          else if (item.type === "email") value = safeEmail(value, true);
+          else if (item.type === "link") value = safeUrl(/^https?:\/\//i.test(value) ? value : `https://${value}`, label, true);
+        }
+        customFields.push({ id, label, value, type: item.type, enabled: item.enabled });
+      } catch (error) {
+        if (strict) throw error;
+      }
+    }
+  } else if (strict && raw.custom_fields != null) throw new Error("الحقول الإضافية يجب أن تكون قائمة صالحة.");
+
+  const telegram = text("telegram", 120);
+  if (strict && telegram && !/^@?[A-Za-z][A-Za-z0-9_]{3,}$/.test(telegram) && !/^https:\/\/t\.me\//i.test(telegram)) {
+    safePhone(telegram, true); // يرمي رسالة واضحة إذا لم يكن رقماً صالحاً
+  }
+
   return {
-    ...merged,
-    visibility: { ...DEFAULT_SETTINGS.visibility, ...(raw.visibility ?? {}) },
-    custom_fields: Array.isArray(raw.custom_fields) ? raw.custom_fields : [],
+    app_name: text("app_name", 120),
+    app_version: text("app_version", 30),
+    developer_name: text("developer_name", 120),
+    developer_title: text("developer_title", 100),
+    developer_country: text("developer_country", 100),
+    phone: contact("phone"),
+    whatsapp: contact("whatsapp"),
+    telegram,
+    email,
+    support_hours: text("support_hours", 200),
+    about_text: text("about_text", 2000),
+    payment_note: text("payment_note", 1000),
+    copyright: text("copyright", 200),
+    visibility,
+    custom_fields: customFields,
   };
 }
 
@@ -189,7 +264,9 @@ export async function getAppSettings(): Promise<AppSettings> {
 
 /** تحديث الإعدادات — مسموح للمطوّر فقط (يُفرض في قاعدة البيانات). */
 export async function updateAppSettings(patch: Partial<AppSettings>): Promise<AppSettings> {
-  const { data, error } = await supabase.rpc("admin_update_app_settings", { p_patch: patch });
+  if (!patch || typeof patch !== "object" || Array.isArray(patch)) throw new Error("تحديث الإعدادات غير صالح.");
+  const clean = normalize({ ...(await getAppSettings()), ...patch }, true);
+  const { data, error } = await supabase.rpc("admin_update_app_settings", { p_patch: clean });
   if (error) throw new Error(error.message);
   return normalize((data ?? {}) as Partial<AppSettings>);
 }

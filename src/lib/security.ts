@@ -51,7 +51,7 @@ export interface EmailCheck {
 export function checkSignupEmail(raw: string): EmailCheck {
   const trimmed = String(raw ?? "").trim();
   const email = trimmed.toLowerCase();
-  const domain = email.split("@")[1] ?? "";
+  const [local = "", domain = ""] = email.split("@");
   const fail = (message: string): EmailCheck => ({ ok: false, email, domain, message });
 
   if (!email) return fail("أدخل البريد الإلكتروني.");
@@ -64,6 +64,10 @@ export function checkSignupEmail(raw: string): EmailCheck {
   if ((email.match(/@/g) ?? []).length !== 1) return fail("صيغة البريد الإلكتروني غير صحيحة.");
   if (DISPOSABLE_EMAIL_DOMAINS.includes(domain)) {
     return fail("لا نقبل البريد المؤقت أو الوهمي. استخدم بريداً حقيقياً.");
+  }
+  const localBase = local.split("+")[0].replace(/[._-]/g, "");
+  if (["test", "testing", "demo", "dummy", "fake", "example", "sample", "user", "unknown", "noreply", "noemail", "xxx"].includes(localBase) || /^(.)\1{3,}$/.test(localBase)) {
+    return fail("لا نقبل بريداً وهمياً أو تجريبياً. استخدم بريدك الحقيقي.");
   }
   if (!ALLOWED_EMAIL_DOMAINS.includes(domain)) {
     return fail("يُقبل التسجيل ببريد Gmail أو Yahoo أو Hotmail أو Outlook أو iCloud فقط.");
@@ -139,6 +143,7 @@ export interface FieldRule {
 export function safeField(value: unknown, rule: FieldRule): string {
   const { label, max = 500, min = 0, required = false } = rule;
   const raw = typeof value === "string" ? value : value == null ? "" : String(value);
+  if (raw.length > max) throw new Error(`حقل «${label}» طويل جداً (الحد ${max} محرفاً).`);
   if (looksMalicious(raw)) throw new Error(`المحتوى المُدخل في «${label}» غير مسموح به.`);
   const s = sanitizeText(raw, max);
   if (required && s.length === 0) throw new Error(`حقل «${label}» مطلوب.`);
@@ -146,11 +151,157 @@ export function safeField(value: unknown, rule: FieldRule): string {
   return s;
 }
 
-/** تحقق من رقم هاتف بسيط (أرقام ومسافات و + فقط). */
-export function safePhone(value: unknown, required = false): string {
-  const s = sanitizeText(value, 24).replace(/[^\d+\s-]/g, "").trim();
-  if (required && s.replace(/\D/g, "").length < 7) throw new Error("رقم الهاتف غير صحيح.");
+const PLACEHOLDER_VALUES = new Set([
+  "test", "testing", "demo", "dummy", "fake", "sample", "none", "null", "undefined", "unknown", "n/a", "na", "xxx", "xxxx",
+  "اختبار", "تجربة", "تجريبي", "وهمي", "غير معروف", "بدون", "لا يوجد", "لايوجد", "اسم", "عنوان", "عميل", "مستخدم", "مورد", "شركة", "شركة وهمية", "شركة تجريبية",
+  "customer", "user", "supplier", "company",
+]);
+
+function normalizedPlaceholder(value: string): string {
+  return value.toLocaleLowerCase("en").replace(/[\s._\-/\\]+/g, " ").trim();
+}
+
+/** يرفض القيم الوهمية الشائعة والتكرار المصطنع في حقول الهوية. */
+export function isPlausibleIdentityText(value: unknown): boolean {
+  const s = sanitizeText(value, 500);
+  const normalized = normalizedPlaceholder(s);
+  if (!normalized || PLACEHOLDER_VALUES.has(normalized)) return false;
+  const compact = normalized.replace(/\s/g, "");
+  if (compact.length >= 3 && /^(.)\1+$/u.test(compact)) return false;
+  if (/^(?:1234567890|0123456789|9876543210|0987654321)+$/.test(compact)) return false;
+  return (s.match(/[A-Za-z\u0600-\u06FF]/g) ?? []).length >= 2;
+}
+
+/** اسم شخص حقيقي ظاهرياً؛ التحقق لا يدّعي إثبات الهوية. */
+export function safePersonName(value: unknown, label = "الاسم"): string {
+  const s = safeField(value, { label, min: 2, max: 120, required: true });
+  if (!isPlausibleIdentityText(s)) throw new Error(`أدخل قيمة حقيقية وصحيحة في حقل «${label}».`);
+  if (!/^[A-Za-z\u0600-\u06FF][A-Za-z\u0600-\u06FF\s.'’-]*$/u.test(s)) {
+    throw new Error(`حقل «${label}» يجب أن يحتوي على حروف الاسم فقط.`);
+  }
   return s;
+}
+
+/** اسم شركة/منشأة غير فارغ أو وهمي. */
+export function safeCompanyName(value: unknown): string {
+  const s = safeField(value, { label: "اسم الشركة", min: 2, max: 120, required: true });
+  if (!isPlausibleIdentityText(s)) throw new Error("أدخل اسماً حقيقياً وصحيحاً للشركة.");
+  return s;
+}
+
+/** عنوان وصفي معقول، مع السماح بالأرقام وعلامات العنوان المعتادة. */
+export function safeAddress(value: unknown, label = "العنوان"): string {
+  const s = safeField(value, { label, min: 5, max: 300, required: true });
+  if (!isPlausibleIdentityText(s) || s.replace(/\s/g, "").length < 5) {
+    throw new Error(`أدخل قيمة حقيقية وكاملة في حقل «${label}».`);
+  }
+  return s;
+}
+
+function asciiDigits(value: unknown): string {
+  const arabic = "٠١٢٣٤٥٦٧٨٩";
+  const eastern = "۰۱۲۳۴۵۶۷۸۹";
+  return String(value ?? "")
+    .replace(/[٠-٩]/g, (d) => String(arabic.indexOf(d)))
+    .replace(/[۰-۹]/g, (d) => String(eastern.indexOf(d)));
+}
+
+/** تطبيع الهاتف إلى أرقام دولية/محلية ثابتة؛ + و00 لا يصنعان رقمين مختلفين. */
+export function normalizePhone(value: unknown): string {
+  const raw = asciiDigits(value).trim();
+  const digits = raw.replace(/\D/g, "");
+  return digits.startsWith("00") ? digits.slice(2) : digits;
+}
+
+/** تحقق صارم من الهاتف: لا يحذف الأحرف الخبيثة بصمت ولا يقبل الأرقام الوهمية. */
+export function safePhone(value: unknown, required = false): string {
+  const raw = stripControlChars(asciiDigits(value)).trim();
+  if (!raw) {
+    if (required) throw new Error("رقم الهاتف مطلوب.");
+    return "";
+  }
+  if (looksMalicious(raw) || !/^\+?[\d\s().-]+$/.test(raw) || (raw.match(/\+/g) ?? []).length > 1) {
+    throw new Error("رقم الهاتف يحتوي على رموز غير مسموح بها.");
+  }
+  const normalized = normalizePhone(raw);
+  const digits = normalized.replace(/\D/g, "");
+  if (digits.length < 8 || digits.length > 15) throw new Error("رقم الهاتف يجب أن يتكون من 8 إلى 15 رقماً.");
+  if (/^(\d)\1+$/.test(digits) || /(?:0123456789|1234567890|9876543210|0987654321)/.test(digits) || /(\d)\1{6,}$/.test(digits)) {
+    throw new Error("رقم الهاتف يبدو وهمياً. أدخل رقماً حقيقياً.");
+  }
+  return normalized;
+}
+
+/** بريد عام لبيانات العملاء والموردين (بلا حصره في مزوّدي بريد التسجيل). */
+export function safeEmail(value: unknown, required = false): string {
+  const raw = stripControlChars(String(value ?? "")).trim();
+  if (!raw) {
+    if (required) throw new Error("البريد الإلكتروني مطلوب.");
+    return "";
+  }
+  const email = raw.toLowerCase();
+  if (looksMalicious(email) || email.length > 254 || email.includes("..") || !EMAIL_RE.test(email)) {
+    throw new Error("صيغة البريد الإلكتروني غير صحيحة.");
+  }
+  return email;
+}
+
+/** رقم محدود وصريح؛ يرفض السلاسل الفارغة وNaN وInfinity بدلاً من تحويلها إلى صفر. */
+export function safeNumber(
+  value: unknown,
+  options: { label: string; min?: number; max?: number; integer?: boolean },
+): number {
+  const { label, min = -1_000_000_000_000, max = 1_000_000_000_000, integer = false } = options;
+  if (value === "" || value == null || typeof value === "boolean") throw new Error(`حقل «${label}» يجب أن يكون رقماً.`);
+  const n = typeof value === "string" ? Number(value.replace(/,/g, "").trim()) : Number(value);
+  if (!Number.isFinite(n)) throw new Error(`حقل «${label}» يجب أن يكون رقماً صالحاً.`);
+  if (integer && !Number.isInteger(n)) throw new Error(`حقل «${label}» يجب أن يكون عدداً صحيحاً.`);
+  if (n < min || n > max) throw new Error(`قيمة «${label}» خارج النطاق المسموح (${min} إلى ${max}).`);
+  return n;
+}
+
+/** تاريخ ISO حقيقي (يرفض مثلاً 2026-02-31 ولا يعتمد على تطبيع Date التلقائي). */
+export function safeIsoDate(value: unknown, label = "التاريخ"): string {
+  const s = String(value ?? "").trim();
+  const match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(s);
+  if (!match) throw new Error(`حقل «${label}» يجب أن يكون تاريخاً صالحاً.`);
+  const year = Number(match[1]);
+  const month = Number(match[2]);
+  const day = Number(match[3]);
+  const parsed = new Date(Date.UTC(year, month - 1, day));
+  if (
+    year < 1900 || year > 2200 ||
+    parsed.getUTCFullYear() !== year || parsed.getUTCMonth() !== month - 1 || parsed.getUTCDate() !== day
+  ) throw new Error(`حقل «${label}» يجب أن يكون تاريخاً صالحاً.`);
+  return s;
+}
+
+/** يتحقق من ترتيب ومدة سنة مالية معقولة. */
+export function safeFinancialYear(dateFrom: unknown, dateTo: unknown): { dateFrom: string; dateTo: string; year: number } {
+  const from = safeIsoDate(dateFrom, "بداية السنة المالية");
+  const to = safeIsoDate(dateTo, "نهاية السنة المالية");
+  const start = Date.parse(`${from}T00:00:00Z`);
+  const end = Date.parse(`${to}T00:00:00Z`);
+  const days = Math.round((end - start) / 86_400_000) + 1;
+  if (days < 180 || days > 550) throw new Error("يجب أن تكون نهاية السنة المالية بعد بدايتها، وأن تكون مدتها بين 180 و550 يوماً.");
+  return { dateFrom: from, dateTo: to, year: Number(from.slice(0, 4)) };
+}
+
+/** رابط ويب http/https فقط؛ يمنع javascript: وdata: والروابط المشوّهة. */
+export function safeUrl(value: unknown, label = "الرابط", required = false): string {
+  const raw = stripControlChars(String(value ?? "")).trim();
+  if (!raw) {
+    if (required) throw new Error(`حقل «${label}» مطلوب.`);
+    return "";
+  }
+  if (looksMalicious(raw) || raw.length > 500) throw new Error(`حقل «${label}» غير صالح.`);
+  try {
+    const u = new URL(raw);
+    if (u.protocol !== "https:" && u.protocol !== "http:") throw new Error();
+    return u.toString();
+  } catch {
+    throw new Error(`حقل «${label}» يجب أن يكون رابط http أو https صالحاً.`);
+  }
 }
 
 // ---------------------------------------------------------------------------

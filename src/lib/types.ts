@@ -26,12 +26,17 @@ export interface Company {
   created_at?: string;
 }
 
-/** الملف الشخصي — رابط المستخدم بشركته (بلا نظام أدوار/صلاحيات). */
+/** الملف الشخصي — رابط المستخدم بشركته ودوره داخلها. */
 export interface Profile {
   id: string;
   company_id: string | null;
   email: string;
   name: string;
+  /** صاحب الشركة الأساسي أو المستخدم الإضافي الذي أنشأه المطوّر. */
+  role: "owner" | "additional";
+  phone: string;
+  address: string;
+  is_active: boolean;
   created_at?: string;
 }
 
@@ -50,6 +55,17 @@ export interface Customer {
   name: string;
   address: string;
   phone: string;
+  /** بيانات ضريبية اختيارية للفاتورة القياسية. */
+  tax_number?: string;
+  commercial_reg?: string;
+  country?: string;
+  region?: string;
+  city?: string;
+  district?: string;
+  street?: string;
+  building_no?: string;
+  postal_code?: string;
+  additional_no?: string;
   opening_balance: number;
   notes: string;
   created_at?: string;
@@ -200,7 +216,7 @@ export interface PaymentVoucher {
   date: string;
   account_kind: "cashbox" | "bank";
   account_id: number;
-  voucher_type: "trip" | "advance" | "vehicle" | "general" | "supplier" | "owner";
+  voucher_type: "trip" | "advance" | "vehicle" | "general" | "supplier" | "purchase" | "owner";
   supplier_id?: number | null;
   supplier_name?: string | null;
   purchase_invoice_id?: number | null;
@@ -208,6 +224,11 @@ export interface PaymentVoucher {
   employee_id: number | null;
   vehicle_id: number | null;
   vehicle_expense: string;
+  /** عدد الوحدات المصروف عليها (مثال: تعبئتان وقود). */
+  quantity: number;
+  /** قيمة وحدة المصروف قبل ضربها في العدد. */
+  unit_amount: number;
+  /** الإجمالي = quantity × unit_amount. */
   amount: number;
   description: string;
   created_at?: string;

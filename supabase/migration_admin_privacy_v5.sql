@@ -4,7 +4,7 @@
 -- المطوّر يتحكّم في الاشتراك والبيانات التعريفية/الضريبية فقط،
 -- ولا يستطيع الاطّلاع على فواتير العملاء أو أرصدتهم أو عملياتهم — حتى من SQL
 -- عبر واجهة التطبيق (RLS)، لأن سياسة admin_full_access تُحذف من جداول التشغيل.
--- (مفتاح الخدمة service_role يبقى للنسخ الاحتياطي فقط ولا تستخدمه اللوحة.)
+-- (مفتاح الخدمة service_role يُستخدم فقط في مسارات خادمية محمية مثل إنشاء المستخدم الإضافي.)
 -- ============================================================================
 
 do $privacy$
@@ -13,7 +13,8 @@ declare
   -- الجداول الإدارية التي يحتاجها المطوّر فعلاً
   allowed text[] := array[
     'companies', 'profiles', 'activation_requests', 'support_messages',
-    'complaints', 'complaint_messages', 'app_settings', 'activity_logs'
+    'complaints', 'complaint_messages', 'app_settings', 'activity_logs',
+    'feature_catalog', 'company_features'
   ];
 begin
   for t in
@@ -43,7 +44,7 @@ begin
        )
        and c.relname <> all (array[
          'companies', 'profiles', 'activation_requests', 'support_messages',
-         'complaints', 'complaint_messages'
+         'complaints', 'complaint_messages', 'company_features'
        ])
   loop
     execute format('alter table public.%I enable row level security', t);

@@ -3,7 +3,7 @@ import { requireUser, userClient, extractAccessToken } from "@/lib/server/supaba
 import { rateLimit, clientIp } from "@/lib/server/rate-limit";
 import { notifyAdmin, escapeTelegramHtml } from "@/lib/server/telegram";
 import { sendPhotoToAdmin, detectImageMime, MAX_PHOTO_BYTES } from "@/lib/server/telegram-photo";
-import { safeField, safePhone } from "@/lib/security";
+import { safeField, safePersonName, safePhone } from "@/lib/security";
 import { sameOrigin } from "@/lib/server/admin-session";
 
 export const runtime = "nodejs";
@@ -57,7 +57,7 @@ export async function POST(req: NextRequest) {
 
   let payerName: string, payerPhone: string, transferRef: string, notes: string;
   try {
-    payerName = safeField(str("payer_name"), { label: "اسم المُحوِّل", max: 120, required: true, min: 3 });
+    payerName = safePersonName(str("payer_name"), "اسم المُحوِّل");
     payerPhone = safePhone(str("payer_phone"), true);
     transferRef = safeField(str("transfer_ref"), { label: "رقم العملية", max: 80 });
     notes = safeField(str("notes"), { label: "ملاحظات", max: 800 });

@@ -4,13 +4,28 @@ import { useState } from "react";
 import { useRouter } from "next/navigation";
 import Link from "next/link";
 import { signUp } from "@/lib/auth";
-import { checkSignupEmail, checkPassword, ALLOWED_EMAIL_HINT } from "@/lib/security";
+import {
+  checkSignupEmail,
+  checkPassword,
+  ALLOWED_EMAIL_HINT,
+  safeAddress,
+  safeCompanyName,
+  safeFinancialYear,
+  safePersonName,
+  safePhone,
+} from "@/lib/security";
 import { notify } from "@/components/toast";
+import PasswordInput from "@/components/PasswordInput";
+
+const INITIAL_YEAR = new Date().getFullYear();
 
 export default function RegisterPage() {
   const router = useRouter();
   const [companyName, setCompanyName] = useState("");
+  const [yearStart, setYearStart] = useState(`${INITIAL_YEAR}-01-01`);
+  const [yearEnd, setYearEnd] = useState(`${INITIAL_YEAR}-12-31`);
   const [name, setName] = useState("");
+  const [address, setAddress] = useState("");
   const [phone, setPhone] = useState("");
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
@@ -22,8 +37,20 @@ export default function RegisterPage() {
   const submit = async (e: React.FormEvent) => {
     e.preventDefault();
     setError("");
-    if (!companyName.trim()) return setError("أدخل اسم الشركة.");
-    if (!name.trim()) return setError("أدخل اسم المسؤول.");
+    let cleanCompany: string;
+    let cleanName: string;
+    let cleanAddress: string;
+    let cleanPhone: string;
+    let financialYear: ReturnType<typeof safeFinancialYear>;
+    try {
+      cleanCompany = safeCompanyName(companyName);
+      financialYear = safeFinancialYear(yearStart, yearEnd);
+      cleanName = safePersonName(name, "اسم المسؤول");
+      cleanAddress = safeAddress(address, "عنوان المسؤول");
+      cleanPhone = safePhone(phone, true);
+    } catch (validationError) {
+      return setError(validationError instanceof Error ? validationError.message : "تحقق من البيانات المطلوبة.");
+    }
     const em = checkSignupEmail(email);
     if (!em.ok) return setError(em.message);
     const pw = checkPassword(password);
@@ -35,9 +62,12 @@ export default function RegisterPage() {
       const res = await signUp({
         email: em.email,
         password,
-        name: name.trim(),
-        companyName: companyName.trim(),
-        phone: phone.trim(),
+        name: cleanName,
+        companyName: cleanCompany,
+        address: cleanAddress,
+        phone: cleanPhone,
+        yearStart: financialYear.dateFrom,
+        yearEnd: financialYear.dateTo,
       });
       if (!res.ok) {
         setError(translateAuthError(res.message));
@@ -48,7 +78,8 @@ export default function RegisterPage() {
         return;
       }
       if ((res as { needsOnboarding?: boolean }).needsOnboarding) {
-        notify("تم إنشاء حسابك — أكمل بيانات الشركة.", "success");
+        const detail = (res as { message?: string }).message;
+        notify(detail ? `تم إنشاء حساب الدخول، لكن تعذّر إنشاء ملف الشركة: ${translateAuthError(detail)} يمكنك تصحيح البيانات الآن.` : "تم إنشاء حسابك — أكمل بيانات الشركة.", detail ? "warning" : "success");
         router.replace("/onboarding");
         return;
       }
@@ -85,32 +116,51 @@ export default function RegisterPage() {
 
       <form onSubmit={submit} style={{ display: "grid", gap: 14 }}>
         <div>
-          <label className="field-label">اسم الشركة</label>
-          <input className="input-base" value={companyName} onChange={(e) => setCompanyName(e.target.value)} placeholder="شركة النقل للخدمات اللوجستية" autoFocus />
+          <label className="field-label">اسم الشركة <span aria-hidden="true">*</span></label>
+          <input className="input-base" value={companyName} onChange={(e) => setCompanyName(e.target.value)} placeholder="شركة النقل للخدمات اللوجستية" maxLength={120} autoComplete="organization" required autoFocus />
         </div>
-        <div className="two-col">
-          <div>
-            <label className="field-label">اسم المسؤول</label>
-            <input className="input-base" value={name} onChange={(e) => setName(e.target.value)} placeholder="أحمد محمد" />
+
+        <div className="auth-required-section" aria-labelledby="financial-year-title">
+          <div id="financial-year-title" className="auth-section-title">السنة المالية الأولى (إلزامية)</div>
+          <div className="field-hint">لن يُنشأ ملف الشركة قبل فتح سنة مالية صالحة.</div>
+          <div className="two-col">
+            <div>
+              <label className="field-label">تاريخ البداية *</label>
+              <input className="input-base" type="date" dir="ltr" value={yearStart} onChange={(e) => setYearStart(e.target.value)} min="1900-01-01" max="2200-12-31" required />
+            </div>
+            <div>
+              <label className="field-label">تاريخ النهاية *</label>
+              <input className="input-base" type="date" dir="ltr" value={yearEnd} onChange={(e) => setYearEnd(e.target.value)} min="1900-01-01" max="2200-12-31" required />
+            </div>
           </div>
-          <div>
-            <label className="field-label">الهاتف (اختياري)</label>
-            <input className="input-base" value={phone} onChange={(e) => setPhone(e.target.value)} placeholder="05xxxxxxxx" dir="ltr" />
-          </div>
+        </div>
+
+        <div>
+          <label className="field-label">اسم المسؤول *</label>
+          <input className="input-base" value={name} onChange={(e) => setName(e.target.value)} placeholder="أحمد محمد" maxLength={120} autoComplete="name" required />
+        </div>
+        <div>
+          <label className="field-label">عنوان المسؤول *</label>
+          <input className="input-base" value={address} onChange={(e) => setAddress(e.target.value)} placeholder="المدينة، الحي، الشارع ورقم المبنى" maxLength={300} autoComplete="street-address" required />
+        </div>
+        <div>
+          <label className="field-label">رقم الهاتف *</label>
+          <input className="input-base" type="tel" value={phone} onChange={(e) => setPhone(e.target.value)} placeholder="05xxxxxxxx" dir="ltr" maxLength={24} autoComplete="tel" required />
+          <div className="field-hint">يجب أن يكون رقماً حقيقياً وغير مستخدم في حساب شركة أخرى.</div>
         </div>
         <div>
           <label className="field-label">البريد الإلكتروني</label>
-          <input className="input-base" type="email" dir="ltr" value={email} onChange={(e) => setEmail(e.target.value)} placeholder="you@gmail.com" autoComplete="email" />
+          <input className="input-base" type="email" dir="ltr" value={email} onChange={(e) => setEmail(e.target.value)} placeholder="you@gmail.com" maxLength={120} autoComplete="email" required />
           <div className="field-hint">يُقبل التسجيل ببريد حقيقي من: {ALLOWED_EMAIL_HINT} — البريد المؤقت/الوهمي مرفوض.</div>
         </div>
         <div className="two-col">
           <div>
             <label className="field-label">كلمة المرور</label>
-            <input className="input-base" type="password" dir="ltr" value={password} onChange={(e) => setPassword(e.target.value)} placeholder="8 أحرف على الأقل" />
+            <PasswordInput className="input-base" dir="ltr" value={password} onChange={(e) => setPassword(e.target.value)} placeholder="8 أحرف على الأقل" autoComplete="new-password" required />
           </div>
           <div>
             <label className="field-label">تأكيد كلمة المرور</label>
-            <input className="input-base" type="password" dir="ltr" value={confirm} onChange={(e) => setConfirm(e.target.value)} placeholder="••••••••" />
+            <PasswordInput className="input-base" dir="ltr" value={confirm} onChange={(e) => setConfirm(e.target.value)} placeholder="••••••••" autoComplete="new-password" showLabel="إظهار تأكيد كلمة المرور" hideLabel="إخفاء تأكيد كلمة المرور" required />
           </div>
         </div>
 
@@ -133,7 +183,9 @@ export default function RegisterPage() {
 
 function translateAuthError(msg: string): string {
   const m = msg.toLowerCase();
-  if (m.includes("already registered") || m.includes("already exists"))
+  if (m.includes("phone") || m.includes("هاتف") || m.includes("الهاتف"))
+    return "رقم الهاتف مستخدم بالفعل في حساب شركة أخرى.";
+  if (m.includes("already registered") || m.includes("already exists") || m.includes("duplicate") || (m.includes("البريد") && m.includes("مستخدم بالفعل")))
     return "هذا البريد الإلكتروني مسجّل بالفعل.";
   if (m.includes("password")) return "كلمة المرور ضعيفة. استخدم 8 أحرف على الأقل مع أرقام.";
   if (m.includes("gmail") || m.includes("outlook") || m.includes("مسموح") || m.includes("يُقبل"))

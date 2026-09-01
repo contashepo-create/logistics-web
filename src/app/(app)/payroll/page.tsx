@@ -10,6 +10,7 @@ import { notify } from "@/components/toast";
 import { money, todayIso, EMP_TYPES, periodLabel } from "@/lib/format";
 import { voucherNumberLabel } from "@/lib/calc";
 import { exportPage } from "@/lib/exportHelper";
+import { printPayrollSlip } from "@/lib/payrollPrint";
 
 function yearStart(): string { return `${new Date().getFullYear()}-01-01`; }
 
@@ -66,8 +67,10 @@ export default function PayrollPage() {
       {isLoading ? <Spinner /> : (
         <>
           <DataTable headers={headers} rows={rows} ids={(data ?? []).map((p) => p.id)}
+            extra={[{ key: "print-slip", label: "🖨️", title: "طباعة مسير هذا الموظف لهذا الشهر" }]}
             onAction={(id, key) => {
-              if (key === "view") setDialog({ mode: "view", id: Number(id) });
+              if (key === "print-slip") void printPayrollSlip(Number(id));
+              else if (key === "view") setDialog({ mode: "view", id: Number(id) });
               else if (key === "edit") setDialog({ mode: "edit", id: Number(id) });
               else if (key === "delete") onDelete(Number(id));
             }} />

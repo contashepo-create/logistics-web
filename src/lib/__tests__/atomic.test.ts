@@ -18,7 +18,7 @@ function setup(): void {
 
 async function seedBasics() {
   await repo.saveYear({ year: 2026, date_from: "2026-01-01", date_to: "2026-12-31" });
-  const cust = await repo.saveCustomer({ name: "عميل", opening_balance: 0 });
+  const cust = await repo.saveCustomer({ name: "شركة العميل", opening_balance: 0 });
   const cb = await repo.saveAccount("cashbox", { name: "خزينة", created_date: "2026-01-01", opening_balance: 100000 });
   return { cust, cb };
 }

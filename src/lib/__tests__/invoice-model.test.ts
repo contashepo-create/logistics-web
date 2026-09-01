@@ -26,7 +26,7 @@ function setupCompany(vatRate = 0): void {
 async function seed() {
   setupCompany(0);
   await repo.saveYear({ year: 2026, date_from: "2026-01-01", date_to: "2026-12-31", notes: "" });
-  const cust = await repo.saveCustomer({ name: "عميل", opening_balance: 0, notes: "" });
+  const cust = await repo.saveCustomer({ name: "شركة العميل", opening_balance: 0, notes: "" });
   const cb = await repo.saveAccount("cashbox", { name: "الخزينة الرئيسية", created_date: "2026-01-01", opening_balance: 10000, notes: "" });
   const drv = await repo.saveEmployee({ name: "سائق", emp_type: "driver", notes: "" });
   return { cust, cb, drv };

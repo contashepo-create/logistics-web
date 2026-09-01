@@ -17,7 +17,7 @@ interface Ctx { cust: number; emp: number; cb: number; inv: number; veh: number 
 
 async function buildCompany(prefix: string): Promise<Ctx> {
   await repo.saveYear({ year: 2026, date_from: "2026-01-01", date_to: "2026-12-31" });
-  const cust = await repo.saveCustomer({ name: `${prefix}-عميل`, phone: "01", address: "", opening_balance: 0 });
+  const cust = await repo.saveCustomer({ name: `${prefix}-عميل`, phone: `0101234567${prefix === "A" ? "8" : "9"}`, address: "", opening_balance: 0 });
   const emp = await repo.saveEmployee({ name: `${prefix}-موظف`, emp_type: "driver", base_salary: 5000 });
   const veh = await repo.saveVehicle({ plate_number: `${prefix}-123`, vehicle_type: "شاحنة", notes: "" });
   const cb = await repo.saveAccount("cashbox", { name: `${prefix}-خزينة`, created_date: "2026-01-01", opening_balance: 50000 });

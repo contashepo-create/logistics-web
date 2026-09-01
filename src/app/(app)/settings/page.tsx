@@ -18,12 +18,14 @@ import {
   type PrintSettings,
   type PrintTemplate,
 } from "@/lib/print";
-import { buildReportHtml, printHtml } from "@/lib/exporter";
+import { printHtml } from "@/lib/exporter";
+import { renderInvoiceTemplate, type InvoiceTemplateModel } from "@/lib/invoice-template-html";
 import {
   ENTITY_TYPES, TAX_STATUSES, SA_REGIONS, COUNTRIES,
   formatNationalAddress, validateTaxProfile,
 } from "@/lib/tax";
-import { docOptions } from "@/lib/exportHelper";
+import { hasFeature } from "@/lib/features";
+import { amountToArabicWords } from "@/lib/format";
 
 type Tab = "company" | "print" | "appearance" | "about";
 
@@ -57,6 +59,7 @@ export default function SettingsPage() {
 
   // الطباعة
   const [ps, setPs] = useState<PrintSettings>(DEFAULT_PRINT_SETTINGS);
+  const [taxInvoiceEnabled, setTaxInvoiceEnabled] = useState(false);
   const [savingPrint, setSavingPrint] = useState(false);
 
   useEffect(() => {
@@ -74,6 +77,7 @@ export default function SettingsPage() {
       });
     });
     getPrintSettings().then(setPs);
+    hasFeature("tax_invoice").then(setTaxInvoiceEnabled);
   }, []);
 
   const saveCompany = async () => {
@@ -120,55 +124,58 @@ export default function SettingsPage() {
     }
   };
 
-  /** صفحة تجريبية بنفس محرك الطباعة الفعلي. */
-  const testPrint = async () => {
-    const info = await companyInfo();
-    const html = buildReportHtml({
-      info,
-      title: "صفحة تجريبية لإعدادات الطباعة",
-      subtitle: "هذه معاينة حقيقية بنفس محرّك طباعة التقارير",
-      headers: ["#", "البيان", "المبلغ", "التاريخ"],
-      rows: Array.from({ length: 8 }, (_, i) => [i + 1, `سطر تجريبي رقم ${i + 1}`, (1000 * (i + 1)).toLocaleString("en-US"), "2026-01-0" + ((i % 9) + 1)]),
-      summaryLines: [["الإجمالي", "36,000.00"], ["عدد السطور", "8"]],
-      centerFrom: 1,
-      doc: docOptions(ps),
-    });
-    printHtml(html, "صفحة تجريبية", { css: printCss(ps), watermark: ps.watermark });
+  const invoiceSample = useMemo<InvoiceTemplateModel>(() => {
+    const rate = Number(vatRate) || 0;
+    const subtotal = 3000;
+    const vat = Math.round(subtotal * rate) / 100;
+    return {
+      invoiceNumber: "INV-00042",
+      issueDate: "2026-09-01",
+      invoiceTitleAr: "فاتورة ضريبية",
+      invoiceTitleEn: "Tax Invoice",
+      currency: currency || "ر.س",
+      containerNumber: "MSCU-4587921",
+      seller: {
+        name: name || "اسم الشركة",
+        nameEn: org.company_name_en,
+        taxNumber: org.company_tax_number || "310000000000003",
+        commercialRegistration: org.company_commercial_reg,
+        unifiedNumber: org.company_unified_number,
+        address,
+        phone,
+        email: org.company_email,
+        website: org.company_website,
+      },
+      buyer: { name: "شركة العميل النموذجية", code: "CUS-0042", taxNumber: "310000000000010", address: "الرياض" },
+      lines: [
+        { description: "خدمة نقل: الرياض ← جدة", detail: "حاوية 40 قدم", quantity: 2, unitAmount: 1000, taxableAmount: 2000, vatRate: rate, vatAmount: Math.round(2000 * rate) / 100, total: 2000 + Math.round(2000 * rate) / 100 },
+        { description: "خدمة نقل: جدة ← الدمام", detail: "شحنة تجارية", quantity: 1, unitAmount: 1000, taxableAmount: 1000, vatRate: rate, vatAmount: Math.round(1000 * rate) / 100, total: 1000 + Math.round(1000 * rate) / 100 },
+      ],
+      subtotal,
+      vatRate: rate,
+      vatAmount: vat,
+      total: subtotal + vat,
+      amountInWords: amountToArabicWords(subtotal + vat, currency || "ر.س"),
+      notes: "تُستحق الفاتورة وفق شروط الدفع المتفق عليها.",
+      footerText: vatNote,
+    };
+  }, [name, phone, address, currency, vatNote, vatRate, org]);
+
+  /** فاتورة تجريبية بنفس قالب الفاتورة الفعلي. */
+  const testPrint = () => {
+    const html = renderInvoiceTemplate(invoiceSample, ps);
+    printHtml(html, "فاتورة تجريبية", { css: printCss(ps), watermark: ps.watermark });
   };
 
-  /** نفس محرّك الطباعة، لكن داخل إطار معاينة بدل نافذة الطباعة. */
+  /** القالب نفسه داخل إطار المعاينة؛ لذلك تظهر الفروق الهيكلية فور الاختيار. */
   const previewHtml = useMemo(() => {
-    const body = buildReportHtml({
-      info: {
-        company_name: name || "اسم الشركة",
-        company_phone: phone,
-        company_address: address,
-        currency: currency || "ر.س",
-        company_vat_note: vatNote,
-        vat_rate: vatRate,
-      },
-      title: "معاينة مباشرة لإعدادات الطباعة",
-      subtitle: "تتغيّر فوراً مع كل تعديل — لا حاجة للحفظ أولاً",
-      headers: ["#", "البيان", "المبلغ", "التاريخ"],
-      rows: Array.from({ length: 5 }, (_, i) => [
-        i + 1,
-        `سطر تجريبي رقم ${i + 1}`,
-        (1000 * (i + 1)).toLocaleString("en-US"),
-        `2026-01-0${(i % 9) + 1}`,
-      ]),
-      summaryLines: [["الإجمالي", "15,000.00"], ["عدد السطور", "5"]],
-      centerFrom: 1,
-      doc: docOptions(ps),
-    });
+    const body = renderInvoiceTemplate(invoiceSample, ps);
     const wm = ps.watermark
-      ? `<div style="position:fixed;inset:0;display:flex;align-items:center;justify-content:center;
-            font-size:60px;color:rgba(0,0,0,.07);transform:rotate(-30deg);pointer-events:none">${ps.watermark}</div>`
+      ? `<div style="position:fixed;inset:0;display:flex;align-items:center;justify-content:center;font-size:60px;color:rgba(0,0,0,.07);transform:rotate(-30deg);pointer-events:none">${ps.watermark}</div>`
       : "";
     return `<!doctype html><html dir="rtl" lang="ar"><head><meta charset="utf-8">
-      <style>${printCss(ps)}
-        body{margin:0;padding:10px;background:#fff}
-      </style></head><body>${wm}${body}</body></html>`;
-  }, [ps, name, phone, address, currency, vatNote, vatRate]);
+      <style>${printCss(ps)} body{margin:0;padding:10px;background:#fff}</style></head><body>${wm}${body}</body></html>`;
+  }, [ps, invoiceSample]);
 
   const dims = paperDimensions(ps);
 
@@ -416,7 +423,14 @@ export default function SettingsPage() {
               <Check label="عنوان العميل" checked={ps.invoice_show_customer_address} onChange={(v) => set("invoice_show_customer_address", v)} />
               <Check label="هاتف العميل" checked={ps.invoice_show_customer_phone} onChange={(v) => set("invoice_show_customer_phone", v)} />
               <Check label="رمز العملة" checked={ps.invoice_show_currency} onChange={(v) => set("invoice_show_currency", v)} />
-              <Check label="الباركود (يُطبع فقط عند اكتمال بيانات الشركة والعميل)" checked={ps.invoice_show_barcode} onChange={(v) => set("invoice_show_barcode", v)} />
+              <Check
+                label={taxInvoiceEnabled
+                  ? "الباركود الضريبي (مفعّل من المطوّر ويُطبع عند اكتمال البيانات)"
+                  : "الباركود الضريبي (غير مفعّل لهذه الشركة — يديره المطوّر)"}
+                checked={taxInvoiceEnabled}
+                disabled
+                onChange={() => undefined}
+              />
             </div>
           </div>
 
@@ -487,10 +501,10 @@ export default function SettingsPage() {
 }
 
 /** مربع اختيار موحّد بمساحة لمس مناسبة للجوال. */
-function Check({ label, checked, onChange }: { label: string; checked: boolean; onChange: (v: boolean) => void }) {
+function Check({ label, checked, onChange, disabled = false }: { label: string; checked: boolean; onChange: (v: boolean) => void; disabled?: boolean }) {
   return (
-    <label className="check-row">
-      <input type="checkbox" checked={checked} onChange={(e) => onChange(e.target.checked)} />
+    <label className="check-row" style={disabled ? { opacity: 0.72, cursor: "not-allowed" } : undefined}>
+      <input type="checkbox" checked={checked} disabled={disabled} onChange={(e) => onChange(e.target.checked)} />
       <span>{label}</span>
     </label>
   );

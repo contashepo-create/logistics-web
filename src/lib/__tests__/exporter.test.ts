@@ -1,6 +1,6 @@
 // اختبارات محرك التصدير/الطباعة (الدوال الخالصة): تعقيم XSS وبناء HTML.
-import { describe, it, expect } from "vitest";
-import { esc, companyHeaderHtml, buildTableHtml, buildReportHtml } from "@/lib/exporter";
+import { describe, it, expect, vi } from "vitest";
+import { esc, companyHeaderHtml, buildTableHtml, buildReportHtml, openPrintPreview } from "@/lib/exporter";
 
 describe("esc — تعقيم XSS", () => {
   it("يعقّم الرموز الخطرة", () => {
@@ -50,6 +50,26 @@ describe("buildTableHtml", () => {
   it("يحاذي لليمين بلا centerFrom", () => {
     const html = buildTableHtml(["a"], [["v"]]);
     expect(html).toContain("align='right'");
+  });
+});
+
+describe("معاينة الطباعة الفورية", () => {
+  it("يفتح النافذة ويكتب حالة التحميل فوراً قبل تجهيز المستند", () => {
+    const writes: string[] = [];
+    const popup = {
+      document: { open: vi.fn(), write: (html: string) => writes.push(html), close: vi.fn() },
+      focus: vi.fn(),
+    };
+    const open = vi.fn(() => popup);
+    vi.stubGlobal("window", { open });
+    try {
+      expect(openPrintPreview("فاتورة 42")).toBe(popup);
+      expect(open).toHaveBeenCalledOnce();
+      expect(writes.join("")).toContain("جارٍ تجهيز معاينة الفاتورة");
+      expect(writes.join("")).toContain("فاتورة 42");
+    } finally {
+      vi.unstubAllGlobals();
+    }
   });
 });
 

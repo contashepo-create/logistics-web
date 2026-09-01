@@ -2,7 +2,7 @@
 import "server-only";
 import { createHash } from "crypto";
 import { serviceClient } from "./supabase";
-import { generateTicketCode, isValidTicketCode, normalizeCode, safeField, safePhone } from "@/lib/security";
+import { generateTicketCode, isValidTicketCode, normalizeCode, safeEmail, safeField, safePersonName, safePhone } from "@/lib/security";
 
 export interface ComplaintPublic {
   ticket: string;
@@ -18,11 +18,7 @@ export function hashIp(ip: string): string {
 
 /** بريد للتتبّع: أي بريد صحيح الصيغة (الزائر قد لا يملك حساباً). */
 function normalizeEmail(v: unknown): string {
-  const s = String(v ?? "").trim().toLowerCase();
-  if (!/^[a-z0-9][a-z0-9._%+-]{0,62}@[a-z0-9-]+(\.[a-z0-9-]+)+$/.test(s)) {
-    throw new Error("صيغة البريد الإلكتروني غير صحيحة.");
-  }
-  return s;
+  return safeEmail(v, true);
 }
 
 export interface NewComplaintInput {
@@ -36,7 +32,7 @@ export interface NewComplaintInput {
 
 /** إنشاء شكوى جديدة وإرجاع رقم التتبع. */
 export async function createComplaint(input: NewComplaintInput): Promise<{ ticket: string }> {
-  const name = safeField(input.name, { label: "الاسم", max: 120, min: 3, required: true });
+  const name = safePersonName(input.name, "الاسم");
   const email = normalizeEmail(input.email);
   const phone = safePhone(input.phone, false);
   const subject = safeField(input.subject, { label: "موضوع الشكوى", max: 140, min: 4, required: true });

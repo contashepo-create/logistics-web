@@ -76,25 +76,30 @@ export default function InvoiceFullForm() {
           expenses: [],
         })),
       });
-      // تحذير بعد الإصدار: بيانات ناقصة = لا يُنشأ/يُطبع الباركود حتى استكمالها
+      // عند تفعيل المطوّر للفاتورة الضريبية فقط: ننبه إلى البيانات الناقصة
+      // اللازمة للباركود. عند توقف الميزة يظهر تحذير عدم مطابقة زاتكا وقت الطباعة.
       let warn = "";
       try {
-        const [info, cust] = await Promise.all([companyInfo(), getCustomer(Number(f.customer_id))]);
-        const { zatcaInvoiceType, zatcaMissingFields } = await import("@/lib/zatca");
-        const { formatNationalAddress } = await import("@/lib/tax");
-        const c = (cust ?? {}) as Record<string, string | undefined>;
-        const sellerAddress = formatNationalAddress({
-          country: info.company_country, region: info.company_region, city: info.company_city,
-          district: info.company_district, street: info.company_street, building_no: info.company_building_no,
-          postal_code: info.company_postal_code, additional_no: info.company_additional_no,
-          address_note: info.company_address_note,
-        }) || info.company_address || "";
-        const type = zatcaInvoiceType({ tax_number: c.tax_number, tax_status: c.tax_status });
-        const missing = zatcaMissingFields({
-          sellerName: info.company_name, sellerVat: info.company_tax_number, sellerAddress,
-          buyerName: c.name, buyerVat: c.tax_number, type, date: f.date,
-        });
-        if (missing.length) warn = ` — ⚠️ بيانات الفاتورة ناقصة (${missing.join("، ")}) ولن يُنشأ/يُطبع الباركود حتى استكمالها.`;
+        const { hasFeature } = await import("@/lib/features");
+        const taxInvoiceEnabled = await hasFeature("tax_invoice");
+        if (taxInvoiceEnabled) {
+          const [info, cust] = await Promise.all([companyInfo(), getCustomer(Number(f.customer_id))]);
+          const { zatcaInvoiceType, zatcaMissingFields } = await import("@/lib/zatca");
+          const { formatNationalAddress } = await import("@/lib/tax");
+          const c = (cust ?? {}) as Record<string, string | undefined>;
+          const sellerAddress = formatNationalAddress({
+            country: info.company_country, region: info.company_region, city: info.company_city,
+            district: info.company_district, street: info.company_street, building_no: info.company_building_no,
+            postal_code: info.company_postal_code, additional_no: info.company_additional_no,
+            address_note: info.company_address_note,
+          }) || info.company_address || "";
+          const type = zatcaInvoiceType({ tax_number: c.tax_number, tax_status: c.tax_status });
+          const missing = zatcaMissingFields({
+            sellerName: info.company_name, sellerVat: info.company_tax_number, sellerAddress,
+            buyerName: c.name, buyerVat: c.tax_number, type, date: f.date,
+          });
+          if (missing.length) warn = ` — ⚠️ بيانات الفاتورة ناقصة (${missing.join("، ")}) ولن يُنشأ/يُطبع الباركود حتى استكمالها.`;
+        }
       } catch { /* تحذير فقط؛ لا يمنع حفظ الفاتورة */ }
       notify(warn ? `تم حفظ الفاتورة بنجاح.${warn}` : "تم حفظ الفاتورة بنجاح.", warn ? "warning" : "success");
       router.push("/invoices");

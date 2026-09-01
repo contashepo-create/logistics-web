@@ -81,7 +81,7 @@ describe("أداء تحميل الشاشات (منع N+1)", () => {
 
   it("أرصدة الخزائن بعدد استعلامات ثابت", async () => {
     for (let i = 0; i < 6; i += 1) {
-      await repo.saveAccount("cashbox", { name: `خزينة ${i}`, opening_balance: 1000 });
+      await repo.saveAccount("cashbox", { name: `خزينة ${i}`, created_date: "2026-01-01", opening_balance: 1000 });
     }
     resetQueryCount();
     const rows = await calc.accountsWithBalance("cashbox");

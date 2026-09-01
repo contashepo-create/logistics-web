@@ -4,7 +4,16 @@
 import { supabase } from "./supabase";
 import type { User, Session } from "@supabase/supabase-js";
 import type { Company, Profile } from "./types";
-import { checkSignupEmail, checkPassword, sanitizeText } from "./security";
+import {
+  checkSignupEmail,
+  checkPassword,
+  safeAddress,
+  safeCompanyName,
+  safeEmail,
+  safeFinancialYear,
+  safePersonName,
+  safePhone,
+} from "./security";
 import { translateDbError } from "./db";
 
 /**
@@ -53,7 +62,11 @@ export function onAuthChange(cb: (session: Session | null) => void) {
 
 /** تسجيل الدخول بالبريد وكلمة المرور. */
 export async function signIn(email: string, password: string): Promise<AuthResult> {
-  const { data, error } = await supabase.auth.signInWithPassword({ email, password });
+  let cleanEmail: string;
+  try { cleanEmail = safeEmail(email, true); }
+  catch (validationError) { return { ok: false, message: validationError instanceof Error ? validationError.message : "البريد الإلكتروني غير صالح." }; }
+  if (!password || password.length > 72) return { ok: false, message: "كلمة المرور غير صالحة." };
+  const { data, error } = await supabase.auth.signInWithPassword({ email: cleanEmail, password });
   if (error) return { ok: false, message: error.message };
   return { ok: true, session: data.session };
 }
@@ -62,29 +75,57 @@ export async function signIn(email: string, password: string): Promise<AuthResul
  * إنشاء حساب جديد ثم إنشاء الشركة عبر دالة خادمية محمية (register_company).
  * إذا كانت رسائل التأكيد مفعّلة فلن توجد جلسة فوراً — نعيد حالة "verify".
  */
-export async function signUp(input: {
-  email: string;
-  password: string;
+export interface CompanySetupInput {
   name: string;
   companyName: string;
-  phone?: string;
-}): Promise<AuthResult & { needsVerification?: boolean; needsOnboarding?: boolean }> {
+  address: string;
+  phone: string;
+  yearStart: string;
+  yearEnd: string;
+}
+
+export async function signUp(input: CompanySetupInput & { email: string; password: string }): Promise<AuthResult & { needsVerification?: boolean; needsOnboarding?: boolean }> {
   // منع أي بريد وهمي/مؤقت قبل مغادرة المتصفح (والتحقق مكرر في قاعدة البيانات)
   const em = checkSignupEmail(input.email);
   if (!em.ok) return { ok: false, message: em.message };
   const pw = checkPassword(input.password);
   if (!pw.ok) return { ok: false, message: pw.message };
 
-  const name = sanitizeText(input.name, 120);
-  const companyName = sanitizeText(input.companyName, 120);
-  if (!companyName) return { ok: false, message: "اسم الشركة مطلوب." };
+  let name: string;
+  let companyName: string;
+  let address: string;
+  let phone: string;
+  let year: ReturnType<typeof safeFinancialYear>;
+  try {
+    name = safePersonName(input.name, "اسم المسؤول");
+    companyName = safeCompanyName(input.companyName);
+    address = safeAddress(input.address, "عنوان المسؤول");
+    phone = safePhone(input.phone, true);
+    year = safeFinancialYear(input.yearStart, input.yearEnd);
+  } catch (validationError) {
+    return { ok: false, message: validationError instanceof Error ? validationError.message : "بيانات التسجيل غير صالحة." };
+  }
 
   const { data, error } = await withTimeout(supabase.auth.signUp({
     email: em.email,
     password: input.password,
-    options: { data: { name, company_name: companyName } },
+    options: {
+      data: {
+        name,
+        company_name: companyName,
+        owner_address: address,
+        phone,
+        financial_year_start: year.dateFrom,
+        financial_year_end: year.dateTo,
+      },
+    },
   }), 25000, "إنشاء الحساب");
   if (error) return { ok: false, message: error.message };
+  // عند تفعيل حماية منع كشف الحسابات قد يعيد GoTrue مستخدماً بلا identities
+  // للبريد المكرر بدلاً من خطأ صريح. لا نتعامل معه كتسجيل ناجح.
+  if (data.user && Array.isArray(data.user.identities) && data.user.identities.length === 0) {
+    return { ok: false, message: "هذا البريد الإلكتروني مسجّل بالفعل." };
+  }
 
   if (!data.session) {
     // تأكيد البريد مطلوب — تُنشأ الشركة عند أول دخول بعد التأكيد
@@ -93,7 +134,14 @@ export async function signUp(input: {
 
   try {
     await withTimeout(
-      registerCurrentCompany({ companyName, name, phone: input.phone }),
+      registerCurrentCompany({
+        companyName,
+        name,
+        address,
+        phone,
+        yearStart: year.dateFrom,
+        yearEnd: year.dateTo,
+      }),
       20000,
       "إنشاء الشركة"
     );
@@ -104,18 +152,22 @@ export async function signUp(input: {
   return { ok: true, session: data.session };
 }
 
-/** إنشاء شركة المستخدم الحالي (بعد التسجيل أو عند غيابها). */
-export async function registerCurrentCompany(input: {
-  companyName: string;
-  name?: string;
-  phone?: string;
-}): Promise<string | null> {
+/** إنشاء الشركة والسنة المالية الأولى معاً داخل معاملة واحدة. */
+export async function registerCurrentCompany(input: CompanySetupInput): Promise<string | null> {
+  const companyName = safeCompanyName(input.companyName);
+  const name = safePersonName(input.name, "اسم المسؤول");
+  const address = safeAddress(input.address, "عنوان المسؤول");
+  const phone = safePhone(input.phone, true);
+  const year = safeFinancialYear(input.yearStart, input.yearEnd);
   const { data, error } = await withTimeout(
     Promise.resolve(
-      supabase.rpc("register_company", {
-        p_company_name: input.companyName,
-        p_name: input.name ?? "",
-        p_phone: input.phone ?? "",
+      supabase.rpc("register_company_with_year", {
+        p_company_name: companyName,
+        p_name: name,
+        p_phone: phone,
+        p_address: address,
+        p_year_start: year.dateFrom,
+        p_year_end: year.dateTo,
       })
     ),
     20000,

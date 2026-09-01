@@ -70,7 +70,10 @@ const NAV_SECTIONS: NavSection[] = [
     title: "الرواتب",
     icon: "💰",
     accent: "#d97706",
-    items: [{ label: "إدارة الرواتب", href: "/payroll", icon: "🧮" }],
+    items: [
+      { label: "إدارة الرواتب", href: "/payroll", icon: "🧮" },
+      { label: "متابعة السلفيات", href: "/advances", icon: "💳" },
+    ],
   },
   {
     id: "reports",

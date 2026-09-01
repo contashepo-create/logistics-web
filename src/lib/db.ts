@@ -11,6 +11,12 @@ export function translateDbError(msg: string): string {
   const m = (msg || "").toLowerCase();
 
   if (m.includes("uq_profiles_one_user_per_company")) return "لا يُسمح بأكثر من مستخدم واحد لكل شركة.";
+  if (m.includes("uq_customers_company_phone")) return "رقم الهاتف مسجل لعميل آخر.";
+  if (m.includes("uq_customers_company_email")) return "البريد الإلكتروني مسجل لعميل آخر.";
+  if (m.includes("uq_suppliers_company_phone")) return "رقم الهاتف مسجل لمورّد آخر.";
+  if (m.includes("uq_suppliers_company_email")) return "البريد الإلكتروني مسجل لمورّد آخر.";
+  if (m.includes("uq_companies_phone") || m.includes("uq_profiles_phone")) return "رقم الهاتف مستخدم بالفعل في حساب آخر.";
+  if (m.includes("uq_companies_email") || m.includes("uq_profiles_email")) return "البريد الإلكتروني مستخدم بالفعل في حساب آخر.";
 
   if (isPermissionError(m)) {
     return "صلاحيات قاعدة البيانات غير مكتملة — نفّذ ملف الصلاحيات " +

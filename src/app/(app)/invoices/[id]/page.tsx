@@ -8,7 +8,7 @@ import { getInvoiceFull } from "@/lib/calc";
 import { listCreditDebitNotesForInvoice } from "@/lib/repo";
 import { printCustomerInvoice, exportCustomerInvoicePdf } from "@/components/dialogs/operations";
 import CreditDebitNoteDialog from "@/components/CreditDebitNoteDialog";
-import { money, balanceText } from "@/lib/format";
+import { money, EXPENSE_TYPES } from "@/lib/format";
 
 export default function InvoiceViewPage() {
   const params = useParams<{ id: string }>();
@@ -40,25 +40,40 @@ export default function InvoiceViewPage() {
     );
   }
 
-  const headers = ["#", "الرحلة", "السيارة", "السائق", "العدد", "سعر الوحدة", "الإجمالي", "ملاحظات"];
-  const rows = inv.trips.map((t, i) => [
-    String(i + 1), `${t.from_loc || "—"} ← ${t.to_loc || "—"}`,
-    t.vehicle_name ?? "—", t.driver_name ?? "—", String(t.qty ?? 1),
-    money(t.unit_price || (t.qty ? t.price / t.qty : t.price)), money(t.price), t.notes || "—",
-  ]);
+  const number = `INV-${String(inv.number).padStart(5, "0")}`;
+  const subtotal = Math.round((inv.trips_total + (inv.billable_total ?? 0)) * 100) / 100;
+  const invoiceLines = [
+    ...inv.trips.map((trip) => ({
+      key: `trip-${trip.id}`,
+      description: `خدمة نقل: ${trip.from_loc || "—"} ← ${trip.to_loc || "—"}`,
+      detail: [trip.vehicle_name, trip.notes].filter(Boolean).join(" • "),
+      quantity: Number(trip.qty ?? 1),
+      unitAmount: Number(trip.unit_price || (trip.qty ? trip.price / trip.qty : trip.price)),
+      total: Number(trip.price),
+    })),
+    ...inv.trips.flatMap((trip) => (trip.expenses ?? [])
+      .filter((expense) => expense.source === "customer")
+      .map((expense, index) => ({
+        key: `billable-${trip.id}-${expense.id ?? index}`,
+        description: expense.notes || EXPENSE_TYPES[expense.expense_type] || "بند إضافي",
+        detail: `${trip.from_loc || "—"} ← ${trip.to_loc || "—"}`,
+        quantity: Number(expense.qty ?? 1),
+        unitAmount: Number(expense.unit_amount || expense.amount),
+        total: Number(expense.amount),
+      }))),
+  ];
 
-  const notesRows = (notes ?? []).map((n) => [
-    `${n.note_type === "debit" ? "إشعار مدين" : "إشعار دائن"} ${n.note_type === "debit" ? "DN" : "CN"}-${String(n.number).padStart(5, "0")}`,
-    n.date,
-    n.reason || "—",
-    n.note_type === "debit" ? money(n.total ?? 0) : "—",
-    n.note_type === "credit" ? money(n.total ?? 0) : "—",
-  ]);
+  const notesRows = (notes ?? []).map((note) => ({
+    ...note,
+    label: `${note.note_type === "debit" ? "DN" : "CN"}-${String(note.number).padStart(5, "0")}`,
+  }));
+  const debitNotes = notesRows.filter((n) => n.note_type === "debit").reduce((sum, n) => sum + Number(n.total ?? 0), 0);
+  const creditNotes = notesRows.filter((n) => n.note_type === "credit").reduce((sum, n) => sum + Number(n.total ?? 0), 0);
 
   return (
     <PageFrame
-      title={`فاتورة نقل INV-${String(inv.number).padStart(5, "0")}`}
-      subtitle={`العميل: ${inv.customer_name} | التاريخ: ${inv.date} | الحالة: غير قابلة للتعديل`}
+      title={`فاتورة ${number}`}
+      subtitle="معاينة واضحة للفاتورة الصادرة — التصحيح يتم بإشعار مدين أو دائن"
       toolbar={
         <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
           <Button onClick={() => router.push("/invoices")}>→ عودة للفواتير</Button>
@@ -69,62 +84,96 @@ export default function InvoiceViewPage() {
         </div>
       }
     >
-      <div className="inv-view-grid">
-        <div className="group-box">
-          <div className="group-title">بيانات الفاتورة</div>
-          <table className="data-table">
+      <section className="invoice-preview-card" aria-label="معاينة الفاتورة">
+        <header className="invoice-preview-head">
+          <div>
+            <span className="invoice-preview-kicker">{inv.vat_rate > 0 ? "فاتورة ضريبية" : "فاتورة نقل"}</span>
+            <h2>{number}</h2>
+            <p>تاريخ الإصدار: <b>{inv.date}</b></p>
+          </div>
+          <div className="invoice-preview-customer">
+            <span>العميل</span>
+            <strong>{inv.customer_name}</strong>
+            <small>كود العميل: {inv.customer_code}</small>
+          </div>
+        </header>
+
+        {(inv.container_number || inv.customer?.tax_number || inv.customer?.address) && (
+          <div className="invoice-preview-meta">
+            {inv.container_number && <div><span>رقم الحاوية</span><b dir="ltr">{inv.container_number}</b></div>}
+            {inv.customer?.tax_number && <div><span>الرقم الضريبي للعميل</span><b dir="ltr">{inv.customer.tax_number}</b></div>}
+            {inv.customer?.address && <div><span>عنوان العميل</span><b>{inv.customer.address}</b></div>}
+          </div>
+        )}
+
+        <div className="invoice-preview-table-wrap">
+          <table className="invoice-preview-table">
+            <thead>
+              <tr><th>#</th><th>بيان الخدمة</th><th>العدد</th><th>سعر الوحدة</th><th>الإجمالي قبل الضريبة</th></tr>
+            </thead>
             <tbody>
-              <tr><td>العميل</td><td>{inv.customer_name} ({inv.customer_code})</td></tr>
-              <tr><td>التاريخ</td><td>{inv.date}</td></tr>
-              {inv.container_number ? <tr><td>رقم الحاوية</td><td dir="ltr">{inv.container_number}</td></tr> : null}
-              <tr><td>عدد النقلات</td><td>{inv.trips_count}</td></tr>
-              <tr><td>نسبة الضريبة</td><td>{inv.vat_rate}%</td></tr>
-              <tr className="total-row"><td>الإجمالي المستحق</td><td>{money(inv.customer_total)}</td></tr>
+              {invoiceLines.map((line, index) => (
+                <tr key={line.key}>
+                  <td>{index + 1}</td>
+                  <td><strong>{line.description}</strong>{line.detail && <small>{line.detail}</small>}</td>
+                  <td>{line.quantity}</td>
+                  <td>{money(line.unitAmount)}</td>
+                  <td><strong>{money(line.total)}</strong></td>
+                </tr>
+              ))}
             </tbody>
           </table>
         </div>
-        <div className="group-box">
-          <div className="group-title">ملخص مالي</div>
-          <table className="data-table">
-            <tbody>
-              <tr><td>إجمالي النقلات</td><td>{money(inv.trips_total)}</td></tr>
-              <tr><td>المصروفات المباشرة</td><td>{money(inv.expenses_total)}</td></tr>
-              <tr><td>سندات صرف لاحقة</td><td>{money(inv.later_payments)}</td></tr>
-              <tr><td>الربح الفعلي</td><td><Balance value={inv.actual_profit} /></td></tr>
-            </tbody>
-          </table>
+
+        <div className="invoice-preview-bottom">
+          <div className="invoice-preview-note">
+            <span>ملاحظات الفاتورة</span>
+            <p>{inv.notes || "لا توجد ملاحظات إضافية."}</p>
+          </div>
+          <div className="invoice-totals" aria-label="إجماليات الفاتورة">
+            <div><span>الإجمالي الخاضع للضريبة</span><b>{money(subtotal)}</b></div>
+            <div className="vat-row"><span>ضريبة القيمة المضافة ({inv.vat_rate}%)</span><b>{money(inv.vat_amount)}</b></div>
+            <div className="grand-total"><span>الإجمالي شامل الضريبة</span><b>{money(inv.customer_total)}</b></div>
+          </div>
         </div>
-      </div>
+      </section>
 
-      <div className="inv-sec-title"><span>بنود النقل</span></div>
-      <div className="table-wrap">
-        <table className="data-table">
-          <thead><tr>{headers.map((h, i) => <th key={i}>{h}</th>)}</tr></thead>
-          <tbody>
-            {rows.map((r, i) => <tr key={i}>{r.map((c, j) => <td key={j}>{c}</td>)}</tr>)}
-          </tbody>
-        </table>
-      </div>
+      <section className="invoice-internal-panel">
+        <div className="invoice-section-heading">
+          <div><span>للمراجعة الداخلية فقط</span><h3>الملخص التشغيلي</h3></div>
+          <small>لا تظهر هذه الأرقام في فاتورة العميل المطبوعة</small>
+        </div>
+        <div className="invoice-internal-grid">
+          <div><span>تكاليف مباشرة</span><b>{money(inv.expenses_total)}</b></div>
+          <div><span>سندات صرف لاحقة</span><b>{money(inv.later_payments)}</b></div>
+          <div><span>عدد سطور النقل</span><b>{inv.trips_count}</b></div>
+          <div><span>صافي النتيجة التشغيلية</span><Balance value={inv.actual_profit} /></div>
+        </div>
+      </section>
 
-      {inv.notes && (
-        <>
-          <div className="inv-sec-title" style={{ marginTop: 14 }}><span>ملاحظات الفاتورة</span></div>
-          <div className="exp-hint">{inv.notes}</div>
-        </>
-      )}
-
-      <div className="inv-sec-title" style={{ marginTop: 14 }}>
-        <span>إشعارات مدين/دائن الصادرة على هذه الفاتورة</span>
-      </div>
-      <div className="table-wrap">
-        <table className="data-table">
-          <thead><tr><th>رقم الإشعار</th><th>التاريخ</th><th>السبب</th><th>مدين</th><th>دائن</th></tr></thead>
-          <tbody>
-            {notesRows.map((r, i) => <tr key={i}>{r.map((c, j) => <td key={j}>{c}</td>)}</tr>)}
-            {!notesRows.length && <tr><td colSpan={5} style={{ color: "var(--muted)" }}>لا توجد إشعارات بعد.</td></tr>}
-          </tbody>
-        </table>
-      </div>
+      <section className="invoice-adjustments-panel">
+        <div className="invoice-section-heading">
+          <div><span>التصحيحات النظامية</span><h3>الإشعارات المدينة والدائنة</h3></div>
+          {notesRows.length > 0 && <small>الصافي بعد الإشعارات: {money(inv.customer_total + debitNotes - creditNotes)}</small>}
+        </div>
+        {notesRows.length ? (
+          <div className="table-wrap">
+            <table className="data-table">
+              <thead><tr><th>الإشعار</th><th>التاريخ</th><th>السبب</th><th>الأثر</th></tr></thead>
+              <tbody>{notesRows.map((note) => (
+                <tr key={note.id}>
+                  <td><b>{note.label}</b></td>
+                  <td>{note.date}</td>
+                  <td>{note.reason || "—"}</td>
+                  <td className={note.note_type === "debit" ? "invoice-note-debit" : "invoice-note-credit"}>
+                    {note.note_type === "debit" ? "+" : "−"}{money(note.total ?? 0)}
+                  </td>
+                </tr>
+              ))}</tbody>
+            </table>
+          </div>
+        ) : <div className="invoice-empty-state">لا توجد إشعارات مرتبطة بهذه الفاتورة.</div>}
+      </section>
 
       {noteDialog && (
         <CreditDebitNoteDialog

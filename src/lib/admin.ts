@@ -5,6 +5,8 @@ import { supabase } from "./supabase";
 import type { Company, Profile } from "./types";
 import type { ActivationRequest } from "./subscription";
 import { num } from "./calc";
+import { authPostJson } from "./apiClient";
+import type { FeatureKey } from "./features";
 
 /** شركة مع بيانات مالكها (للوحة المطوّر). */
 export interface CompanyRow extends Company {
@@ -20,8 +22,11 @@ export async function listCompanies(): Promise<CompanyRow[]> {
     .order("created_at", { ascending: false });
   if (error) throw new Error(error.message);
 
-  const { data: profiles } = await supabase.from("profiles").select("id, company_id, name, email");
-  const ownerMap = new Map((profiles ?? []).map((p: Profile) => [p.company_id, p]));
+  const { data: profiles } = await supabase.from("profiles").select("id, company_id, name, email, role, phone, is_active");
+  // بعد السماح بمستخدم إضافي لا يجوز اختيار أول ملف عشوائياً بصفته المالك.
+  // السجلات القديمة بلا role تُعامل كمالك للتوافق أثناء تطبيق الترحيلة.
+  const owners = (profiles ?? []).filter((p: Partial<Profile>) => p.role !== "additional");
+  const ownerMap = new Map(owners.map((p: Partial<Profile>) => [p.company_id, p]));
 
   return ((companies ?? []) as Company[]).map((c) => {
     const owner = ownerMap.get(c.id);
@@ -87,6 +92,79 @@ export async function deleteCompany(id: string): Promise<void> {
   if (error) throw new Error(error.message);
 }
 
+export interface CompanyUserRow {
+  id: string;
+  company_id: string;
+  name: string;
+  email: string;
+  phone: string;
+  role: "owner" | "additional";
+  is_active: boolean;
+  created_at?: string;
+}
+
+export interface CompanyExtras {
+  features: Record<FeatureKey, boolean>;
+  users: CompanyUserRow[];
+}
+
+/** قراءة المميزات والمستخدمين لشركة من مسار محمي بجلسة المطوّر و2FA. */
+export async function getCompanyExtras(companyId: string): Promise<CompanyExtras> {
+  const out = await authPostJson<{ success: true } & CompanyExtras>("/api/zerocold/features", {
+    action: "get",
+    company_id: companyId,
+  });
+  return { features: out.features, users: out.users };
+}
+
+/** تفعيل/إلغاء ميزة عن شركة بعينها. */
+export async function setCompanyFeature(companyId: string, feature: FeatureKey, enabled: boolean): Promise<void> {
+  await authPostJson("/api/zerocold/features", {
+    action: "set",
+    company_id: companyId,
+    feature_key: feature,
+    enabled,
+  });
+}
+
+/** إنشاء مستخدم إضافي مؤكد البريد وربطه بالشركة. */
+export async function createAdditionalUser(input: {
+  companyId: string;
+  name: string;
+  email: string;
+  phone: string;
+  password: string;
+}): Promise<CompanyUserRow> {
+  const out = await authPostJson<{ success: true; user: CompanyUserRow }>("/api/zerocold/company-users", {
+    action: "create",
+    company_id: input.companyId,
+    name: input.name,
+    email: input.email,
+    phone: input.phone,
+    password: input.password,
+  });
+  return out.user;
+}
+
+/** إيقاف أو إعادة تفعيل المستخدم الإضافي. */
+export async function setAdditionalUserStatus(companyId: string, userId: string, active: boolean): Promise<void> {
+  await authPostJson("/api/zerocold/company-users", {
+    action: "status",
+    company_id: companyId,
+    user_id: userId,
+    active,
+  });
+}
+
+/** حذف المستخدم الإضافي من المصادقة والملف الشخصي. */
+export async function deleteAdditionalUser(companyId: string, userId: string): Promise<void> {
+  await authPostJson("/api/zerocold/company-users", {
+    action: "delete",
+    company_id: companyId,
+    user_id: userId,
+  });
+}
+
 export interface ActivityLog {
   id: number;
   actor_id: string | null;
@@ -134,7 +212,8 @@ export async function adminStats(): Promise<Record<string, number>> {
 /**
  * ملاحظة خصوصية: لا توجد هنا (ولا في أي مكان بلوحة المطوّر) دالة تقرأ بيانات
  * العملاء التشغيلية — الفواتير والنقلات والسندات والأرصدة والرواتب.
- * لوحة المطوّر مقصورة على: بيانات الاشتراك، والسجل التجاري/الضريبي، والعنوان،
- * وطلبات التفعيل، والرسائل والشكاوى. العزل مفروض أيضاً على مستوى RLS.
+ * لوحة المطوّر مقصورة على: بيانات الاشتراك، والمميزات، وحسابات الشركة التعريفية،
+ * والسجل التجاري/الضريبي، والعنوان، وطلبات التفعيل، والرسائل والشكاوى.
+ * لا تُقرأ الفواتير أو الحركات التشغيلية، والعزل مفروض أيضاً على مستوى RLS.
  */
 

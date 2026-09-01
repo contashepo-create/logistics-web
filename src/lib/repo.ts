@@ -15,7 +15,18 @@ import {
   ensurePositive,
   roundMoney,
   txt,
+  boundedNumber,
+  positiveId,
 } from "./rules";
+import {
+  safeAddress,
+  safeCompanyName,
+  safeEmail,
+  safePhone,
+  safeUrl,
+  safeIsoDate,
+  isPlausibleIdentityText,
+} from "./security";
 import type {
   Bank,
   Cashbox,
@@ -126,10 +137,48 @@ export async function getCompany(force = false): Promise<Company | null> {
   }
 }
 
+function validateCompanyFields(fields: Record<string, unknown>): Record<string, unknown> {
+  const allowed = new Set(Object.values(COMPANY_FIELDS));
+  const out: Record<string, unknown> = {};
+  const maxByColumn: Record<string, number> = {
+    name_en: 120, vat_note: 500, currency: 12, tax_number: 20, commercial_reg: 30,
+    unified_number: 20, country: 2, region: 80, city: 80, district: 100, street: 160,
+    building_no: 12, postal_code: 12, additional_no: 12, address_note: 300,
+  };
+  for (const [column, value] of Object.entries(fields)) {
+    if (!allowed.has(column)) throw new RuleError(`حقل شركة غير مسموح بتعديله: ${column}`);
+    if (column === "name") out[column] = safeCompanyName(value);
+    else if (column === "phone") out[column] = safePhone(value, true);
+    else if (column === "email") out[column] = safeEmail(value, true);
+    else if (column === "website") out[column] = safeUrl(value, "موقع الشركة");
+    else if (column === "address") out[column] = safeAddress(value, "عنوان الشركة");
+    else if (column === "vat_rate") out[column] = boundedNumber(value, "نسبة الضريبة", 0, 100);
+    else if (column === "entity_type") {
+      if (!["establishment", "company", "individual", "nonprofit", "government"].includes(String(value))) throw new RuleError("نوع الكيان غير صالح.");
+      out[column] = value;
+    } else if (column === "tax_status") {
+      if (!["taxable", "exempt", "not_registered"].includes(String(value))) throw new RuleError("الحالة الضريبية غير صالحة.");
+      out[column] = value;
+    } else if (column === "country") {
+      const country = String(value ?? "").trim().toUpperCase();
+      if (!/^(?:[A-Z]{2}|OTHER)$/.test(country)) throw new RuleError("رمز الدولة غير صالح.");
+      out[column] = country;
+    } else if (["tax_number", "commercial_reg", "unified_number", "building_no", "postal_code", "additional_no"].includes(column)) {
+      const numericText = txt(value, column, maxByColumn[column] ?? 30).replace(/[\s-]/g, "");
+      if (numericText && !/^\d+$/.test(numericText)) throw new RuleError(`حقل ${column} يجب أن يحتوي على أرقام فقط.`);
+      out[column] = numericText;
+    } else {
+      out[column] = txt(value, COMPANY_FIELDS[column] ?? column, maxByColumn[column] ?? 300);
+    }
+  }
+  return out;
+}
+
 export async function updateCompany(fields: Record<string, unknown>): Promise<void> {
   const c = await getCompany();
   if (!c) throw new RuleError("لا توجد شركة مرتبطة بحسابك.");
-  const { error } = await supabase.from("companies").update(fields).eq("id", c.id);
+  const cleanFields = validateCompanyFields(fields);
+  const { error } = await supabase.from("companies").update(cleanFields).eq("id", c.id);
   invalidateCompanyCache();
   if (error) throw new RuleError(translateDbError(error.message));
 }
@@ -205,7 +254,7 @@ async function insertNumbered<T>(table: string, row: Record<string, unknown>, re
       .single();
     if (!error) return data as T;
     if (error.code === "23505") continue; // رقم مكرر — أعد الحساب
-    throw new RuleError(error.message);
+    throw new RuleError(translateDbError(error.message));
   }
   throw new RuleError("تعذّر حفظ المستند بسبب تكرار الرقم. حاول مجدداً.");
 }
@@ -232,28 +281,32 @@ async function count(
 // إشعارات الدائن والمدين — لا تعديل للفواتير بعد إصدارها
 export async function saveCreditDebitNote(data: Record<string, any>): Promise<number> {
   if (data.note_type !== "credit" && data.note_type !== "debit") throw new RuleError("نوع الإشعار غير صالح.");
-  if (!data.invoice_id || !data.customer_id || Number(data.amount) <= 0) throw new RuleError("أكمل الفاتورة والعميل والمبلغ.");
+  const invoiceId = positiveId(data.invoice_id, "الفاتورة");
+  const customerId = positiveId(data.customer_id, "العميل");
+  const amount = roundMoney(data.amount);
+  ensurePositive(amount, "مبلغ الإشعار");
   if (!String(data.reason ?? "").trim()) throw new RuleError("سبب الإشعار إلزامي للمراجعة المحاسبية.");
+  const noteDate = safeIsoDate(data.date, "تاريخ الإشعار");
   const { data: inv } = await supabase
     .from("invoices")
     .select("customer_id, date")
-    .eq("id", Number(data.invoice_id))
+    .eq("id", invoiceId)
     .maybeSingle();
   if (!inv) throw new RuleError("الفاتورة المرتبطة غير موجودة.");
-  if (Number(inv.customer_id) !== Number(data.customer_id)) {
+  if (Number(inv.customer_id) !== customerId) {
     throw new RuleError("العميل المحدد لا يطابق عميل الفاتورة.");
   }
-  if (data.date && String(data.date) < String(inv.date)) {
+  if (noteDate < String(inv.date)) {
     throw new RuleError("تاريخ الإشعار لا يجوز أن يسبق تاريخ الفاتورة.");
   }
-  const vat = num(data.vat_rate ?? 15);
-  if (vat < 0) throw new RuleError("نسبة الضريبة يجب ألا تكون سالبة.");
+  const vat = boundedNumber(data.vat_rate ?? 15, "نسبة الضريبة", 0, 100);
+  await ensureDateInOpenYear(noteDate);
   const row = {
     note_type: data.note_type,
-    invoice_id: Number(data.invoice_id),
-    customer_id: Number(data.customer_id),
-    date: String(data.date),
-    amount: roundMoney(data.amount),
+    invoice_id: invoiceId,
+    customer_id: customerId,
+    date: noteDate,
+    amount,
     vat_rate: vat,
     reason: txt(data.reason ?? "", "سبب الإشعار"),
   };
@@ -274,7 +327,7 @@ export async function listCreditDebitNotes(
   if (dTo) q = q.lte("date", dTo);
   if (noteType) q = q.eq("note_type", noteType);
   const { data, error } = await q;
-  if (error) throw new RuleError(error.message);
+  if (error) throw new RuleError(translateDbError(error.message));
 
   return (data ?? []).map((n: any) => ({
     ...n,
@@ -292,7 +345,7 @@ export async function listCreditDebitNotesForInvoice(invoiceId: number): Promise
     .eq("invoice_id", invoiceId)
     .order("date", { ascending: false })
     .order("number", { ascending: false });
-  if (error) throw new RuleError(error.message);
+  if (error) throw new RuleError(translateDbError(error.message));
   return (data ?? []).map((n: any) => ({
     ...n,
     invoice_number: Array.isArray(n.invoices) ? (n.invoices[0] as any)?.number : (n.invoices as any)?.number,
@@ -324,7 +377,7 @@ export async function deleteCreditDebitNote(noteId: number): Promise<void> {
   if (!n) return;
   await ensureMovementEditable(n.date);
   const { error } = await supabase.from("credit_debit_notes").delete().eq("id", noteId);
-  if (error) throw new RuleError(error.message);
+  if (error) throw new RuleError(translateDbError(error.message));
 }
 
 // ---------------------------------------------------------------------------
@@ -335,7 +388,7 @@ export async function listYears(): Promise<FinancialYear[]> {
     .from("financial_years")
     .select("*")
     .order("year", { ascending: false });
-  if (error) throw new RuleError(error.message);
+  if (error) throw new RuleError(translateDbError(error.message));
   return (data ?? []) as FinancialYear[];
 }
 
@@ -345,13 +398,13 @@ export async function getYear(yearId: number): Promise<FinancialYear | null> {
 }
 
 export async function saveYear(data: Record<string, unknown>, yearId?: number | null): Promise<number> {
-  const year = Number(data.year);
-  const dateFrom = String(data.date_from ?? "");
-  const dateTo = String(data.date_to ?? "");
-  ensureNotBlank(String(year), "السنة");
-  ensureNotBlank(dateFrom, "تاريخ البداية");
-  ensureNotBlank(dateTo, "تاريخ النهاية");
+  const year = boundedNumber(data.year, "السنة المالية", 1900, 2200, true);
+  const dateFrom = safeIsoDate(data.date_from, "تاريخ بداية السنة");
+  const dateTo = safeIsoDate(data.date_to, "تاريخ نهاية السنة");
   if (dateFrom >= dateTo) throw new RuleError("تاريخ بداية السنة يجب أن يكون قبل تاريخ نهايتها.");
+  if (Number(dateFrom.slice(0, 4)) !== year) throw new RuleError("رقم السنة المالية يجب أن يطابق سنة تاريخ البداية.");
+  const durationDays = Math.round((Date.parse(`${dateTo}T00:00:00Z`) - Date.parse(`${dateFrom}T00:00:00Z`)) / 86_400_000) + 1;
+  if (durationDays < 1 || durationDays > 550) throw new RuleError("مدة السنة المالية غير منطقية (550 يوماً كحد أقصى).");
 
   const { data: dup } = await supabase
     .from("financial_years")
@@ -376,32 +429,37 @@ export async function saveYear(data: Record<string, unknown>, yearId?: number | 
   if (yearId) {
     const { error } = await supabase
       .from("financial_years")
-      .update({ year, date_from: dateFrom, date_to: dateTo, notes: data.notes ?? "" })
+      .update({ year, date_from: dateFrom, date_to: dateTo, notes: txt(data.notes ?? "", "ملاحظات السنة", 1000) })
       .eq("id", yearId);
-    if (error) throw new RuleError(error.message);
+    if (error) throw new RuleError(translateDbError(error.message));
     return yearId;
   }
   const { data: inserted, error } = await supabase
     .from("financial_years")
-    .insert({ year, date_from: dateFrom, date_to: dateTo, status: "open", notes: data.notes ?? "" })
+    .insert({ year, date_from: dateFrom, date_to: dateTo, status: "open", notes: txt(data.notes ?? "", "ملاحظات السنة", 1000) })
     .select()
     .single();
-  if (error) throw new RuleError(error.message);
+  if (error) throw new RuleError(translateDbError(error.message));
   return inserted.id;
 }
 
 export async function rolloverYear(yearId: number, nextYear: number, dateFrom: string, dateTo: string): Promise<number> {
+  const cleanYearId = positiveId(yearId, "معرّف السنة");
+  const cleanNextYear = boundedNumber(nextYear, "السنة التالية", 1900, 2200, true);
+  const cleanFrom = safeIsoDate(dateFrom, "تاريخ بداية السنة التالية");
+  const cleanTo = safeIsoDate(dateTo, "تاريخ نهاية السنة التالية");
+  if (cleanFrom >= cleanTo || Number(cleanFrom.slice(0, 4)) !== cleanNextYear) throw new RuleError("نطاق السنة المالية التالية غير صالح.");
   const { data, error } = await supabase.rpc("create_next_financial_year", {
-    p_closed_year_id: yearId, p_year: nextYear, p_date_from: dateFrom, p_date_to: dateTo,
+    p_closed_year_id: cleanYearId, p_year: cleanNextYear, p_date_from: cleanFrom, p_date_to: cleanTo,
   });
-  if (error) throw new RuleError(error.message);
+  if (error) throw new RuleError(translateDbError(error.message));
   return Number(data);
 }
 
 export async function setYearStatus(yearId: number, status: string): Promise<void> {
   if (status !== "open" && status !== "closed") throw new RuleError("حالة غير صالحة للسنة المالية.");
   const { error } = await supabase.from("financial_years").update({ status }).eq("id", yearId);
-  if (error) throw new RuleError(error.message);
+  if (error) throw new RuleError(translateDbError(error.message));
 }
 
 export async function movementsCountInRange(dFrom: string, dTo: string): Promise<number> {
@@ -428,7 +486,7 @@ export async function deleteYear(yearId: number): Promise<void> {
     );
   }
   const { error } = await supabase.from("financial_years").delete().eq("id", yearId);
-  if (error) throw new RuleError(error.message);
+  if (error) throw new RuleError(translateDbError(error.message));
 }
 
 export async function createSnapshot(yearId: number): Promise<Record<string, unknown>> {
@@ -438,7 +496,7 @@ export async function createSnapshot(yearId: number): Promise<Record<string, unk
   const { error } = await supabase
     .from("year_snapshots")
     .upsert({ year_id: yearId, data });
-  if (error) throw new RuleError(error.message);
+  if (error) throw new RuleError(translateDbError(error.message));
   return data;
 }
 
@@ -452,7 +510,7 @@ export async function getSnapshot(yearId: number): Promise<Record<string, unknow
 // ---------------------------------------------------------------------------
 export async function listCustomers(): Promise<Customer[]> {
   const { data, error } = await supabase.from("customers").select("*").order("code");
-  if (error) throw new RuleError(error.message);
+  if (error) throw new RuleError(translateDbError(error.message));
   return (data ?? []) as Customer[];
 }
 
@@ -461,12 +519,25 @@ export async function getCustomer(customerId: number): Promise<Customer | null> 
   return (data as Customer) ?? null;
 }
 
+async function ensureUniqueCustomerContact(phone: string, email: string, customerId?: number | null): Promise<void> {
+  const queries: PromiseLike<{ data: { id: number }[] | null; error: { message: string } | null }>[] = [];
+  if (phone) queries.push(supabase.from("customers").select("id").eq("phone", phone).neq("id", customerId ?? -1));
+  if (email) queries.push(supabase.from("customers").select("id").eq("email", email).neq("id", customerId ?? -1));
+  const results = await Promise.all(queries);
+  for (const result of results) if (result.error) throw new RuleError(result.error.message);
+  if (phone && results[0]?.data?.length) throw new RuleError("رقم الهاتف مسجل لعميل آخر.");
+  const emailIndex = phone ? 1 : 0;
+  if (email && results[emailIndex]?.data?.length) throw new RuleError("البريد الإلكتروني مسجل لعميل آخر.");
+}
+
 export async function saveCustomer(data: Record<string, any>, customerId?: number | null): Promise<number> {
   ensureNotBlank(data.name, "اسم العميل");
-  const name = txt(data.name, "اسم العميل");
-  const address = txt(data.address ?? "", "العنوان");
-  const phone = txt(data.phone ?? "", "الهاتف");
-  const notes = txt(data.notes ?? "", "الملاحظات");
+  const name = txt(data.name, "اسم العميل", 160);
+  if (!isPlausibleIdentityText(name)) throw new RuleError("أدخل اسماً حقيقياً للعميل، وليس قيمة تجريبية أو وهمية.");
+  const address = txt(data.address ?? "", "العنوان", 300);
+  if (address && !isPlausibleIdentityText(address)) throw new RuleError("عنوان العميل يبدو غير صحيح أو وهمياً.");
+  const phone = safePhone(data.phone ?? "", false);
+  const notes = txt(data.notes ?? "", "الملاحظات", 2000);
   const opening = roundMoney(data.opening_balance ?? 0);
 
   // البيانات الضريبية والعنوان الوطني (تُطبَّع وتُتحقّق قبل الحفظ)
@@ -487,21 +558,27 @@ export async function saveCustomer(data: Record<string, any>, customerId?: numbe
   const problems = validateTaxProfile(profile);
   if (problems.length) throw new RuleError(problems[0]);
 
+  const email = safeEmail(data.email ?? "", false);
+  const contactPerson = txt(data.contact_person ?? "", "مسؤول التواصل", 120);
+  if (contactPerson && !isPlausibleIdentityText(contactPerson)) throw new RuleError("اسم مسؤول التواصل غير صحيح أو وهمي.");
+  const creditLimit = roundMoney(data.credit_limit ?? 0);
+  if (creditLimit < 0) throw new RuleError("الحد الائتماني لا يمكن أن يكون سالباً.");
   const extra = {
     ...profile,
-    name_en: txt(data.name_en ?? "", "الاسم بالإنجليزية"),
-    email: txt(data.email ?? "", "البريد الإلكتروني"),
-    contact_person: txt(data.contact_person ?? "", "مسؤول التواصل"),
-    credit_limit: roundMoney(data.credit_limit ?? 0),
-    payment_terms: Math.max(0, Math.trunc(Number(data.payment_terms ?? 0) || 0)),
+    name_en: txt(data.name_en ?? "", "الاسم بالإنجليزية", 160),
+    email,
+    contact_person: contactPerson,
+    credit_limit: creditLimit,
+    payment_terms: boundedNumber(data.payment_terms ?? 0, "مهلة السداد", 0, 3650, true),
   };
+  await ensureUniqueCustomerContact(phone, email, customerId);
 
   if (customerId) {
     const { error } = await supabase
       .from("customers")
       .update({ name, address, phone, opening_balance: opening, notes, ...extra })
       .eq("id", customerId);
-    if (error) throw new RuleError(error.message);
+    if (error) throw new RuleError(translateDbError(error.message));
     return customerId;
   }
   const { data: inserted, error } = await supabase
@@ -509,7 +586,7 @@ export async function saveCustomer(data: Record<string, any>, customerId?: numbe
     .insert({ name, address, phone, opening_balance: opening, notes, ...extra })
     .select()
     .single();
-  if (error) throw new RuleError(error.message);
+  if (error) throw new RuleError(translateDbError(error.message));
   await stampCode("customers", inserted.id, "CUST");
   return inserted.id;
 }
@@ -523,7 +600,7 @@ export async function deleteCustomer(customerId: number): Promise<void> {
     );
   }
   const { error } = await supabase.from("customers").delete().eq("id", customerId);
-  if (error) throw new RuleError(error.message);
+  if (error) throw new RuleError(translateDbError(error.message));
 }
 
 // ---------------------------------------------------------------------------
@@ -533,7 +610,7 @@ export async function listEmployees(empType?: string | null): Promise<Employee[]
   let q = supabase.from("employees").select("*").order("code");
   if (empType) q = q.eq("emp_type", empType);
   const { data, error } = await q;
-  if (error) throw new RuleError(error.message);
+  if (error) throw new RuleError(translateDbError(error.message));
   return (data ?? []) as Employee[];
 }
 
@@ -547,10 +624,11 @@ export async function saveEmployee(data: Record<string, any>, employeeId?: numbe
   if (data.emp_type !== "driver" && data.emp_type !== "admin") {
     throw new RuleError("اختر نوع الموظف (سائق / إداري).");
   }
-  const name = txt(data.name, "الاسم");
-  const nationality = txt(data.nationality ?? "", "الجنسية");
-  const phone = txt(data.phone ?? "", "الهاتف");
-  const notes = txt(data.notes ?? "", "الملاحظات");
+  const name = txt(data.name, "الاسم", 120);
+  if (!isPlausibleIdentityText(name)) throw new RuleError("أدخل اسماً حقيقياً للموظف، وليس قيمة تجريبية أو وهمية.");
+  const nationality = txt(data.nationality ?? "", "الجنسية", 80);
+  const phone = safePhone(data.phone ?? "", false);
+  const notes = txt(data.notes ?? "", "الملاحظات", 2000);
   const baseSalary = roundMoney(data.base_salary ?? 0);
   if (baseSalary < 0) throw new RuleError("الراتب الأساسي لا يمكن أن يكون سالباً.");
 
@@ -572,7 +650,7 @@ export async function saveEmployee(data: Record<string, any>, employeeId?: numbe
       .from("employees")
       .update({ name, nationality, phone, emp_type: data.emp_type, base_salary: baseSalary, notes })
       .eq("id", employeeId);
-    if (error) throw new RuleError(error.message);
+    if (error) throw new RuleError(translateDbError(error.message));
     return employeeId;
   }
   const { data: inserted, error } = await supabase
@@ -580,7 +658,7 @@ export async function saveEmployee(data: Record<string, any>, employeeId?: numbe
     .insert({ name, nationality, phone, emp_type: data.emp_type, base_salary: baseSalary, notes })
     .select()
     .single();
-  if (error) throw new RuleError(error.message);
+  if (error) throw new RuleError(translateDbError(error.message));
   await stampCode("employees", inserted.id, "EMP");
   return inserted.id;
 }
@@ -595,7 +673,7 @@ export async function deleteEmployee(employeeId: number): Promise<void> {
     );
   }
   const { error } = await supabase.from("employees").delete().eq("id", employeeId);
-  if (error) throw new RuleError(error.message);
+  if (error) throw new RuleError(translateDbError(error.message));
 }
 
 // ---------------------------------------------------------------------------
@@ -603,7 +681,7 @@ export async function deleteEmployee(employeeId: number): Promise<void> {
 // ---------------------------------------------------------------------------
 export async function listVehicles(): Promise<Vehicle[]> {
   const { data, error } = await supabase.from("vehicles").select("*").order("code");
-  if (error) throw new RuleError(error.message);
+  if (error) throw new RuleError(translateDbError(error.message));
   const { data: emps } = await supabase.from("employees").select("id, name");
   const empMap = new Map((emps ?? []).map((e) => [e.id, e.name]));
   return (data ?? []).map((v) => ({ ...v, driver_name: empMap.get(v.default_driver_id ?? 0) ?? null }));
@@ -616,10 +694,11 @@ export async function getVehicle(vehicleId: number): Promise<Vehicle | null> {
 
 export async function saveVehicle(data: Record<string, any>, vehicleId?: number | null): Promise<number> {
   ensureNotBlank(data.plate_number, "رقم اللوحة");
-  const plate = txt(data.plate_number, "رقم اللوحة");
-  const vtype = txt(data.vehicle_type ?? "", "النوع");
-  const notes = txt(data.notes ?? "", "الملاحظات");
-  const drv = data.default_driver_id ?? null;
+  const plate = txt(data.plate_number, "رقم اللوحة", 30);
+  if (!/[A-Za-z\u0600-\u06FF0-9]/u.test(plate) || /^(.)\1{3,}$/u.test(plate.replace(/\s/g, ""))) throw new RuleError("رقم اللوحة غير صالح أو وهمي.");
+  const vtype = txt(data.vehicle_type ?? "", "النوع", 100);
+  const notes = txt(data.notes ?? "", "الملاحظات", 2000);
+  const drv = data.default_driver_id != null && data.default_driver_id !== "" ? positiveId(data.default_driver_id, "السائق الافتراضي") : null;
   if (drv != null) {
     const emp = await getEmployee(drv);
     if (!emp || emp.emp_type !== "driver") {
@@ -631,7 +710,7 @@ export async function saveVehicle(data: Record<string, any>, vehicleId?: number 
       .from("vehicles")
       .update({ plate_number: plate, vehicle_type: vtype, default_driver_id: drv, notes })
       .eq("id", vehicleId);
-    if (error) throw new RuleError(error.message);
+    if (error) throw new RuleError(translateDbError(error.message));
     return vehicleId;
   }
   const { data: inserted, error } = await supabase
@@ -639,7 +718,7 @@ export async function saveVehicle(data: Record<string, any>, vehicleId?: number 
     .insert({ plate_number: plate, vehicle_type: vtype, default_driver_id: drv, notes })
     .select()
     .single();
-  if (error) throw new RuleError(error.message);
+  if (error) throw new RuleError(translateDbError(error.message));
   await stampCode("vehicles", inserted.id, "VEH");
   return inserted.id;
 }
@@ -653,7 +732,7 @@ export async function deleteVehicle(vehicleId: number): Promise<void> {
     );
   }
   const { error } = await supabase.from("vehicles").delete().eq("id", vehicleId);
-  if (error) throw new RuleError(error.message);
+  if (error) throw new RuleError(translateDbError(error.message));
 }
 
 // ---------------------------------------------------------------------------
@@ -661,7 +740,7 @@ export async function deleteVehicle(vehicleId: number): Promise<void> {
 // ---------------------------------------------------------------------------
 export async function listAccounts(kind: string): Promise<(Cashbox | Bank)[]> {
   const { data, error } = await supabase.from(accountTable(kind)).select("*").order("code");
-  if (error) throw new RuleError(error.message);
+  if (error) throw new RuleError(translateDbError(error.message));
   return (data ?? []) as (Cashbox | Bank)[];
 }
 
@@ -675,30 +754,35 @@ export async function saveAccount(
   data: Record<string, any>,
   accountId?: number | null
 ): Promise<number> {
+  if (kind !== "cashbox" && kind !== "bank") throw new RuleError("نوع الحساب غير صالح.");
   const tbl = accountTable(kind);
   const prefix = kind === "cashbox" ? "CB" : "BNK";
   ensureNotBlank(data.name, "اسم " + accountKindLabel(kind));
-  const name = txt(data.name, "الاسم");
-  const notes = txt(data.notes ?? "", "الملاحظات");
+  const name = txt(data.name, "الاسم", 120);
+  if (!isPlausibleIdentityText(name)) throw new RuleError("اسم الحساب غير صحيح أو وهمي.");
+  const notes = txt(data.notes ?? "", "الملاحظات", 2000);
   const opening = roundMoney(data.opening_balance ?? 0);
+  const createdDate = safeIsoDate(data.created_date, "تاريخ إنشاء الحساب");
 
   if (kind === "bank") {
-    const accountNumber = txt(data.account_number ?? "", "رقم الحساب");
-    const iban = txt(data.iban ?? "", "الآيبان");
+    const accountNumber = txt(data.account_number ?? "", "رقم الحساب", 40).replace(/\s/g, "");
+    if (accountNumber && !/^[A-Za-z0-9-]{3,40}$/.test(accountNumber)) throw new RuleError("رقم الحساب البنكي غير صالح.");
+    const iban = txt(data.iban ?? "", "الآيبان", 34).replace(/\s/g, "").toUpperCase();
+    if (iban && !/^[A-Z]{2}\d{2}[A-Z0-9]{11,30}$/.test(iban)) throw new RuleError("صيغة الآيبان غير صحيحة.");
     if (accountId) {
       const { error } = await supabase
         .from("banks")
-        .update({ name, created_date: data.created_date, account_number: accountNumber, iban, opening_balance: opening, notes })
+        .update({ name, created_date: createdDate, account_number: accountNumber, iban, opening_balance: opening, notes })
         .eq("id", accountId);
-      if (error) throw new RuleError(error.message);
+      if (error) throw new RuleError(translateDbError(error.message));
       return accountId;
     }
     const { data: inserted, error } = await supabase
       .from("banks")
-      .insert({ name, created_date: data.created_date, account_number: accountNumber, iban, opening_balance: opening, notes })
+      .insert({ name, created_date: createdDate, account_number: accountNumber, iban, opening_balance: opening, notes })
       .select()
       .single();
-    if (error) throw new RuleError(error.message);
+    if (error) throw new RuleError(translateDbError(error.message));
     await stampCode("banks", inserted.id, prefix);
     return inserted.id;
   }
@@ -706,17 +790,17 @@ export async function saveAccount(
   if (accountId) {
     const { error } = await supabase
       .from("cashboxes")
-      .update({ name, created_date: data.created_date, opening_balance: opening, notes })
+      .update({ name, created_date: createdDate, opening_balance: opening, notes })
       .eq("id", accountId);
-    if (error) throw new RuleError(error.message);
+    if (error) throw new RuleError(translateDbError(error.message));
     return accountId;
   }
   const { data: inserted, error } = await supabase
     .from("cashboxes")
-    .insert({ name, created_date: data.created_date, opening_balance: opening, notes })
+    .insert({ name, created_date: createdDate, opening_balance: opening, notes })
     .select()
     .single();
-  if (error) throw new RuleError(error.message);
+  if (error) throw new RuleError(translateDbError(error.message));
   await stampCode("cashboxes", inserted.id, prefix);
   return inserted.id;
 }
@@ -733,7 +817,7 @@ export async function deleteAccount(kind: string, accountId: number): Promise<vo
     );
   }
   const { error } = await supabase.from(accountTable(kind)).delete().eq("id", accountId);
-  if (error) throw new RuleError(error.message);
+  if (error) throw new RuleError(translateDbError(error.message));
 }
 
 // ---------------------------------------------------------------------------
@@ -745,7 +829,7 @@ export async function listInvoicesRaw(): Promise<(Invoice & { customer_name: str
     .select("*")
     .order("date", { ascending: false })
     .order("number", { ascending: false });
-  if (error) throw new RuleError(error.message);
+  if (error) throw new RuleError(translateDbError(error.message));
   const { data: custs } = await supabase.from("customers").select("id, name");
   const custMap = new Map((custs ?? []).map((c) => [c.id, c.name]));
   return (data ?? []).map((i) => ({ ...i, customer_name: custMap.get(i.customer_id) ?? "—" }));
@@ -755,30 +839,41 @@ export async function saveInvoice(data: Record<string, any>, invoiceId?: number 
   if (invoiceId) {
     throw new RuleError("الفاتورة الضريبية لا تقبل التعديل بعد إصدارها. أنشئ إشعاراً دائناً أو مديناً للتصحيح.");
   }
-  const date = String(data.date ?? "");
-  ensureNotBlank(date, "تاريخ الفاتورة");
-  if (!data.customer_id) throw new RuleError("اختر العميل.");
+  const date = safeIsoDate(data.date, "تاريخ الفاتورة");
+  const customerId = positiveId(data.customer_id, "العميل");
   const trips: Record<string, any>[] = data.trips ?? [];
   if (!trips.length) throw new RuleError("أضف نقلة واحدة على الأقل للفاتورة.");
   const notes = txt(data.notes ?? "", "ملاحظات الفاتورة");
   const containerNumber = txt(data.container_number ?? "", "رقم الحاوية");
 
+  if (trips.length > 1000) throw new RuleError("عدد بنود النقل في الفاتورة أكبر من الحد المسموح.");
   for (const t of trips) {
-    t.from_loc = txt(t.from_loc ?? "", "مكان الانطلاق");
-    t.to_loc = txt(t.to_loc ?? "", "مكان الوصول");
-    t.notes = txt(t.notes ?? "", "ملاحظات النقلة");
-    for (const e of t.expenses ?? []) {
-      e.notes = txt(e.notes ?? "", "بيان المصروف");
+    t.from_loc = txt(t.from_loc ?? "", "مكان الانطلاق", 200);
+    t.to_loc = txt(t.to_loc ?? "", "مكان الوصول", 200);
+    ensureNotBlank(t.from_loc, "مكان الانطلاق");
+    ensureNotBlank(t.to_loc, "مكان الوصول");
+    t.notes = txt(t.notes ?? "", "ملاحظات النقلة", 2000);
+    if (t.vehicle_id != null && t.vehicle_id !== "") t.vehicle_id = positiveId(t.vehicle_id, "السيارة");
+    else t.vehicle_id = null;
+    if (t.driver_id != null && t.driver_id !== "") t.driver_id = positiveId(t.driver_id, "السائق");
+    else t.driver_id = null;
+    if (!Array.isArray(t.expenses)) t.expenses = [];
+    if (t.expenses.length > 1000) throw new RuleError("عدد مصروفات النقلة أكبر من الحد المسموح.");
+    for (const e of t.expenses) {
+      e.notes = txt(e.notes ?? "", "بيان المصروف", 2000);
+      e.supplier_name = txt(e.supplier_name ?? "", "اسم المورد", 160);
+      if (!["trip", "fuel", "card", "other"].includes(e.expense_type ?? "other")) throw new RuleError("نوع مصروف النقلة غير صالح.");
+      e.expense_type = e.expense_type ?? "other";
     }
   }
   for (const t of trips) {
-    const qty = Math.max(1, Math.trunc(num(t.qty ?? 1)));
+    const qty = boundedNumber(t.qty ?? 1, "عدد النقلات", 1, 1_000_000, true);
     t.qty = qty;
     t.unit_price = roundMoney(t.unit_price ?? (num(t.price) / qty));
     t.price = roundMoney(qty * t.unit_price);
     if (t.price <= 0) throw new RuleError("سعر النقلة يجب أن يكون أكبر من صفر.");
     for (const e of t.expenses ?? []) {
-      const eq = num(e.qty ?? 1) || 1;
+      const eq = boundedNumber(e.qty ?? 1, "كمية المصروف", 0.001, 1_000_000);
       e.qty = eq;
       e.unit_amount = roundMoney(e.unit_amount ?? (num(e.amount) / eq));
       e.amount = roundMoney(eq * e.unit_amount);
@@ -797,8 +892,12 @@ export async function saveInvoice(data: Record<string, any>, invoiceId?: number 
     }
   }
 
-  const attachments = Array.isArray(data.attachments) ? data.attachments : [];
-  const vatRate = num(data.vat_rate) > 0 ? num(data.vat_rate) : await currentVatRate();
+  const rawAttachments = Array.isArray(data.attachments) ? data.attachments : [];
+  if (rawAttachments.length > 10) throw new RuleError("الحد الأقصى للمرفقات هو 10 ملفات.");
+  const attachments = rawAttachments.map((item) => txt(item, "اسم المرفق", 180)).filter(Boolean);
+  const vatRate = data.vat_rate == null || data.vat_rate === ""
+    ? boundedNumber(await currentVatRate(), "نسبة الضريبة", 0, 100)
+    : boundedNumber(data.vat_rate, "نسبة الضريبة", 0, 100);
 
   // تحقق مبكر (لرسائل خطأ ودّية) — الدالة الخادمية تعيد التحقق بصلاحية كاملة
   if (invoiceId) {
@@ -862,14 +961,14 @@ export async function saveInvoice(data: Record<string, any>, invoiceId?: number 
   const { data: savedId, error } = await supabase.rpc("save_invoice", {
     p_invoice_id: invoiceId ?? null,
     p_date: date,
-    p_customer_id: data.customer_id,
+    p_customer_id: customerId,
     p_vat_rate: vatRate,
     p_notes: notes,
     p_attachments: attachments,
     p_trips: tripsPayload,
     p_container_number: containerNumber,
   });
-  if (error) throw new RuleError(error.message);
+  if (error) throw new RuleError(translateDbError(error.message));
   return savedId as number;
 }
 
@@ -897,7 +996,7 @@ export async function listReceipts(
   if (dTo) q = q.lte("date", dTo);
   if (voucherType) q = q.eq("voucher_type", voucherType);
   const { data, error } = await q;
-  if (error) throw new RuleError(error.message);
+  if (error) throw new RuleError(translateDbError(error.message));
 
   // جداول المسمّيات تُجلب على التوازي بدل التسلسل
   const [{ data: custs }, { data: cbs }, { data: bks }] = await Promise.all([
@@ -917,9 +1016,8 @@ export async function listReceipts(
 }
 
 export async function saveReceipt(data: Record<string, any>, voucherId?: number | null): Promise<number> {
-  const date = String(data.date ?? "");
+  const date = safeIsoDate(data.date, "تاريخ سند القبض");
   const amount = roundMoney(data.amount ?? 0);
-  ensureNotBlank(date, "تاريخ السند");
   ensurePositive(amount, "المبلغ");
   if (data.voucher_type !== "customer" && data.voucher_type !== "other") {
     throw new RuleError("اختر نوع السند.");
@@ -928,22 +1026,23 @@ export async function saveReceipt(data: Record<string, any>, voucherId?: number 
     throw new RuleError("اختر العميل المحصَّل منه.");
   }
   const description = txt(data.description ?? "", "البيان");
-  if ((data.account_kind !== "cashbox" && data.account_kind !== "bank") || !data.account_id) {
+  if (data.account_kind !== "cashbox" && data.account_kind !== "bank") {
     throw new RuleError("اختر جهة الإيداع (خزينة أو بنك).");
   }
-  await ensureAccountExists(data.account_kind, data.account_id);
+  const accountId = positiveId(data.account_id, "جهة الإيداع");
+  await ensureAccountExists(data.account_kind, accountId);
 
   let customerId: number | null = null;
   if (data.voucher_type === "customer") {
-    const c = await getCustomer(data.customer_id);
+    customerId = positiveId(data.customer_id, "العميل");
+    const c = await getCustomer(customerId);
     if (!c) throw new RuleError("العميل المحدد غير موجود.");
-    customerId = data.customer_id;
   }
 
   const row = {
     date,
     account_kind: data.account_kind,
-    account_id: data.account_id,
+    account_id: accountId,
     voucher_type: data.voucher_type,
     customer_id: customerId,
     amount,
@@ -955,7 +1054,7 @@ export async function saveReceipt(data: Record<string, any>, voucherId?: number 
     if (!old) throw new RuleError("السند غير موجود.");
     await ensureMovementEditable(old.date, date);
     const { error } = await supabase.from("receipt_vouchers").update(row).eq("id", voucherId);
-    if (error) throw new RuleError(error.message);
+    if (error) throw new RuleError(translateDbError(error.message));
     return voucherId;
   }
   await ensureDateInOpenYear(date);
@@ -973,7 +1072,7 @@ export async function deleteReceipt(voucherId: number): Promise<void> {
   if (!v) return;
   await ensureMovementEditable(v.date);
   const { error } = await supabase.from("receipt_vouchers").delete().eq("id", voucherId);
-  if (error) throw new RuleError(error.message);
+  if (error) throw new RuleError(translateDbError(error.message));
 }
 
 // ---------------------------------------------------------------------------
@@ -984,12 +1083,13 @@ export async function listPayments(
   dTo?: string | null,
   voucherType?: string | null
 ): Promise<PaymentVoucher[]> {
-  let q = supabase.from("payment_vouchers").select("*").order("date", { ascending: false }).order("number", { ascending: false });
+  // سند الفاتورة النقدية يُعرض من شاشة المشتريات ويُدار معها، لا كسند يدوي مستقل.
+  let q = supabase.from("payment_vouchers").select("*").neq("voucher_type", "purchase").order("date", { ascending: false }).order("number", { ascending: false });
   if (dFrom) q = q.gte("date", dFrom);
   if (dTo) q = q.lte("date", dTo);
   if (voucherType) q = q.eq("voucher_type", voucherType);
   const { data, error } = await q;
-  if (error) throw new RuleError(error.message);
+  if (error) throw new RuleError(translateDbError(error.message));
 
   // كل جداول المسمّيات على التوازي (كانت ثمانية استعلامات متتابعة)
   const [
@@ -1037,14 +1137,21 @@ async function validatePayment(data: Record<string, any>): Promise<void> {
   }
   const amount = roundMoney(data.amount ?? 0);
   ensurePositive(amount);
-  if ((data.account_kind !== "cashbox" && data.account_kind !== "bank") || !data.account_id) {
+  if (data.account_kind !== "cashbox" && data.account_kind !== "bank") {
     throw new RuleError("اختر جهة الصرف (خزينة أو بنك).");
   }
+  data.account_id = positiveId(data.account_id, "جهة الصرف");
   await ensureAccountExists(data.account_kind, data.account_id);
-  if (vt === "trip" && !data.trip_id) throw new RuleError("اختر الفاتورة ثم الرحلة (النقلة) التي يخصها المصروف.");
-  if (vt === "advance" && !data.employee_id) throw new RuleError("اختر الموظف/السائق للسلفة.");
-  if (vt === "vehicle" && !data.vehicle_id) throw new RuleError("اختر السيارة لمصروف الصيانة.");
-  if (vt === "supplier" && !data.supplier_id) throw new RuleError("اختر المورّد المستفيد من السداد.");
+  if (vt === "trip") {
+    data.trip_id = positiveId(data.trip_id, "الرحلة");
+    if (data.invoice_id != null && data.invoice_id !== "") data.invoice_id = positiveId(data.invoice_id, "الفاتورة");
+  }
+  if (vt === "advance") data.employee_id = positiveId(data.employee_id, "الموظف");
+  if (vt === "vehicle") data.vehicle_id = positiveId(data.vehicle_id, "السيارة");
+  if (vt === "supplier") {
+    data.supplier_id = positiveId(data.supplier_id, "المورد");
+    if (data.purchase_invoice_id != null && data.purchase_invoice_id !== "") data.purchase_invoice_id = positiveId(data.purchase_invoice_id, "فاتورة المشتريات");
+  }
   if (vt === "owner" && !String(data.description ?? "").trim()) {
     throw new RuleError("اكتب بيان السحب/المصروف الخاص بصاحب المنشأة (إلزامي).");
   }
@@ -1068,9 +1175,16 @@ async function validatePayment(data: Record<string, any>): Promise<void> {
 }
 
 export async function savePayment(data: Record<string, any>, voucherId?: number | null): Promise<number> {
-  const date = String(data.date ?? "");
-  ensureNotBlank(date, "تاريخ السند");
-  await validatePayment(data);
+  const date = safeIsoDate(data.date, "تاريخ سند الصرف");
+
+  // توافق رجعي: الاستدعاءات القديمة التي ترسل amount فقط تُعامل كوحدة واحدة.
+  const quantity = boundedNumber(data.quantity ?? 1, "كمية المصروف", 0.001, 1_000_000);
+  const fallbackAmount = roundMoney(data.amount ?? 0);
+  const unitAmount = roundMoney(data.unit_amount ?? (quantity > 0 ? fallbackAmount / quantity : 0));
+  if (unitAmount <= 0) throw new RuleError("قيمة وحدة المصروف يجب أن تكون أكبر من صفر.");
+  const amount = roundMoney(quantity * unitAmount);
+  const normalized = { ...data, quantity, unit_amount: unitAmount, amount };
+  await validatePayment(normalized);
 
   const row = {
     date,
@@ -1080,10 +1194,12 @@ export async function savePayment(data: Record<string, any>, voucherId?: number 
     trip_id: data.voucher_type === "trip" ? data.trip_id ?? null : null,
     employee_id: data.voucher_type === "advance" ? data.employee_id ?? null : null,
     vehicle_id: data.voucher_type === "vehicle" ? data.vehicle_id ?? null : null,
-    vehicle_expense: data.voucher_type === "vehicle" ? data.vehicle_expense ?? "" : "",
+    vehicle_expense: data.voucher_type === "vehicle" ? txt(data.vehicle_expense ?? "", "نوع مصروف السيارة", 160) : "",
     supplier_id: data.voucher_type === "supplier" ? data.supplier_id ?? null : null,
     purchase_invoice_id: data.voucher_type === "supplier" ? data.purchase_invoice_id ?? null : null,
-    amount: roundMoney(data.amount ?? 0),
+    quantity,
+    unit_amount: unitAmount,
+    amount,
     description: txt(
       data.voucher_type === "owner"
         ? (String(data.description ?? "").trim() || "سحب نقدي لصاحب المنشأة")
@@ -1113,7 +1229,7 @@ export async function savePayment(data: Record<string, any>, voucherId?: number 
     await ensureMovementEditable(old.date, date);
     await ensureSufficientFunds(row.account_kind, row.account_id, row.amount, { paymentId: voucherId });
     const { error } = await supabase.from("payment_vouchers").update(row).eq("id", voucherId);
-    if (error) throw new RuleError(error.message);
+    if (error) throw new RuleError(translateDbError(error.message));
     return voucherId;
   }
   await ensureDateInOpenYear(date);
@@ -1145,7 +1261,7 @@ export async function deletePayment(voucherId: number): Promise<void> {
   }
   await ensureMovementEditable(v.date);
   const { error } = await supabase.from("payment_vouchers").delete().eq("id", voucherId);
-  if (error) throw new RuleError(error.message);
+  if (error) throw new RuleError(translateDbError(error.message));
 }
 
 // ---------------------------------------------------------------------------
@@ -1189,7 +1305,7 @@ export async function listPayrolls(
   if (dTo) q = q.lte("date", dTo);
   if (employeeId) q = q.eq("employee_id", employeeId);
   const { data, error } = await q;
-  if (error) throw new RuleError(error.message);
+  if (error) throw new RuleError(translateDbError(error.message));
 
   const { data: emps } = await supabase.from("employees").select("id, name, emp_type");
   const { data: cbs } = await supabase.from("cashboxes").select("id, name");
@@ -1225,13 +1341,13 @@ export async function getPayroll(payrollId: number): Promise<Payroll | null> {
 }
 
 export async function savePayroll(data: Record<string, any>, payrollId?: number | null): Promise<number> {
-  const date = String(data.date ?? "");
-  ensureNotBlank(date, "تاريخ الصرف");
-  if (!data.employee_id) throw new RuleError("اختر الموظف/السائق.");
+  const date = safeIsoDate(data.date, "تاريخ صرف الراتب");
+  data.employee_id = positiveId(data.employee_id, "الموظف");
   if (!(await getEmployee(data.employee_id))) throw new RuleError("الموظف المحدد غير موجود.");
-  if ((data.account_kind !== "cashbox" && data.account_kind !== "bank") || !data.account_id) {
+  if (data.account_kind !== "cashbox" && data.account_kind !== "bank") {
     throw new RuleError("اختر جهة الصرف (خزينة أو بنك).");
   }
+  data.account_id = positiveId(data.account_id, "جهة الصرف");
   await ensureAccountExists(data.account_kind, data.account_id);
 
   const base = roundMoney(data.base_salary ?? 0);
@@ -1239,19 +1355,18 @@ export async function savePayroll(data: Record<string, any>, payrollId?: number 
   const otherDed = roundMoney(data.other_deductions ?? 0);
   ensurePositive(base, "الراتب الأساسي");
 
-  const pMonth = Number(data.period_month);
-  const pYear = Number(data.period_year);
-  if (!Number.isFinite(pMonth) || !Number.isFinite(pYear)) throw new RuleError("شهر/سنة الراتب غير صالحة.");
-  if (pMonth < 1 || pMonth > 12) throw new RuleError("شهر الراتب يجب أن يكون بين 1 و 12.");
-  if (pYear < 1900 || pYear > 2200) throw new RuleError("سنة الراتب غير منطقية.");
+  const pMonth = boundedNumber(data.period_month, "شهر الراتب", 1, 12, true);
+  const pYear = boundedNumber(data.period_year, "سنة الراتب", 1900, 2200, true);
   if (additions < 0 || otherDed < 0) throw new RuleError("لا يمكن إدخال قيم سالبة في الإضافات أو الخصومات.");
 
   // يقبل صيغتين (حماية من اختلاف شكل المدخلات بين الواجهات):
   //   صفوف [معرّف السلفة, المبلغ] أو كائنات { payment_voucher_id, amount }
+  if (!Array.isArray(data.settlements ?? [])) throw new RuleError("قائمة تسويات السلف غير صالحة.");
+  if ((data.settlements ?? []).length > 1000) throw new RuleError("عدد تسويات السلف أكبر من الحد المسموح.");
   const settlements: [number, number][] = (data.settlements ?? []).map((s: any) => {
-    if (Array.isArray(s)) return [Number(s[0]), roundMoney(s[1])];
+    if (Array.isArray(s)) return [positiveId(s[0], "معرّف السلفة"), roundMoney(s[1])];
     const vid = s.payment_voucher_id ?? s.voucher_id ?? s.id;
-    return [Number(vid), roundMoney(s.amount)];
+    return [positiveId(vid, "معرّف السلفة"), roundMoney(s.amount)];
   });
   const totalSettled = Math.round(settlements.reduce((a, [, amt]) => a + amt, 0) * 100) / 100;
   const advDed = roundMoney(data.advance_deduction ?? totalSettled);
@@ -1313,7 +1428,7 @@ export async function savePayroll(data: Record<string, any>, payrollId?: number 
     p_notes: txt(data.notes ?? "", "الملاحظات"),
     p_settlements: settlements,
   });
-  if (error) throw new RuleError(error.message);
+  if (error) throw new RuleError(translateDbError(error.message));
   return savedId as number;
 }
 
@@ -1322,5 +1437,5 @@ export async function deletePayroll(payrollId: number): Promise<void> {
   if (!p) return;
   await ensureMovementEditable(p.date);
   const { error } = await supabase.from("payrolls").delete().eq("id", payrollId);
-  if (error) throw new RuleError(error.message);
+  if (error) throw new RuleError(translateDbError(error.message));
 }

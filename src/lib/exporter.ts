@@ -258,11 +258,30 @@ export async function exportPdfHtml(html: string, defaultName: string): Promise<
 }
 
 /**
- * فتح نافذة طباعة بتنسيق ورقي كامل يعتمد إعدادات الطباعة الخاصة بالشركة.
- * ps اختيارية للحفاظ على التوافق مع الاستدعاءات القديمة.
+ * يفتح نافذة المعاينة فور نقرة المستخدم قبل أي جلب بيانات، لتفادي حجب النافذة
+ * ولإعطاء استجابة مرئية مباشرة بدلاً من انتظار تجهيز الفاتورة وQR.
  */
-export function printHtml(html: string, title: string, ps?: PrintSettingsLike): void {
-  const w = window.open("", "_blank", "width=900,height=650");
+export function openPrintPreview(title = "معاينة الطباعة"): Window | null {
+  if (typeof window === "undefined") return null;
+  const w = window.open("", "_blank", "width=900,height=650,scrollbars=yes,resizable=yes");
+  if (!w) return null;
+  w.document.open();
+  w.document.write(`<!doctype html><html dir="rtl" lang="ar"><head><meta charset="utf-8"><title>${esc(title)}</title>
+    <style>body{margin:0;min-height:100vh;display:grid;place-items:center;background:#f8fafc;color:#334155;font-family:'IBM Plex Sans Arabic','Segoe UI',Tahoma,sans-serif}.loading{background:#fff;border:1px solid #e2e8f0;border-radius:16px;padding:28px 36px;box-shadow:0 12px 35px rgba(15,23,42,.08);text-align:center}.spinner{width:28px;height:28px;margin:0 auto 12px;border:3px solid #dbeafe;border-top-color:#2563eb;border-radius:50%;animation:s .75s linear infinite}@keyframes s{to{transform:rotate(360deg)}}</style></head>
+    <body><div class="loading"><div class="spinner"></div><b>جارٍ تجهيز معاينة الفاتورة…</b><div style="font-size:12px;color:#64748b;margin-top:5px">ستظهر صفحة الطباعة خلال لحظات</div></div></body></html>`);
+  w.document.close();
+  w.focus();
+  return w;
+}
+
+/**
+ * فتح نافذة طباعة بتنسيق ورقي كامل يعتمد إعدادات الطباعة الخاصة بالشركة.
+ * يمكن تمرير نافذة سبق فتحها كي تظهر المعاينة فور النقر.
+ */
+export function printHtml(html: string, title: string, ps?: PrintSettingsLike, previewWindow?: Window | null): void {
+  const w = previewWindow && !previewWindow.closed
+    ? previewWindow
+    : window.open("", "_blank", "width=900,height=650,scrollbars=yes,resizable=yes");
   if (!w) return;
   const css = ps
     ? ps.css
@@ -270,9 +289,10 @@ export function printHtml(html: string, title: string, ps?: PrintSettingsLike): 
        table { border-collapse: collapse; }
        @media print { body { padding: 0; } }`;
   const watermark = ps?.watermark ? `<div class="doc-watermark">${esc(ps.watermark)}</div>` : "";
+  w.document.open();
   w.document.write(`<!doctype html><html dir="rtl" lang="ar"><head><meta charset="utf-8"><title>${esc(title)}</title>
     <style>${css}</style></head><body>${watermark}${html}
-    <script>window.onload=function(){setTimeout(function(){window.print();},250);}</script></body></html>`);
+    <script>window.onload=function(){setTimeout(function(){window.focus();window.print();},120);}</script></body></html>`);
   w.document.close();
 }
 

@@ -42,8 +42,26 @@ export const PAYMENT_TYPES: Record<string, string> = {
   advance: "سلفة موظف/سائق",
   vehicle: "مصروف لسيارة",
   supplier: "سداد لمورّد",
+  purchase: "دفع فاتورة مشتريات نقدية",
   owner: "سحب نقدي لصاحب المنشأة",
   general: "مصروف عام",
+};
+
+/** بنود المصروفات التي تظهر مستقلة في تقرير الأرباح والخسائر. */
+export const PURCHASE_EXPENSE_CATEGORIES: Record<string, string> = {
+  fuel: "وقود وزيوت",
+  maintenance: "صيانة وإصلاح",
+  spare_parts: "قطع غيار",
+  tires: "إطارات وكاوتش",
+  rent: "إيجارات",
+  utilities: "كهرباء ومياه وخدمات",
+  communications: "اتصالات وإنترنت",
+  insurance: "تأمين",
+  government_fees: "رسوم حكومية وتراخيص",
+  office: "مصروفات مكتبية",
+  hospitality: "ضيافة ونظافة",
+  professional_fees: "أتعاب مهنية",
+  other: "مشتريات ومصروفات أخرى",
 };
 
 export const VEHICLE_EXPENSES: Record<string, string> = {

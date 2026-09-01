@@ -89,6 +89,8 @@ declare
     'save_payroll',
     'save_purchase_invoice',
     'admin_update_app_settings',
+    'admin_set_company_feature',
+    'has_company_feature',
     'admin_set_company_status',
     'admin_set_subscription',
     'admin_delete_company',

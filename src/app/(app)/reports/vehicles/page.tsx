@@ -23,13 +23,14 @@ export default function VehiclesReportPage() {
     placeholderData: keepPreviousData,
   });
 
-  const headers = ["الكود", "رقم اللوحة", "النوع", "عدد النقلات", "الإيرادات", "مصروفات مباشرة", "صيانة (سندات دفع)", "صافي ربحية السيارة"];
-  const rows = (data ?? []).map((v: any) => [v.code, v.plate, v.vtype || "—", String(v.trips), money(v.revenue), money(v.direct), money(v.maintenance), money(v.net)]);
+  const headers = ["الكود", "رقم اللوحة", "النوع", "عدد النقلات", "الإيرادات", "مصروفات مباشرة", "صيانة (سندات دفع)", "مشتريات محمّلة", "صافي ربحية السيارة"];
+  const rows = (data ?? []).map((v: any) => [v.code, v.plate, v.vtype || "—", String(v.trips), money(v.revenue), money(v.direct), money(v.maintenance), money(v.purchases), money(v.net)]);
   const totals = {
     trips: (data ?? []).reduce((a, v: any) => a + v.trips, 0),
     rev: (data ?? []).reduce((a, v: any) => a + v.revenue, 0),
     direct: (data ?? []).reduce((a, v: any) => a + v.direct, 0),
     maint: (data ?? []).reduce((a, v: any) => a + v.maintenance, 0),
+    purchases: (data ?? []).reduce((a, v: any) => a + v.purchases, 0),
     net: (data ?? []).reduce((a, v: any) => a + v.net, 0),
   };
 
@@ -39,11 +40,12 @@ export default function VehiclesReportPage() {
     ["إجمالي الإيرادات", money(totals.rev)],
     ["إجمالي المصروفات المباشرة", money(totals.direct)],
     ["إجمالي الصيانة", money(totals.maint)],
+    ["المشتريات المحمّلة على السيارات", money(totals.purchases)],
     ["صافي الربحية", money(totals.net)],
   ];
 
   return (
-    <PageFrame title="تقرير أداء السيارات" subtitle="إيرادات السيارة من الفواتير − مصروفات رحلاتها − صيانتها من سندات الدفع"
+    <PageFrame title="تقرير أداء السيارات" subtitle="إيرادات السيارة − مصروفات رحلاتها − صيانتها − فواتير المشتريات المحمّلة عليها"
       toolbar={
         <FilterRow dFrom={dFrom} dTo={dTo} onFrom={setDFrom} onTo={setDTo} onRefresh={() => qc.invalidateQueries({ queryKey: ["report-vehicles"] })}>
           <div><label className="field-label">السيارة</label>
@@ -62,7 +64,7 @@ export default function VehiclesReportPage() {
               <thead><tr>{headers.map((h, i) => <th key={i}>{h}</th>)}</tr></thead>
               <tbody>
                 {rows.map((r, i) => <tr key={i}>{r.map((c, j) => <td key={j}>{c}</td>)}</tr>)}
-                {rows.length > 0 && <tr style={{ fontWeight: 700 }}><td>الإجمالي</td><td></td><td></td><td>{totals.trips}</td><td>{money(totals.rev)}</td><td>{money(totals.direct)}</td><td>{money(totals.maint)}</td><td>{money(totals.net)}</td></tr>}
+                {rows.length > 0 && <tr style={{ fontWeight: 700 }}><td>الإجمالي</td><td></td><td></td><td>{totals.trips}</td><td>{money(totals.rev)}</td><td>{money(totals.direct)}</td><td>{money(totals.maint)}</td><td>{money(totals.purchases)}</td><td>{money(totals.net)}</td></tr>}
                 {!rows.length && <tr><td colSpan={headers.length} style={{ color: "var(--muted)" }}>لا توجد بيانات</td></tr>}
               </tbody>
             </table>
@@ -72,6 +74,7 @@ export default function VehiclesReportPage() {
               { label: "الإيرادات", value: totals.rev },
               { label: "المصروفات المباشرة", value: totals.direct },
               { label: "الصيانة", value: totals.maint },
+              { label: "المشتريات المحمّلة", value: totals.purchases },
               { label: "صافي الربحية", value: totals.net },
             ]} />
           </div>

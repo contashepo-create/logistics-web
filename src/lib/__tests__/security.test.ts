@@ -2,8 +2,10 @@
 import { describe, it, expect } from "vitest";
 import {
   checkSignupEmail, checkPassword, sanitizeText, escapeHtml, looksMalicious,
-  safeField, safePhone, generateClientCode, generateTicketCode,
-  isValidClientCode, isValidTicketCode, normalizeCode, CODE_ALPHABET,
+  safeAddress, safeCompanyName, safeEmail, safeField, safeFinancialYear,
+  safeIsoDate, safeNumber, safePersonName, safePhone,
+  generateClientCode, generateTicketCode, isValidClientCode, isValidTicketCode,
+  normalizeCode, normalizePhone, CODE_ALPHABET,
 } from "@/lib/security";
 
 describe("قبول البريد الإلكتروني", () => {
@@ -18,7 +20,7 @@ describe("قبول البريد الإلكتروني", () => {
     }
   });
   it("يرفض البريد المؤقت/الوهمي", () => {
-    for (const e of ["a@mailinator.com", "a@yopmail.com", "a@10minutemail.com", "a@temp-mail.org", "a@1secmail.com"]) {
+    for (const e of ["a@mailinator.com", "a@yopmail.com", "a@10minutemail.com", "a@temp-mail.org", "a@1secmail.com", "test@gmail.com", "demo@yahoo.com"]) {
       const r = checkSignupEmail(e);
       expect(r.ok).toBe(false);
       expect(r.message).toContain("وهمي");
@@ -76,9 +78,36 @@ describe("تعقيم المدخلات", () => {
     expect(() => safeField("ab", { label: "الاسم", min: 3 })).toThrow();
     expect(safeField("  أحمد  ", { label: "الاسم" })).toBe("أحمد");
   });
-  it("safePhone ينظّف الأرقام", () => {
-    expect(safePhone("+20 100 <b>123</b> 4567")).toBe("+20 100 b 123 /b 4567".replace(/[^\d+\s-]/g, "").trim());
+  it("safePhone يطبّع الرقم ويرفض الأحرف/الوسوم والأرقام الوهمية", () => {
+    expect(safePhone("+20 100 123 4567")).toBe("201001234567");
+    expect(normalizePhone("+201001234567")).toBe(normalizePhone("(00)201001234567"));
+    expect(() => safePhone("+20 100 <b>123</b> 4567")).toThrow("رموز غير مسموح");
     expect(() => safePhone("12", true)).toThrow();
+    expect(() => safePhone("0000000000", true)).toThrow("وهمياً");
+  });
+});
+
+describe("الأنواع والقيم الحقيقية", () => {
+  it("يرفض الأسماء والعناوين الوهمية ويقبل القيم العربية الحقيقية", () => {
+    for (const fake of ["test", "تجربة", "عميل", "xxxx"]) expect(() => safeCompanyName(fake)).toThrow();
+    expect(safeCompanyName("شركة الدلتا للنقل")).toBe("شركة الدلتا للنقل");
+    expect(safePersonName("أحمد محمد")).toBe("أحمد محمد");
+    expect(safeAddress("المنصورة، شارع الجمهورية 12")).toContain("المنصورة");
+  });
+
+  it("يتحقق من البريد العام والأرقام المحدودة دون NaN أو Infinity", () => {
+    expect(safeEmail(" SALES@Example.com ")).toBe("sales@example.com");
+    expect(() => safeEmail("x@bad", true)).toThrow();
+    expect(safeNumber("12.5", { label: "الكمية", min: 0, max: 20 })).toBe(12.5);
+    expect(() => safeNumber("Infinity", { label: "الكمية" })).toThrow();
+    expect(() => safeNumber(1.2, { label: "العدد", integer: true })).toThrow();
+  });
+
+  it("يرفض التاريخ المستحيل ونطاق السنة المالية غير المنطقي", () => {
+    expect(safeIsoDate("2026-02-28")).toBe("2026-02-28");
+    expect(() => safeIsoDate("2026-02-31")).toThrow();
+    expect(safeFinancialYear("2026-01-01", "2026-12-31").year).toBe(2026);
+    expect(() => safeFinancialYear("2026-12-31", "2026-01-01")).toThrow();
   });
 });
 

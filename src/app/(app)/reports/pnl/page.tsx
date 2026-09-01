@@ -4,7 +4,7 @@ import { useState } from "react";
 import { useQuery, useQueryClient, keepPreviousData } from "@tanstack/react-query";
 import { PageFrame, Spinner, ExportBar, TotalsBar, FilterRow } from "@/components/ui";
 import { pnlReport } from "@/lib/calc";
-import { money, todayIso } from "@/lib/format";
+import { money, todayIso, PURCHASE_EXPENSE_CATEGORIES } from "@/lib/format";
 import { exportPage } from "@/lib/exportHelper";
 
 function yearStart(): string { return `${new Date().getFullYear()}-01-01`; }
@@ -21,6 +21,9 @@ export default function PnlReportPage() {
   });
 
   const d = data ?? {};
+  const purchaseRows: [string, number][] = Object.entries(PURCHASE_EXPENSE_CATEGORIES)
+    .map(([key, label]) => [`مشتريات — ${label}`, d[`purchase_${key}`] ?? 0] as [string, number])
+    .filter(([, value]) => Math.abs(value) > 0.009);
   const rows: [string, number][] = [
     ["إيرادات النقلات", d.transport_revenue ?? 0],
     ["الإيرادات الأخرى (خردة / متنوع)", d.other_revenue ?? 0],
@@ -32,7 +35,9 @@ export default function PnlReportPage() {
     ["الرواتب الصافية المنصرفة", d.salaries ?? 0],
     ["إجمالي السلفيات المسجلة", d.advances ?? 0],
     ["مصاريف الصيانة (سندات السيارات)", d.maintenance ?? 0],
-    ["المصاريف العامة (إيجار / كهرباء ...)", d.general_expenses ?? 0],
+    ["المصاريف العامة المباشرة", d.general_expenses ?? 0],
+    ...purchaseRows,
+    ["إجمالي فواتير المشتريات قبل ضريبة المدخلات", d.purchase_expenses ?? 0],
     ["سحب نقدي لصاحب المنشأة (مصاريف خاصة بالمالك)", d.owner_withdrawals ?? 0],
     ["إجمالي المصروفات", d.total_expenses ?? 0],
     ["ضريبة القيمة المضافة المحصلة (مرجعي — ليست ربحاً)", d.vat_collected ?? 0],
@@ -47,7 +52,7 @@ export default function PnlReportPage() {
   ];
 
   return (
-    <PageFrame title="تقرير الأرباح والخسائر الشامل (P&L)" subtitle="(إيرادات النقلات + الإيرادات الأخرى) − (المصروفات المباشرة + الرواتب + السلفيات + الصيانة + المصاريف العامة + سحب المالك)"
+    <PageFrame title="تقرير الأرباح والخسائر الشامل (P&L)" subtitle="فواتير المشتريات تظهر حسب بند المصروف المختار، سواء كانت نقدية أو آجلة"
       toolbar={<FilterRow dFrom={dFrom} dTo={dTo} onFrom={setDFrom} onTo={setDTo} onRefresh={() => qc.invalidateQueries({ queryKey: ["report-pnl"] })} />}
       exportBar={<ExportBar
         onExcel={() => exportPage({ title: "تقرير الأرباح والخسائر الشامل (P&L)", subtitle, headers: ["البيان", "القيمة"], rows: rows.map(([k, v]) => [k, money(v)]), summaryLines: summary, mode: "excel" })}

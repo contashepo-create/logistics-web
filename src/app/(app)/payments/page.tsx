@@ -1,10 +1,10 @@
 "use client";
 
 import { useMemo, useState } from "react";
+import { useRouter } from "next/navigation";
 import { useQuery, useQueryClient, keepPreviousData } from "@tanstack/react-query";
 import { DataTable } from "@/components/DataTable";
 import { PageFrame, Spinner, ExportBar, TotalsBar, FilterRow, Select } from "@/components/ui";
-import { PaymentDialog } from "@/components/dialogs/operations";
 import { listPayments, deletePayment } from "@/lib/repo";
 import { notify } from "@/components/toast";
 import { money, todayIso, PAYMENT_TYPES } from "@/lib/format";
@@ -15,10 +15,10 @@ function yearStart(): string { return `${new Date().getFullYear()}-01-01`; }
 
 export default function PaymentsPage() {
   const qc = useQueryClient();
+  const router = useRouter();
   const [dFrom, setDFrom] = useState(yearStart());
   const [dTo, setDTo] = useState(todayIso());
   const [type, setType] = useState<string>("");
-  const [dialog, setDialog] = useState<{ mode: string; id?: number } | null>(null);
 
   const { data, isLoading } = useQuery({
     queryKey: ["payments", dFrom, dTo, type],
@@ -57,14 +57,15 @@ export default function PaymentsPage() {
   };
 
   return (
-    <PageFrame title="سندات الدفع" subtitle="مصروف رحلة / سلفة موظف / مصروف سيارة (صيانة وكاوتش) / مصروف عام"
-      onAdd={() => setDialog({ mode: "add" })}
+    <PageFrame title="سندات الدفع" subtitle="مصروف رحلة / سلفة موظف / مصروف سيارة / سداد مورّد / مصروف عام — الإدخال في صفحة كاملة"
+      addText="➕ سند دفع جديد"
+      onAdd={() => router.push("/payments/new")}
       toolbar={
         <FilterRow dFrom={dFrom} dTo={dTo} onFrom={setDFrom} onTo={setDTo} onRefresh={() => qc.invalidateQueries({ queryKey: ["payments"] })}>
           <div><label className="field-label">النوع</label>
             <Select value={type} onChange={(e) => setType(e.target.value)}>
               <option value="">الكل</option>
-              {Object.entries(PAYMENT_TYPES).map(([k, v]) => <option key={k} value={k}>{v}</option>)}
+              {Object.entries(PAYMENT_TYPES).filter(([k]) => k !== "purchase").map(([k, v]) => <option key={k} value={k}>{v}</option>)}
             </Select>
           </div>
         </FilterRow>
@@ -77,8 +78,8 @@ export default function PaymentsPage() {
         <>
           <DataTable headers={headers} rows={rows} ids={(data ?? []).map((v) => v.id)}
             onAction={(id, key) => {
-              if (key === "view") setDialog({ mode: "view", id: Number(id) });
-              else if (key === "edit") setDialog({ mode: "edit", id: Number(id) });
+              if (key === "view") router.push(`/payments/${Number(id)}?mode=view`);
+              else if (key === "edit") router.push(`/payments/${Number(id)}?mode=edit`);
               else if (key === "delete") onDelete(Number(id));
             }} />
           <div style={{ marginTop: 12 }}>
@@ -86,7 +87,6 @@ export default function PaymentsPage() {
           </div>
         </>
       )}
-      {dialog && <PaymentDialog id={dialog.id} readOnly={dialog.mode === "view"} onClose={(saved) => { setDialog(null); if (saved) { qc.invalidateQueries({ queryKey: ["payments"] }); qc.invalidateQueries({ queryKey: ["report-trips"] }); qc.invalidateQueries({ queryKey: ["report-pnl"] }); qc.invalidateQueries({ queryKey: ["customers"] }); qc.invalidateQueries({ queryKey: ["invoices"] }); } }} />}
     </PageFrame>
   );
 }
