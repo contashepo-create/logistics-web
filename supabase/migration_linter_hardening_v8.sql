@@ -17,6 +17,12 @@
 --     سحب EXECUTE من authenticated عن دوال الـ trigger والدوال الداخلية،
 --     والإبقاء فقط على قائمة RPC التي تستدعيها الواجهة فعلياً.
 --  5) auth_leaked_password_protection — إعداد لوحة تحكم (انظر آخر الملف).
+--
+-- ⚠️ تصحيح مهم (v10): النسخة الأولى من هذا الملف سحبت EXECUTE أيضاً عن
+--    auth_company_id / is_company_active / is_admin / is_active_user، فتعطّلت
+--    كل سياسات RLS وأعاد PostgREST 403. تعبير السياسة يُقيَّم بصلاحيات الدور
+--    المستدعي لا بصلاحيات مالك الجدول. صُحّح أدناه عبر مصفوفة policy_fns،
+--    وإصلاح القواعد المتضرّرة في fix_policy_functions_v10.sql.
 -- ============================================================================
 
 -- ---------------------------------------------------------------------------
@@ -93,6 +99,14 @@ declare
   ];
   -- دوال يحتاجها الزائر (تحقق البريد قبل إنشاء الحساب)
   rpc_anon text[] := array['is_allowed_email'];
+  -- ⚠️ حرج: دوال تستدعيها تعبيرات سياسات RLS والمشغّلات.
+  -- تعبير السياسة يُقيَّم بصلاحيات الدور المستدعي (authenticated) لا بصلاحيات
+  -- مالك الجدول؛ فسحب EXECUTE عنها يجعل كل استعلام يرمي 403
+  -- «permission denied for function» (حدث فعلاً — انظر fix_policy_functions_v10.sql).
+  policy_fns text[] := array[
+    'auth_company_id', 'is_company_active', 'is_admin', 'is_active_user',
+    'safe_text', 'gen_code', 'log_activity'
+  ];
 begin
   for r in
     select p.oid::regprocedure as sig,
@@ -113,16 +127,18 @@ begin
 
     if r.name = any (rpc_anon) then
       execute format('grant execute on function %s to anon, authenticated', r.sig);
+    elsif r.name = any (policy_fns) then
+      -- إلزامي لعمل RLS — لا تسحبها مهما قال المدقّق (0028/0029 مقبولة هنا).
+      -- هذه الدوال لا تكشف بيانات: تُرجع قيمة عن المستخدم المتصل نفسه فقط.
+      execute format('grant execute on function %s to authenticated', r.sig);
     elsif r.name = any (rpc_authenticated) then
       execute format('grant execute on function %s to authenticated', r.sig);
     elsif not r.secdef then
       -- دوال SECURITY INVOKER العادية (مساعدات تُستخدم داخل السياسات/الاستعلامات)
       execute format('grant execute on function %s to authenticated', r.sig);
     end if;
-    -- الباقي (دوال SECURITY DEFINER الداخلية مثل auth_company_id،
-    -- is_company_active، is_active_user، log_activity، rls_audit، gen_code،
-    -- safe_text) تبقى بلا EXECUTE للأدوار العامة؛ تعمل داخلياً عبر
-    -- السياسات والمشغّلات ومالك الدوال.
+    -- الباقي (دوال SECURITY DEFINER الداخلية مثل rls_audit، export_company_data
+    -- غير المستخدمة من الواجهة) تبقى بلا EXECUTE للأدوار العامة.
   end loop;
 end $grants$;
 

@@ -133,6 +133,37 @@ describe("auth.ts — الجلسة والمصادقة", () => {
     await expect(authLib.registerCurrentCompany({ companyName: "x" })).rejects.toThrow("no");
   });
 
+  // اختبار انحدار: خطأ صلاحيات (403) يجب أن يُرمى لا أن يُبتلع ويُقرأ
+  // كأنه «لا توجد شركة» — وإلا دخل المستخدم حلقة /onboarding لا تنتهي.
+  it("getCompany يرمي عند خطأ صلاحيات ولا يعيد null", async () => {
+    authLib.clearIdentityCache();
+    supabaseMock.auth.getUser = vi.fn(async () => ({ data: { user: { id: "u1" } } }));
+    supabaseMock.from.mockImplementation(makeFrom((st) => {
+      if (st.table === "profiles") return { data: { id: "u1", company_id: "c1" }, error: null };
+      return { data: null, error: { message: "permission denied for function auth_company_id" } };
+    }));
+    await expect(authLib.getCompany(true)).rejects.toThrow();
+  });
+
+  it("getProfile يرمي عند خطأ صلاحيات ولا يعيد null", async () => {
+    authLib.clearIdentityCache();
+    supabaseMock.auth.getUser = vi.fn(async () => ({ data: { user: { id: "u1" } } }));
+    supabaseMock.from.mockImplementation(makeFrom(() => ({
+      data: null, error: { message: "permission denied" },
+    })));
+    await expect(authLib.getProfile(true)).rejects.toThrow();
+  });
+
+  it("getCompany يعيد null فعلاً عند غياب الشركة (تهيئة مطلوبة)", async () => {
+    authLib.clearIdentityCache();
+    supabaseMock.auth.getUser = vi.fn(async () => ({ data: { user: { id: "u1" } } }));
+    supabaseMock.from.mockImplementation(makeFrom((st) => {
+      if (st.table === "profiles") return { data: { id: "u1", company_id: null }, error: null };
+      return { data: null, error: null };
+    }));
+    expect(await authLib.getCompany(true)).toBeNull();
+  });
+
   it("isAdmin يقارن البريد (تجاهل حالة الأحرف)", async () => {
     supabaseMock.auth.getUser = vi.fn(async () => ({ data: { user: { email: "CONTA.MOHA@gmail.com" } } }));
     expect(await authLib.isAdmin()).toBe(true);

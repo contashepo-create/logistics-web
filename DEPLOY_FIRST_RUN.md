@@ -351,3 +351,52 @@ create policy admin_full_access on public.<table> for all
 ### احتمال ثانٍ (إن لم يكن حسابك حساب المطوّر)
 استعلاما (3) و(6) في ملف التشخيص يغطّيانه: جدول جديد بلا `tenant_isolation`،
 أو ملفّان شخصيان مرتبطان بنفس `company_id`.
+
+## v10 — إصلاح عاجل: 403 على companies وحلقة «أنشئ شركة جديدة»
+
+**السبب: خطأ في `migration_linter_hardening_v8.sql`.**
+
+v8 سحبت `EXECUTE` من الدور `authenticated` عن دوال SECURITY DEFINER الداخلية
+اعتماداً على افتراض خاطئ بأنها «لا تُستدعى عبر REST». الحقيقة أن **تعبيرات
+سياسات RLS تُقيَّم بصلاحيات الدور المستدعي** (`authenticated`) لا بصلاحيات مالك
+الجدول. فحين فقد الدور صلاحية تنفيذ:
+
+```
+auth_company_id() · is_company_active() · is_admin() · is_active_user()
+```
+
+صارت كل سياسة تستدعيها ترمي `permission denied for function`، فأعاد PostgREST
+**403** على `companies` وعلى كل جداول التشغيل.
+
+**كيف تحوّل ذلك إلى حلقة لا نهائية:** `getCompany()` كانت تتجاهل حقل `error`
+وتُرجع `null`، و`AppLayout` يقرأ `null` على أنه «لا توجد شركة» فيحوّل إلى
+`/onboarding`. المستخدم ينشئ شركة، و`register_company` تنجح فعلاً لأنها
+SECURITY DEFINER وتعمل بصلاحيات مالكها — لكن القراءة التالية تفشل بـ 403 مجدداً
+فيعود إلى `/onboarding`. النتيجة: شركات مكرّرة وحلقة لا تنتهي.
+
+### الخطوات
+1. نفّذ `supabase/fix_policy_functions_v10.sql` — يعيد `EXECUTE` للدوال الأربع
+   وللمساعدات التي تستدعيها المُشغّلات (`safe_text`, `is_allowed_email`,
+   `gen_code`, `log_activity`)، ويتحقق من سياسات `companies`/`profiles`.
+2. سجّل خروجاً ثم دخولاً.
+3. **راجع الشركات المكرّرة** التي أُنشئت أثناء الحلقة:
+   ```sql
+   select c.id, c.name, c.created_at,
+          (select count(*) from public.customers x where x.company_id = c.id) as customers
+     from public.companies c order by c.created_at desc;
+   ```
+   احذف الفارغة عبر لوحة المطوّر أو `admin_delete_company(id)` — **لا تحذف أي
+   شركة عليها بيانات.** ملفك الشخصي مرتبط بشركة واحدة فقط
+   (`select company_id from public.profiles where id = auth.uid()`).
+
+> **ملاحظة أمنية:** إعادة هذه الصلاحيات لا تفتح أي ثغرة. الدوال لا تكشف بيانات —
+> كلها تُرجع قيمة عن المستخدم المتصل نفسه (معرّف شركته، هل هو مطوّر، هل اشتراكه
+> فعّال). تنبيهات المدقّق 0028/0029 عليها **مقبولة ومقصودة** لأنها شرط تشغيل RLS.
+> العزل الفعلي تفرضه سياسات `tenant_isolation` وليس حجب هذه الدوال.
+
+### تحصين الواجهة (حتى لا تتكرر الحلقة أبداً)
+- `getProfile()` و`getCompany()` صارتا **ترميان** عند خطأ الاستعلام بدل ابتلاعه.
+- `AppLayout` وصفحة `/onboarding` تميّزان «لا توجد شركة» عن «فشل الطلب»، وتعرضان
+  شاشة خطأ واضحة مع «إعادة المحاولة» و«تسجيل الخروج» بدل إعادة التوجيه في حلقة.
+- صفحة `/onboarding` تحذّر صراحة من إنشاء شركة قبل حلّ المشكلة.
+- 3 اختبارات انحدار جديدة تضمن عدم عودة السلوك (المجموع 389 اختباراً).

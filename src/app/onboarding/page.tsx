@@ -10,12 +10,21 @@ export default function OnboardingPage() {
   const [name, setName] = useState("");
   const [loading, setLoading] = useState(false);
   const [checking, setChecking] = useState(true);
+  const [loadError, setLoadError] = useState("");
 
   useEffect(() => {
     (async () => {
       const session = await getSession();
       if (!session) return router.replace("/login");
-      if (await getCompany()) return router.replace("/customers");
+      try {
+        if (await getCompany()) return router.replace("/customers");
+      } catch (e) {
+        // خطأ صلاحيات/شبكة: لا نُظهر نموذج «أنشئ شركتك» وكأن المستخدم بلا شركة،
+        // لأن ذلك يدفعه لإنشاء شركة مكرّرة. نعرض السبب الحقيقي بدلاً من ذلك.
+        setLoadError(e instanceof Error ? e.message : String(e));
+        setChecking(false);
+        return;
+      }
       setChecking(false);
     })();
   }, [router]);
@@ -34,6 +43,23 @@ export default function OnboardingPage() {
       setLoading(false);
     }
   };
+
+  if (loadError) {
+    return (
+      <div style={{ minHeight: "100vh", display: "flex", alignItems: "center", justifyContent: "center", background: "var(--bg)", padding: 16 }}>
+        <div className="auth-card" style={{ textAlign: "center" }}>
+          <div className="auth-brand">⚠️</div>
+          <h1 className="auth-title">تعذّر التحقق من شركتك</h1>
+          <p className="auth-sub">{loadError}</p>
+          <p className="auth-sub">لا تُنشئ شركة جديدة قبل حلّ هذه المشكلة — قد تملك شركة بالفعل.</p>
+          <div style={{ display: "grid", gap: 10, marginTop: 14 }}>
+            <button className="btn btn-primary auth-btn" onClick={() => window.location.reload()}>إعادة المحاولة</button>
+            <button className="btn" onClick={async () => { await signOut(); router.replace("/login"); }}>تسجيل الخروج</button>
+          </div>
+        </div>
+      </div>
+    );
+  }
 
   if (checking) {
     return (
