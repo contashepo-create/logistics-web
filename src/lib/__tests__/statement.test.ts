@@ -18,7 +18,7 @@ async function seed() {
   seedTable("profiles", [{ id: "u1", company_id: "c1", email: "o@t.com", name: "م" }]);
   seedTable("companies", [{ id: "c1", name: "شركة النقل", currency: "ج.م", vat_rate: 0, plan_type: "open", is_active: true }]);
   await repo.saveYear({ year: 2026, date_from: "2026-01-01", date_to: "2026-12-31" });
-  const cust = await repo.saveCustomer({ name: "عميل المطابقة", phone: "0100", address: "المنصورة", opening_balance: 0 });
+  const cust = await repo.saveCustomer({ name: "عميل المطابقة", phone: "01012345678", address: "المنصورة", opening_balance: 0 });
   const cb = await repo.saveAccount("cashbox", { name: "الخزينة", created_date: "2026-01-01", opening_balance: 0 });
   const inv1 = await repo.saveInvoice({ date: "2026-01-10", customer_id: cust, attachments: [],
     trips: [{ from_loc: "المنصورة", to_loc: "القاهرة", qty: 1, unit_price: 1000, expenses: [] }] });
@@ -106,7 +106,7 @@ describe("كشف حساب العميل الاحترافي", () => {
     await repo.saveReceipt({ date: "2026-03-20", account_kind: "cashbox", account_id: s.cb, voucher_type: "customer", customer_id: s.cust, amount: 1600, description: "دفعة" });
     const st = await calc.customerStatementFull(s.cust, "1900-01-01", "2999-12-31");
     const html = customerStatementHtml({
-      info: { company_name: "شركة النقل", company_phone: "0100", company_address: "المنصورة", currency: "ج.م" },
+      info: { company_name: "شركة النقل", company_phone: "01012345678", company_address: "المنصورة", currency: "ج.م" },
       ps: { ...DEFAULT_PRINT_SETTINGS, show_signature: true }, st,
     });
     expect(html).toContain("كشف حساب عميل");

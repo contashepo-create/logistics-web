@@ -22,14 +22,19 @@ describe("إعدادات الطباعة", () => {
     expect(css).not.toContain("nth-child(even)");
     expect(css).toContain("border: none;");
   });
+  it("لا يسمح بحقن CSS عبر لون القالب", () => {
+    const css = printCss({ ...DEFAULT_PRINT_SETTINGS, accent_color: "#fff;}INJECTED{color:red" });
+    expect(css).not.toContain("INJECTED");
+    expect(css).toContain(DEFAULT_PRINT_SETTINGS.accent_color);
+  });
 });
 
-describe("قوالب الطباعة الخمسة", () => {
-  it("توجد خمسة قوالب بمعرّفات فريدة ووصف واضح", () => {
-    expect(PRINT_TEMPLATES).toHaveLength(5);
+describe("قوالب الفواتير الاحترافية المنقولة من pro-acc", () => {
+  it("توجد ستة قوالب بمعرّفات فريدة ووصف واضح", () => {
+    expect(PRINT_TEMPLATES).toHaveLength(6);
     const ids = PRINT_TEMPLATES.map((t) => t.id);
-    expect(new Set(ids).size).toBe(5);
-    expect(ids).toEqual(["modern", "classic", "elegant", "compact", "minimal"]);
+    expect(new Set(ids).size).toBe(6);
+    expect(ids).toEqual(["modern", "classic", "compact", "elegant", "logistics", "thermal"]);
     for (const t of PRINT_TEMPLATES) {
       expect(t.name.length).toBeGreaterThan(3);
       expect(t.description.length).toBeGreaterThan(10);
@@ -44,7 +49,7 @@ describe("قوالب الطباعة الخمسة", () => {
 
   it("كل قالب ينتج CSS مختلفاً عن غيره", () => {
     const css = PRINT_TEMPLATES.map((t) => printCss({ ...DEFAULT_PRINT_SETTINGS, template: t.id }));
-    expect(new Set(css).size).toBe(5);
+    expect(new Set(css).size).toBe(6);
   });
 
   it("اللون الرئيسي ينعكس في القالب", () => {
@@ -60,9 +65,10 @@ describe("قوالب الطباعة الخمسة", () => {
     expect(elegant).toContain("line-height: 1.85");
   });
 
-  it("القالب البسيط بلا تظليل وبرأس جدول بلا لون", () => {
-    const css = printCss({ ...DEFAULT_PRINT_SETTINGS, template: "minimal" });
+  it("القالب الحراري يهيئ ورقة 80 مم بلا تظليل", () => {
+    const css = printCss({ ...DEFAULT_PRINT_SETTINGS, template: "thermal" });
     expect(css).not.toContain("nth-child(even)");
-    expect(css).toContain("background: transparent");
+    expect(css).toContain("@page { size: 80mm 297mm; margin: 4mm; }");
+    expect(css).toContain("width:72mm");
   });
 });

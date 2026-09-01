@@ -1,6 +1,7 @@
 "use client";
 
 import { Fragment, useEffect, useState } from "react";
+import Link from "next/link";
 import { listCompanies, setCompanyStatus, setSubscription, deleteCompany, listActivationRequests, reviewActivationRequest, type CompanyRow } from "@/lib/admin";
 import { notify } from "@/components/toast";
 import { money } from "@/lib/format";
@@ -185,6 +186,7 @@ export default function AdminCompaniesPage() {
                         <td><span className={`badge ${b.cls}`}>{b.label}</span></td>
                         <td style={{ display: "flex", gap: 6, flexWrap: "wrap", justifyContent: "center" }}>
                           <button className="btn btn-row" onClick={() => openSub(c)} title="الاشتراك">💳 الاشتراك</button>
+                          <Link className="btn btn-row" href={`/zerocold/features?company=${encodeURIComponent(c.id)}`} title="المميزات والمستخدمون">✨ المميزات</Link>
                           <button className={`btn ${c.is_active ? "btn-danger" : "btn-primary"}`} onClick={() => toggle(c)}>
                             {c.is_active ? "⏸ إيقاف" : "▶ تفعيل"}
                           </button>

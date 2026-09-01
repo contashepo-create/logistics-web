@@ -56,6 +56,15 @@ function company(over: Partial<Company> = {}): Company {
   } as Company;
 }
 
+const setupInput = {
+  companyName: "شركة الدلتا للنقل",
+  name: "أحمد محمد",
+  address: "المنصورة، شارع الجمهورية 12",
+  phone: "201001234567",
+  yearStart: "2026-01-01",
+  yearEnd: "2026-12-31",
+};
+
 beforeEach(() => vi.clearAllMocks());
 
 // ---------------------------------------------------------------------------
@@ -100,37 +109,60 @@ describe("auth.ts — الجلسة والمصادقة", () => {
 
   it("signUp بلا جلسة يطلب التحقق", async () => {
     supabaseMock.auth.signUp = vi.fn(async () => ({ data: { session: null }, error: null }));
-    const r = await authLib.signUp({ email: "user@gmail.com", password: "Pass1234", name: "n", companyName: "c" });
+    const r = await authLib.signUp({ email: "mohamed.logistics@gmail.com", password: "Pass1234", ...setupInput });
     expect(r).toEqual({ ok: true, session: null, needsVerification: true });
+    expect(supabaseMock.auth.signUp).toHaveBeenCalledWith(expect.objectContaining({
+      options: { data: expect.objectContaining({
+        company_name: setupInput.companyName,
+        owner_address: setupInput.address,
+        phone: setupInput.phone,
+        financial_year_start: setupInput.yearStart,
+        financial_year_end: setupInput.yearEnd,
+      }) },
+    }));
   });
 
   it("signUp بجلسة ينشئ الشركة فوراً", async () => {
     supabaseMock.auth.signUp = vi.fn(async () => ({ data: { session: { user: {} } }, error: null }));
     supabaseMock.rpc.mockResolvedValue({ data: "c1", error: null });
-    const r = await authLib.signUp({ email: "user@gmail.com", password: "Pass1234", name: "n", companyName: "c", phone: "1" });
+    const r = await authLib.signUp({ email: "mohamed.logistics@gmail.com", password: "Pass1234", ...setupInput });
     expect(r).toEqual({ ok: true, session: { user: {} } });
-    expect(supabaseMock.rpc).toHaveBeenCalledWith("register_company", expect.objectContaining({ p_company_name: "c" }));
+    expect(supabaseMock.rpc).toHaveBeenCalledWith("register_company_with_year", expect.objectContaining({
+      p_company_name: setupInput.companyName,
+      p_address: setupInput.address,
+      p_year_start: setupInput.yearStart,
+      p_year_end: setupInput.yearEnd,
+    }));
+  });
+
+  it("signUp يتعرف على رد GoTrue المموّه للبريد المكرر", async () => {
+    supabaseMock.auth.signUp = vi.fn(async () => ({ data: { user: { identities: [] }, session: null }, error: null }));
+    const r = await authLib.signUp({ email: "mohamed.logistics@gmail.com", password: "Pass1234", ...setupInput });
+    expect(r).toEqual({ ok: false, message: "هذا البريد الإلكتروني مسجّل بالفعل." });
+    expect(supabaseMock.rpc).not.toHaveBeenCalled();
   });
 
   it("signUp يرفض البريد الوهمي/غير المسموح", async () => {
     supabaseMock.auth.signUp = vi.fn();
-    const r1 = await authLib.signUp({ email: "x@mailinator.com", password: "Pass1234", name: "n", companyName: "c" });
+    const r1 = await authLib.signUp({ email: "x@mailinator.com", password: "Pass1234", ...setupInput });
     expect(r1.ok).toBe(false);
-    const r2 = await authLib.signUp({ email: "x@my-company.io", password: "Pass1234", name: "n", companyName: "c" });
+    const r2 = await authLib.signUp({ email: "x@my-company.io", password: "Pass1234", ...setupInput });
     expect(r2.ok).toBe(false);
-    const r3 = await authLib.signUp({ email: "x@gmail.com", password: "12345678", name: "n", companyName: "c" });
+    const r3 = await authLib.signUp({ email: "x@gmail.com", password: "12345678", ...setupInput });
     expect(r3.ok).toBe(false);
+    const r4 = await authLib.signUp({ email: "x@gmail.com", password: "Strong1234", ...setupInput, companyName: "test" });
+    expect(r4.ok).toBe(false);
     expect(supabaseMock.auth.signUp).not.toHaveBeenCalled();
   });
 
   it("registerCurrentCompany يعيد معرّف الشركة", async () => {
     supabaseMock.rpc.mockResolvedValue({ data: "c9", error: null });
-    expect(await authLib.registerCurrentCompany({ companyName: "x" })).toBe("c9");
+    expect(await authLib.registerCurrentCompany(setupInput)).toBe("c9");
   });
 
   it("registerCurrentCompany يمرر الخطأ", async () => {
     supabaseMock.rpc.mockResolvedValue({ data: null, error: { message: "no" } });
-    await expect(authLib.registerCurrentCompany({ companyName: "x" })).rejects.toThrow("no");
+    await expect(authLib.registerCurrentCompany(setupInput)).rejects.toThrow("no");
   });
 
   // اختبار انحدار: خطأ صلاحيات (403) يجب أن يُرمى لا أن يُبتلع ويُقرأ

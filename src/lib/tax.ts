@@ -1,6 +1,8 @@
 // بيانات ضريبية وعنوان وطني (المملكة العربية السعودية / هيئة الزكاة والضريبة والجمارك).
 // تُستخدم في بيانات المنشأة والعملاء والموردين، وفي الفاتورة الضريبية.
 
+import { safeField } from "./security";
+
 export type EntityType = "establishment" | "company" | "individual" | "nonprofit" | "government";
 export type TaxStatus = "taxable" | "exempt" | "not_registered";
 
@@ -142,14 +144,29 @@ export function validateTaxProfile(p: TaxProfile, opts: { requireTaxNumber?: boo
   return errors;
 }
 
-/** تطبيع القيم قبل الحفظ (أرقام إنجليزية + إزالة الفراغات الزائدة). */
+/** تطبيع آمن قبل الحفظ (قوائم سماح + أرقام إنجليزية + نص بلا HTML/حقن). */
 export function normalizeTaxProfile<T extends TaxProfile>(p: T): T {
   const out = { ...p };
+  const labels: Record<string, string> = {
+    tax_number: "الرقم الضريبي", commercial_reg: "السجل التجاري", postal_code: "الرمز البريدي",
+    building_no: "رقم المبنى", additional_no: "الرقم الإضافي", region: "المنطقة", city: "المدينة",
+    district: "الحي", street: "الشارع", address_note: "تفاصيل العنوان",
+  };
   for (const k of ["tax_number", "commercial_reg", "postal_code", "building_no", "additional_no"] as const) {
-    if (out[k] !== undefined) (out as Record<string, unknown>)[k] = digitsOnly(String(out[k] ?? ""));
+    if (out[k] === undefined) continue;
+    const raw = safeField(out[k], { label: labels[k], max: 30 });
+    if (raw && !/^[\d٠-٩۰-۹\s-]+$/.test(raw)) throw new Error(`حقل «${labels[k]}» يجب أن يحتوي على أرقام فقط.`);
+    (out as Record<string, unknown>)[k] = digitsOnly(raw);
   }
   for (const k of ["region", "city", "district", "street", "address_note"] as const) {
-    if (out[k] !== undefined) (out as Record<string, unknown>)[k] = String(out[k] ?? "").trim().replace(/\s+/g, " ");
+    if (out[k] !== undefined) (out as Record<string, unknown>)[k] = safeField(out[k], { label: labels[k], max: k === "address_note" ? 300 : 160 }).replace(/\s+/g, " ");
+  }
+  if (out.entity_type !== undefined && !ENTITY_TYPES.some((item) => item.value === out.entity_type)) throw new Error("نوع الكيان غير صالح.");
+  if (out.tax_status !== undefined && !TAX_STATUSES.some((item) => item.value === out.tax_status)) throw new Error("الحالة الضريبية غير صالحة.");
+  if (out.country !== undefined) {
+    const country = safeField(out.country, { label: "الدولة", max: 5 }).toUpperCase();
+    if (!COUNTRIES.some((item) => item.code === country)) throw new Error("الدولة غير صالحة.");
+    (out as Record<string, unknown>).country = country;
   }
   return out;
 }

@@ -4,7 +4,8 @@ import { useEffect, useState } from "react";
 import { useRouter, usePathname } from "next/navigation";
 import { Sidebar } from "@/components/Sidebar";
 import { ToastHost } from "@/components/toast";
-import { getSession, getCompany, signOut } from "@/lib/auth";
+import { getSession, getCompany, getProfile, signOut } from "@/lib/auth";
+import { hasFeature } from "@/lib/features";
 import { SUPABASE_CONFIGURED } from "@/lib/supabase";
 import { subscriptionState } from "@/lib/subscription";
 import { ThemeToggle } from "@/components/ThemeToggle";
@@ -40,7 +41,7 @@ let gatePassed = false;
 export default function AppLayout({ children }: { children: React.ReactNode }) {
   const router = useRouter();
   const pathname = usePathname();
-  const [state, setState] = useState<"loading" | "ready" | "error">(gatePassed ? "ready" : "loading");
+  const [state, setState] = useState<"loading" | "ready" | "error" | "access-disabled">(gatePassed ? "ready" : "loading");
   const [errorMsg, setErrorMsg] = useState("");
   const [navOpen, setNavOpen] = useState(false);
 
@@ -65,6 +66,16 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
       // /onboarding بلا نهاية رغم امتلاك المستخدم شركة بالفعل.
       let company;
       try {
+        const profile = await getProfile();
+        // الحساب الإضافي لا يعمل إلا إذا أبقاه المطوّر نشطاً وكانت الميزة
+        // مفعّلة للشركة. المالك لا يتأثر بهذه البوابة.
+        if (profile?.role === "additional") {
+          const featureOn = await hasFeature("additional_user");
+          if (profile.is_active === false || !featureOn) {
+            if (!cancelled) setState("access-disabled");
+            return;
+          }
+        }
         company = await getCompany();
       } catch (e) {
         if (!cancelled) {
@@ -110,6 +121,25 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
     return (
       <div style={{ minHeight: "100vh", display: "flex", alignItems: "center", justifyContent: "center", background: "var(--bg)" }}>
         <div className="spinner" />
+      </div>
+    );
+  }
+
+  if (state === "access-disabled") {
+    return (
+      <div className="blocked-screen">
+        <div className="auth-card" style={{ maxWidth: 480, textAlign: "center" }}>
+          <div className="auth-brand">🔒</div>
+          <h1 className="auth-title">حساب المستخدم الإضافي غير مفعّل</h1>
+          <p className="auth-sub" style={{ lineHeight: 2 }}>
+            قام المطوّر بإيقاف هذا الحساب أو إلغاء ميزة المستخدم الإضافي عن الشركة.
+            تواصل مع صاحب الشركة أو الدعم لإعادة التفعيل.
+          </p>
+          <button className="btn btn-primary auth-btn" onClick={async () => { await signOut(); router.replace("/login"); }}>
+            تسجيل الخروج
+          </button>
+        </div>
+        <ToastHost />
       </div>
     );
   }

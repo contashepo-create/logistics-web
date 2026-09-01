@@ -9,6 +9,7 @@ vi.mock("@/lib/supabase", async () => {
 import { resetDb, setUser, seedTable } from "./memory-supabase";
 import * as repo from "@/lib/repo";
 import * as calc from "@/lib/calc";
+import { payrollSlipHtml } from "@/lib/payrollPrint";
 
 async function seed() {
   resetDb();
@@ -16,7 +17,7 @@ async function seed() {
   seedTable("profiles", [{ id: "u1", company_id: "c1", email: "o@t.com", name: "م" }]);
   seedTable("companies", [{ id: "c1", name: "شركة النقل", currency: "ج.م", vat_rate: 0, plan_type: "open", is_active: true }]);
   await repo.saveYear({ year: 2026, date_from: "2026-01-01", date_to: "2026-12-31" });
-  const emp = await repo.saveEmployee({ name: "أحمد السائق", emp_type: "driver", phone: "0100", base_salary: 6000 });
+  const emp = await repo.saveEmployee({ name: "أحمد السائق", emp_type: "driver", phone: "01012345678", base_salary: 6000 });
   const cb = await repo.saveAccount("cashbox", { name: "الخزينة", created_date: "2026-01-01", opening_balance: 100000 });
   return { emp, cb };
 }
@@ -111,6 +112,21 @@ describe("أرشيف السلفيات", () => {
     expect(a.last_settled_date).toBe("2026-02-28");
   });
 
+  it("تجمع شاشة المتابعة المرجعية كل السلف وتفلترها بالحالة", async () => {
+    const a1 = await advance(s.emp, s.cb, "2026-01-05", 2000);
+    await advance(s.emp, s.cb, "2026-02-05", 1000);
+    await repo.savePayroll({
+      date: "2026-01-31", employee_id: s.emp, period_year: 2026, period_month: 1,
+      account_kind: "cashbox", account_id: s.cb, base_salary: 6000, additions: 0, other_deductions: 0,
+      settlements: [{ payment_voucher_id: a1, amount: 500 }],
+    });
+    const all = await calc.listAdvanceTracking({ dFrom: "2026-01-01", dTo: "2026-12-31" });
+    expect(all).toHaveLength(2);
+    expect(all.map((row) => row.status).sort()).toEqual(["open", "partial"]);
+    expect(all.find((row) => row.id === a1)?.settlement_details).toContain("PAY-");
+    expect((await calc.listAdvanceTracking({ status: "partial" })).map((row) => row.id)).toEqual([a1]);
+  });
+
   it("يميّز السلف المفتوحة والمخصومة جزئياً ويجمع الإجماليات", async () => {
     const a1 = await advance(s.emp, s.cb, "2026-01-05", 2000);
     await advance(s.emp, s.cb, "2026-02-05", 1000);
@@ -126,6 +142,29 @@ describe("أرشيف السلفيات", () => {
     expect(t.settled).toBeCloseTo(500, 2);
     expect(t.remaining).toBeCloseTo(2500, 2);
     expect(t.open_count).toBe(2);
+  });
+});
+
+describe("طباعة مسير راتب مستقل", () => {
+  let s: Awaited<ReturnType<typeof seed>>;
+  beforeEach(async () => { s = await seed(); });
+
+  it("ينشئ مستنداً خاصاً بالموظف والشهر مع الاستحقاقات والاستقطاعات", async () => {
+    const advanceId = await advance(s.emp, s.cb, "2026-03-05", 1000);
+    const payrollId = await repo.savePayroll({
+      date: "2026-03-31", employee_id: s.emp, period_year: 2026, period_month: 3,
+      account_kind: "cashbox", account_id: s.cb, base_salary: 6000, additions: 500,
+      additions_note: "حافز انتظام", other_deductions: 200,
+      settlements: [{ payment_voucher_id: advanceId, amount: 300 }],
+    });
+    const slip = await payrollSlipHtml(payrollId);
+    expect(slip).not.toBeNull();
+    expect(slip!.html).toContain("أحمد السائق");
+    expect(slip!.html).toContain("مارس 2026");
+    expect(slip!.html).toContain("حافز انتظام");
+    expect(slip!.html).toContain("PV-");
+    expect(slip!.html).toContain("6,000.00");
+    expect(slip!.css).toContain("@media print");
   });
 });
 

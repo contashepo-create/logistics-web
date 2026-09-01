@@ -116,8 +116,19 @@ grant update (name, phone, email, address, currency, vat_rate, vat_note) on publ
 -- ---------------------------------------------------------------------------
 -- 2) مستخدم واحد فقط لكل شركة
 -- ---------------------------------------------------------------------------
-create unique index if not exists uq_profiles_one_user_per_company
-  on public.profiles(company_id) where company_id is not null;
+do $one_user_compat$
+begin
+  if exists (
+    select 1 from information_schema.columns
+     where table_schema = 'public' and table_name = 'profiles' and column_name = 'phone'
+  ) then
+    -- v11 تسمح بمالك + مستخدم إضافي؛ لا تُعِد القيد القديم عند تكرار v2.
+    drop index if exists public.uq_profiles_one_user_per_company;
+  else
+    create unique index if not exists uq_profiles_one_user_per_company
+      on public.profiles(company_id) where company_id is not null;
+  end if;
+end $one_user_compat$;
 
 -- ---------------------------------------------------------------------------
 -- 3) منع البريد الوهمي على مستوى قاعدة البيانات (يشمل التسجيل من أي واجهة)
@@ -157,7 +168,15 @@ begin
   j := to_jsonb(new);
   j := jsonb_set(j, '{email}', to_jsonb(v_email));
   if j ? 'role' then
-    j := jsonb_set(j, '{role}', to_jsonb(case when v_email = 'conta.moha@gmail.com' then 'admin' else 'user' end));
+    -- بعد v11 تكون القيم owner/additional ويكون عمود phone موجوداً؛ لا نُرجع
+    -- المخطط الجديد إلى قيم user/admin عند إعادة تشغيل هذه الترحيلة القديمة.
+    if j ? 'phone' then
+      j := jsonb_set(j, '{role}', to_jsonb(
+        case when j ->> 'role' in ('owner', 'additional') then j ->> 'role' else 'owner' end
+      ));
+    else
+      j := jsonb_set(j, '{role}', to_jsonb(case when v_email = 'conta.moha@gmail.com' then 'admin' else 'user' end));
+    end if;
   end if;
   if j ? 'is_active' then
     j := jsonb_set(j, '{is_active}', to_jsonb(coalesce((j ->> 'is_active')::boolean, true)));

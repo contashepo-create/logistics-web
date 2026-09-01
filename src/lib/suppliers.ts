@@ -2,8 +2,11 @@
 // كل الاستعلامات معزولة تلقائياً بـ company_id عبر RLS.
 
 import { supabase } from "./supabase";
-import { RuleError, roundMoney } from "./rules";
+import { translateDbError } from "./db";
+import { RuleError, boundedNumber, ensureDateInOpenYear, positiveId, roundMoney, txt } from "./rules";
 import { normalizeTaxProfile, validateTaxProfile } from "./tax";
+import { isPlausibleIdentityText, safeEmail, safeIsoDate, safePhone } from "./security";
+import { PURCHASE_EXPENSE_CATEGORIES } from "./format";
 
 export interface Supplier {
   id: number;
@@ -42,17 +45,27 @@ export interface PurchaseItem {
   notes?: string;
 }
 
+export type PurchaseType = "credit" | "cash";
+
 export interface PurchaseInvoice {
   id: number;
   number: number;
   date: string;
-  supplier_id: number;
+  purchase_type: PurchaseType;
+  supplier_id: number | null;
   supplier_ref: string;
+  expense_category: string;
+  vehicle_id: number | null;
+  account_kind: "cashbox" | "bank" | null;
+  account_id: number | null;
   vat_rate: number;
   vat_included: boolean;
   notes: string;
   items?: PurchaseItem[];
   supplier_name?: string;
+  vehicle_plate?: string;
+  account_name?: string;
+  payment_voucher_id?: number | null;
 }
 
 export interface PurchaseTotals {
@@ -97,7 +110,7 @@ export function purchaseTotals(items: PurchaseItem[], vatIncluded = false): Purc
 // ---------------------------------------------------------------------------
 export async function listSuppliers(): Promise<Supplier[]> {
   const { data, error } = await supabase.from("suppliers").select("*").order("code");
-  if (error) throw new RuleError(error.message);
+  if (error) throw new RuleError(translateDbError(error.message));
   return (data ?? []) as Supplier[];
 }
 
@@ -106,12 +119,26 @@ export async function getSupplier(id: number): Promise<Supplier | null> {
   return (data as Supplier) ?? null;
 }
 
+async function ensureUniqueSupplierContact(phone: string, email: string, supplierId?: number | null): Promise<void> {
+  if (phone) {
+    const { data, error } = await supabase.from("suppliers").select("id").eq("phone", phone).neq("id", supplierId ?? -1);
+    if (error) throw new RuleError(translateDbError(error.message));
+    if (data?.length) throw new RuleError("رقم الهاتف مسجل لمورّد آخر.");
+  }
+  if (email) {
+    const { data, error } = await supabase.from("suppliers").select("id").eq("email", email).neq("id", supplierId ?? -1);
+    if (error) throw new RuleError(translateDbError(error.message));
+    if (data?.length) throw new RuleError("البريد الإلكتروني مسجل لمورّد آخر.");
+  }
+}
+
 export async function saveSupplier(
   input: Record<string, unknown>,
   supplierId?: number | null
 ): Promise<number> {
-  const name = String(input.name ?? "").trim();
-  if (!name) throw new RuleError("اسم المورّد مطلوب.");
+  const existingId = supplierId == null ? null : positiveId(supplierId, "معرّف المورّد");
+  const name = txt(input.name, "اسم المورّد", 160);
+  if (!isPlausibleIdentityText(name)) throw new RuleError("أدخل اسماً حقيقياً للمورّد، وليس قيمة تجريبية أو وهمية.");
 
   const profile = normalizeTaxProfile({
     tax_number: String(input.tax_number ?? ""),
@@ -130,27 +157,34 @@ export async function saveSupplier(
   const problems = validateTaxProfile(profile);
   if (problems.length) throw new RuleError(problems[0]);
 
+  const phone = safePhone(input.phone ?? "", false);
+  const email = safeEmail(input.email ?? "", false);
+  const contactPerson = txt(input.contact_person ?? "", "مسؤول التواصل", 120);
+  if (contactPerson && !isPlausibleIdentityText(contactPerson)) throw new RuleError("اسم مسؤول التواصل غير صحيح أو وهمي.");
+  const address = txt(input.address ?? "", "عنوان المورّد", 300);
+  if (address && !isPlausibleIdentityText(address)) throw new RuleError("عنوان المورّد غير صحيح أو وهمي.");
   const row = {
     ...profile,
     name,
-    name_en: String(input.name_en ?? "").trim(),
-    phone: String(input.phone ?? "").trim(),
-    email: String(input.email ?? "").trim(),
-    contact_person: String(input.contact_person ?? "").trim(),
-    address: String(input.address ?? "").trim(),
-    notes: String(input.notes ?? "").trim(),
-    opening_balance: roundMoney(Number(input.opening_balance ?? 0) || 0),
-    payment_terms: Math.max(0, Math.trunc(Number(input.payment_terms ?? 0) || 0)),
+    name_en: txt(input.name_en ?? "", "اسم المورّد بالإنجليزية", 160),
+    phone,
+    email,
+    contact_person: contactPerson,
+    address,
+    notes: txt(input.notes ?? "", "ملاحظات المورّد", 2000),
+    opening_balance: roundMoney(input.opening_balance ?? 0),
+    payment_terms: boundedNumber(input.payment_terms ?? 0, "مهلة السداد", 0, 3650, true),
   };
+  await ensureUniqueSupplierContact(phone, email, existingId);
 
-  if (supplierId) {
-    const { error } = await supabase.from("suppliers").update(row).eq("id", supplierId);
-    if (error) throw new RuleError(error.message);
-    return supplierId;
+  if (existingId) {
+    const { error } = await supabase.from("suppliers").update(row).eq("id", existingId);
+    if (error) throw new RuleError(translateDbError(error.message));
+    return existingId;
   }
 
   const { data, error } = await supabase.from("suppliers").insert(row).select("id").single();
-  if (error) throw new RuleError(error.message);
+  if (error) throw new RuleError(translateDbError(error.message));
   const id = Number(data.id);
   await supabase.from("suppliers").update({ code: `SUPP-${String(id).padStart(4, "0")}` }).eq("id", id);
   return id;
@@ -158,111 +192,165 @@ export async function saveSupplier(
 
 export async function deleteSupplier(id: number): Promise<void> {
   const { error } = await supabase.from("suppliers").delete().eq("id", id);
-  if (error) throw new RuleError(error.message);
+  if (error) throw new RuleError(translateDbError(error.message));
 }
 
 // ---------------------------------------------------------------------------
 // فواتير المشتريات
 // ---------------------------------------------------------------------------
 export async function listPurchaseInvoices(): Promise<(PurchaseInvoice & PurchaseTotals)[]> {
-  const { data, error } = await supabase
-    .from("purchase_invoices")
-    .select("*, suppliers(name), purchase_items(*)")
-    .order("date", { ascending: false })
-    .order("number", { ascending: false });
-  if (error) throw new RuleError(error.message);
+  const [invoiceRes, vehicleRes, cashboxRes, bankRes, paymentRes] = await Promise.all([
+    supabase
+      .from("purchase_invoices")
+      .select("*, suppliers(name), purchase_items(*)")
+      .order("date", { ascending: false })
+      .order("number", { ascending: false }),
+    supabase.from("vehicles").select("id, plate_number"),
+    supabase.from("cashboxes").select("id, name"),
+    supabase.from("banks").select("id, name"),
+    supabase.from("payment_vouchers").select("id, purchase_invoice_id").eq("voucher_type", "purchase"),
+  ]);
+  if (invoiceRes.error) throw new RuleError(translateDbError(invoiceRes.error.message));
 
-  return (data ?? []).map((row) => {
+  const vehicleMap = new Map((vehicleRes.data ?? []).map((v) => [Number(v.id), String(v.plate_number)]));
+  const cashboxMap = new Map((cashboxRes.data ?? []).map((a) => [Number(a.id), String(a.name)]));
+  const bankMap = new Map((bankRes.data ?? []).map((a) => [Number(a.id), String(a.name)]));
+  const paymentMap = new Map((paymentRes.data ?? []).map((p) => [Number(p.purchase_invoice_id), Number(p.id)]));
+
+  return (invoiceRes.data ?? []).map((row) => {
     const r = row as Record<string, unknown>;
     const sup = r.suppliers as { name?: string } | { name?: string }[] | null;
     const items = ((r.purchase_items ?? []) as PurchaseItem[]) ?? [];
     const t = purchaseTotals(items, Boolean(r.vat_included));
+    const purchaseType: PurchaseType = r.purchase_type === "cash" ? "cash" : "credit";
+    const vehicleId = r.vehicle_id == null ? null : Number(r.vehicle_id);
+    const accountId = r.account_id == null ? null : Number(r.account_id);
+    const accountKind = r.account_kind === "cashbox" || r.account_kind === "bank" ? r.account_kind : null;
     return {
       id: Number(r.id),
       number: Number(r.number),
       date: String(r.date),
-      supplier_id: Number(r.supplier_id),
+      purchase_type: purchaseType,
+      supplier_id: r.supplier_id == null ? null : Number(r.supplier_id),
       supplier_ref: String(r.supplier_ref ?? ""),
+      expense_category: String(r.expense_category ?? "other"),
+      vehicle_id: vehicleId,
+      account_kind: accountKind,
+      account_id: accountId,
       vat_rate: Number(r.vat_rate ?? 15),
       vat_included: Boolean(r.vat_included),
       notes: String(r.notes ?? ""),
       items,
-      supplier_name: (Array.isArray(sup) ? sup[0]?.name : sup?.name) ?? "",
+      supplier_name: purchaseType === "cash" ? "شراء نقدي مباشر" : ((Array.isArray(sup) ? sup[0]?.name : sup?.name) ?? ""),
+      vehicle_plate: vehicleId ? vehicleMap.get(vehicleId) ?? "" : "",
+      account_name: accountId && accountKind ? (accountKind === "cashbox" ? cashboxMap.get(accountId) : bankMap.get(accountId)) ?? "" : "",
+      payment_voucher_id: paymentMap.get(Number(r.id)) ?? null,
       ...t,
     };
   });
 }
 
 export async function getPurchaseInvoice(id: number): Promise<PurchaseInvoice | null> {
-  const { data } = await supabase
-    .from("purchase_invoices")
-    .select("*, purchase_items(*)")
-    .eq("id", id)
-    .maybeSingle();
+  const invoiceId = positiveId(id, "معرّف فاتورة المشتريات");
+  const [{ data }, { data: payment }] = await Promise.all([
+    supabase.from("purchase_invoices").select("*, purchase_items(*)").eq("id", invoiceId).maybeSingle(),
+    supabase.from("payment_vouchers").select("id").eq("purchase_invoice_id", invoiceId).eq("voucher_type", "purchase").maybeSingle(),
+  ]);
   if (!data) return null;
   const r = data as Record<string, unknown>;
   return {
     id: Number(r.id),
     number: Number(r.number),
     date: String(r.date),
-    supplier_id: Number(r.supplier_id),
+    purchase_type: r.purchase_type === "cash" ? "cash" : "credit",
+    supplier_id: r.supplier_id == null ? null : Number(r.supplier_id),
     supplier_ref: String(r.supplier_ref ?? ""),
+    expense_category: String(r.expense_category ?? "other"),
+    vehicle_id: r.vehicle_id == null ? null : Number(r.vehicle_id),
+    account_kind: r.account_kind === "cashbox" || r.account_kind === "bank" ? r.account_kind : null,
+    account_id: r.account_id == null ? null : Number(r.account_id),
     vat_rate: Number(r.vat_rate ?? 15),
     vat_included: Boolean(r.vat_included),
     notes: String(r.notes ?? ""),
     items: (r.purchase_items ?? []) as PurchaseItem[],
+    payment_voucher_id: payment ? Number(payment.id) : null,
   };
 }
 
 export async function savePurchaseInvoice(input: {
   id?: number | null;
   date: string;
-  supplier_id: number;
+  purchase_type: PurchaseType;
+  supplier_id?: number | null;
   supplier_ref?: string;
+  expense_category: string;
+  vehicle_id?: number | null;
+  account_kind?: "cashbox" | "bank" | null;
+  account_id?: number | null;
   vat_rate?: number;
   vat_included?: boolean;
   notes?: string;
   items: PurchaseItem[];
 }): Promise<number> {
-  if (!input.supplier_id) throw new RuleError("اختر المورّد.");
-  if (!input.items?.length) throw new RuleError("أضف بنداً واحداً على الأقل للفاتورة.");
-  for (const it of input.items) {
-    if (!String(it.item_name ?? "").trim()) throw new RuleError("اسم الصنف مطلوب في كل بند.");
-    if ((Number(it.qty) || 0) <= 0) throw new RuleError("الكمية يجب أن تكون أكبر من صفر.");
-    if ((Number(it.unit_price) || 0) < 0) throw new RuleError("سعر الوحدة لا يمكن أن يكون سالباً.");
+  const invoiceId = input.id == null ? null : positiveId(input.id, "معرّف فاتورة المشتريات");
+  const date = safeIsoDate(input.date, "تاريخ فاتورة المشتريات");
+  const purchaseType: PurchaseType = input.purchase_type === "cash" ? "cash" : input.purchase_type === "credit" ? "credit" : (() => { throw new RuleError("اختر نوع فاتورة المشتريات."); })();
+  if (!(input.expense_category in PURCHASE_EXPENSE_CATEGORIES)) throw new RuleError("اختر بند المصروف في الأرباح والخسائر.");
+  const supplierId = purchaseType === "credit" ? positiveId(input.supplier_id, "المورّد") : null;
+  const vehicleId = input.vehicle_id == null ? null : positiveId(input.vehicle_id, "السيارة");
+  let accountKind: "cashbox" | "bank" | null = null;
+  let accountId: number | null = null;
+  if (purchaseType === "cash") {
+    if (input.account_kind !== "cashbox" && input.account_kind !== "bank") throw new RuleError("اختر الخزينة أو البنك للدفع المباشر.");
+    accountKind = input.account_kind;
+    accountId = positiveId(input.account_id, "جهة الدفع");
   }
-
-  const { data, error } = await supabase.rpc("save_purchase_invoice", {
-    p_invoice_id: input.id ?? null,
-    p_date: input.date,
-    p_supplier_id: input.supplier_id,
-    p_supplier_ref: input.supplier_ref ?? "",
-    p_vat_rate: input.vat_rate ?? 15,
-    p_vat_included: input.vat_included ?? false,
-    p_notes: input.notes ?? "",
-    p_items: input.items.map((it) => ({
-      item_name: it.item_name,
-      unit: it.unit ?? "",
-      qty: Number(it.qty) || 0,
-      unit_price: Number(it.unit_price) || 0,
-      vat_rate: Number(it.vat_rate ?? input.vat_rate ?? 15),
-      notes: it.notes ?? "",
-    })),
+  if (!Array.isArray(input.items) || !input.items.length) throw new RuleError("أضف بنداً واحداً على الأقل للفاتورة.");
+  if (input.items.length > 1000) throw new RuleError("عدد بنود فاتورة المشتريات أكبر من الحد المسموح.");
+  if (input.vat_included != null && typeof input.vat_included !== "boolean") throw new RuleError("حالة شمول الضريبة غير صالحة.");
+  const defaultVat = boundedNumber(input.vat_rate ?? 15, "نسبة الضريبة", 0, 100);
+  const items = input.items.map((it) => {
+    const itemName = txt(it.item_name, "اسم الصنف", 160);
+    if (!itemName) throw new RuleError("اسم الصنف مطلوب في كل بند.");
+    const qty = boundedNumber(it.qty, "الكمية", 0.001, 1_000_000);
+    const unitPrice = roundMoney(it.unit_price);
+    if (unitPrice < 0) throw new RuleError("سعر الوحدة لا يمكن أن يكون سالباً.");
+    return {
+      item_name: itemName,
+      unit: txt(it.unit ?? "", "الوحدة", 30),
+      qty,
+      unit_price: unitPrice,
+      vat_rate: boundedNumber(it.vat_rate ?? defaultVat, "نسبة ضريبة البند", 0, 100),
+      notes: txt(it.notes ?? "", "ملاحظات البند", 500),
+    };
   });
-  if (error) throw new RuleError(error.message);
+  const totals = purchaseTotals(items, input.vat_included ?? false);
+  if (totals.total <= 0) throw new RuleError("إجمالي فاتورة المشتريات يجب أن يكون أكبر من صفر.");
+  await ensureDateInOpenYear(date);
+
+  const { data, error } = await supabase.rpc("save_purchase_invoice_v14", {
+    p_invoice_id: invoiceId,
+    p_date: date,
+    p_purchase_type: purchaseType,
+    p_supplier_id: supplierId,
+    p_supplier_ref: txt(input.supplier_ref ?? "", "مرجع المورّد", 80),
+    p_expense_category: input.expense_category,
+    p_vehicle_id: vehicleId,
+    p_account_kind: accountKind,
+    p_account_id: accountId,
+    p_vat_rate: defaultVat,
+    p_vat_included: input.vat_included ?? false,
+    p_notes: txt(input.notes ?? "", "ملاحظات فاتورة المشتريات", 1000),
+    p_items: items,
+  });
+  if (error) throw new RuleError(translateDbError(error.message));
   return Number(data);
 }
 
 export async function deletePurchaseInvoice(id: number): Promise<void> {
-  const { count } = await supabase
-    .from("payment_vouchers")
-    .select("id", { count: "exact", head: true })
-    .eq("purchase_invoice_id", id);
-  if ((count ?? 0) > 0) {
-    throw new RuleError("لا يمكن حذف الفاتورة لوجود سندات دفع مرتبطة بها.");
-  }
-  const { error } = await supabase.from("purchase_invoices").delete().eq("id", id);
-  if (error) throw new RuleError(error.message);
+  const invoiceId = positiveId(id, "معرّف فاتورة المشتريات");
+  const { error } = await supabase.rpc("delete_purchase_invoice_v14", { p_invoice_id: invoiceId });
+  if (error) throw new RuleError(translateDbError(error.message));
 }
 
 // ---------------------------------------------------------------------------

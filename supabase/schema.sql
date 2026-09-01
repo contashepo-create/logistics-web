@@ -69,31 +69,88 @@ alter table public.companies add constraint companies_tax_status_check
   check (tax_status in ('taxable', 'exempt', 'not_registered'));
 
 -- ---------------------------------------------------------------------------
--- الملفات الشخصية (رابط المستخدم ← شركته) — بلا نظام أدوار/صلاحيات
+-- الملفات الشخصية (رابط المستخدم ← شركته) مع مالك ومستخدم إضافي واحد
 -- ---------------------------------------------------------------------------
 create table if not exists public.profiles (
   id         uuid primary key references auth.users(id) on delete cascade,
   company_id uuid references public.companies(id) on delete cascade,
   email      text not null default '',
   name       text default '',
+  role       text not null default 'owner' check (role in ('owner', 'additional')),
+  phone      text not null default '',
+  address    text not null default '',
+  is_active  boolean not null default true,
   created_at timestamptz default now()
 );
+create unique index if not exists uq_profiles_one_owner_per_company
+  on public.profiles(company_id) where company_id is not null and role = 'owner';
+create unique index if not exists uq_profiles_one_additional_per_company
+  on public.profiles(company_id) where company_id is not null and role = 'additional';
+
+-- سجل المميزات: غياب صف الشركة يعني أن الميزة غير مفعّلة افتراضياً.
+create table if not exists public.feature_catalog (
+  feature_key text primary key,
+  name_ar text not null,
+  description_ar text not null default '',
+  created_at timestamptz not null default now()
+);
+insert into public.feature_catalog (feature_key, name_ar, description_ar) values
+  ('tax_invoice', 'الفاتورة الضريبية', 'تفعيل خصائص الفاتورة الضريبية والتحقق وطباعة رمز QR.'),
+  ('additional_user', 'المستخدم الإضافي', 'السماح لحساب إضافي واحد بالدخول إلى بيانات الشركة نفسها.')
+on conflict (feature_key) do update set name_ar = excluded.name_ar, description_ar = excluded.description_ar;
+
+create table if not exists public.company_features (
+  company_id uuid not null references public.companies(id) on delete cascade,
+  feature_key text not null references public.feature_catalog(feature_key) on delete cascade,
+  enabled boolean not null default false,
+  updated_by uuid references auth.users(id) on delete set null,
+  updated_at timestamptz not null default now(),
+  primary key (company_id, feature_key)
+);
+create index if not exists idx_company_features_lookup
+  on public.company_features(company_id, feature_key, enabled);
 
 -- معرّف الشركة للمستخدم الحالي (security definer + search_path مُقيّد)
 create or replace function public.auth_company_id() returns uuid
 language sql stable security definer set search_path = public as $$
-  select p.company_id from public.profiles p where p.id = auth.uid();
+  select p.company_id
+    from public.profiles p
+   where p.id = auth.uid()
+     and (
+       p.role = 'owner'
+       or (
+         p.role = 'additional'
+         and p.is_active
+         and exists (
+           select 1 from public.company_features cf
+            where cf.company_id = p.company_id
+              and cf.feature_key = 'additional_user'
+              and cf.enabled
+         )
+       )
+     );
 $$;
 
 -- هل شركة المستخدم الحالي نشطة واشتراكها ساري (أو ضمن التجربة المجانية)؟
 create or replace function public.is_company_active() returns boolean
 language sql stable security definer set search_path = public as $$
   select coalesce(
-    (select c.is_active and (
-            c.trial_end >= current_date                       -- ضمن التجربة
-            or c.plan_type = 'open'                           -- اشتراك مفتوح
-            or (c.subscription_end is not null and c.subscription_end >= current_date)
-         )
+    (select c.is_active
+            and p.is_active
+            and (
+              p.role = 'owner'
+              or (p.role = 'additional' and exists (
+                select 1 from public.company_features cf
+                 where cf.company_id = c.id
+                   and cf.feature_key = 'additional_user'
+                   and cf.enabled
+              ))
+            )
+            and (
+              c.trial_end >= current_date                       -- ضمن التجربة
+              or c.plan_type = 'open'                            -- اشتراك مفتوح
+              or (c.subscription_end is not null and c.subscription_end >= current_date)
+            )
      from public.companies c
      join public.profiles p on p.company_id = c.id
      where p.id = auth.uid()),
@@ -263,7 +320,7 @@ create table if not exists public.payment_vouchers (
   account_kind        text not null check (account_kind in ('cashbox', 'bank')),
   account_id          bigint not null,
   voucher_type        text not null
-                      check (voucher_type in ('trip', 'advance', 'vehicle', 'general', 'supplier', 'owner')),
+                      check (voucher_type in ('trip', 'advance', 'vehicle', 'general', 'supplier', 'purchase', 'owner')),
   trip_id             bigint references public.invoice_trips(id) on delete set null,
   employee_id         bigint references public.employees(id) on delete set null,
   vehicle_id          bigint references public.vehicles(id) on delete set null,
@@ -271,10 +328,48 @@ create table if not exists public.payment_vouchers (
   supplier_id         bigint references public.suppliers(id) on delete set null,
   purchase_invoice_id bigint references public.purchase_invoices(id) on delete set null,
   source_expense_id   bigint references public.trip_expenses(id) on delete cascade,
+  quantity            double precision not null default 1 check (quantity > 0),
+  unit_amount         double precision not null default 0 check (unit_amount >= 0),
   amount              double precision not null default 0,
   description         text default '',
   created_at          timestamptz default now()
 );
+-- عند تشغيل schema.sql فوق قاعدة موجودة أقدم من v12.
+alter table public.payment_vouchers
+  add column if not exists quantity double precision not null default 1,
+  add column if not exists unit_amount double precision not null default 0;
+update public.payment_vouchers set quantity = 1, unit_amount = amount
+ where unit_amount <= 0 and amount > 0;
+
+create or replace function public.normalize_payment_voucher_amount()
+returns trigger
+language plpgsql
+set search_path = public, pg_temp
+as $$
+begin
+  if new.quantity is null or new.quantity <= 0 then
+    raise exception 'عدد وحدات المصروف يجب أن يكون أكبر من صفر.';
+  end if;
+  if tg_op = 'UPDATE' then
+    if new.amount is distinct from old.amount
+       and new.quantity is not distinct from old.quantity
+       and new.unit_amount is not distinct from old.unit_amount then
+      new.unit_amount := round((new.amount / new.quantity)::numeric, 2)::double precision;
+    end if;
+  end if;
+  if new.unit_amount is null or new.unit_amount <= 0 then
+    if coalesce(new.amount, 0) <= 0 then raise exception 'قيمة وحدة المصروف يجب أن تكون أكبر من صفر.'; end if;
+    new.unit_amount := round((new.amount / new.quantity)::numeric, 2)::double precision;
+  end if;
+  new.amount := round((new.quantity * new.unit_amount)::numeric, 2)::double precision;
+  if new.amount <= 0 then raise exception 'إجمالي سند الصرف يجب أن يكون أكبر من صفر.'; end if;
+  return new;
+end;
+$$;
+drop trigger if exists trg_normalize_payment_voucher_amount on public.payment_vouchers;
+create trigger trg_normalize_payment_voucher_amount
+before insert or update of quantity, unit_amount, amount on public.payment_vouchers
+for each row execute function public.normalize_payment_voucher_amount();
 
 -- إشعارات الدائن والمدين (تصحيح الفواتير الصادرة بدون تعديلها)
 create table if not exists public.credit_debit_notes (
@@ -420,6 +515,17 @@ create policy profiles_own_update on public.profiles for update
 create policy profiles_admin on public.profiles for all
   using (public.is_admin()) with check (public.is_admin());
 
+alter table public.feature_catalog enable row level security;
+create policy feature_catalog_authenticated_read on public.feature_catalog
+  for select to authenticated using (true);
+alter table public.company_features enable row level security;
+create policy company_features_own_read on public.company_features
+  for select to authenticated
+  using (company_id = public.auth_company_id() or public.is_admin());
+create policy company_features_admin_write on public.company_features
+  for all to authenticated
+  using (public.is_admin()) with check (public.is_admin());
+
 alter table public.companies enable row level security;
 create policy companies_own on public.companies
   for select using (id = public.auth_company_id() or public.is_admin());
@@ -476,39 +582,155 @@ create policy activation_admin on public.activation_requests for all
 -- ---------------------------------------------------------------------------
 -- التسجيل: إنشاء الشركة + الملف الشخصي (الطريقة الوحيدة لإنشاء شركة)
 -- ---------------------------------------------------------------------------
-create or replace function public.register_company(
-  p_company_name text, p_name text default '', p_phone text default ''
-) returns uuid
-language plpgsql security definer set search_path = public as $$
+-- أدوات v13 الأساسية لمسار التسجيل. طبقات الحراسة الشاملة والفهارس موجودة في
+-- migration_registration_validation_v13.sql ويجب تشغيلها أيضاً في النشر الجديد.
+create or replace function public.safe_text(p_in text, p_max int default 2000)
+returns text language sql immutable set search_path = public, pg_temp as $$
+  select left(
+    btrim(regexp_replace(regexp_replace(coalesce(p_in, ''), '<[^>]*>', ' ', 'g'),
+      '[\u0000-\u0008\u000B\u000C\u000E-\u001F\u007F\u200B-\u200F\u202A-\u202E\u2066-\u2069\uFEFF]', '', 'g')),
+    greatest(0, least(coalesce(p_max, 2000), 10000))
+  );
+$$;
+
+create or replace function public.normalize_phone(p_in text)
+returns text language sql immutable set search_path = public, pg_temp as $$
+  select case
+    when regexp_replace(translate(coalesce(p_in, ''), '٠١٢٣٤٥٦٧٨٩۰۱۲۳۴۵۶۷۸۹', '01234567890123456789'), '[^0-9]', '', 'g') like '00%' then substring(regexp_replace(translate(coalesce(p_in, ''), '٠١٢٣٤٥٦٧٨٩۰۱۲۳۴۵۶۷۸۹', '01234567890123456789'), '[^0-9]', '', 'g') from 3)
+    else regexp_replace(translate(coalesce(p_in, ''), '٠١٢٣٤٥٦٧٨٩۰۱۲۳۴۵۶۷۸۹', '01234567890123456789'), '[^0-9]', '', 'g')
+  end;
+$$;
+
+create or replace function public.valid_phone(p_in text)
+returns boolean language plpgsql immutable set search_path = public, pg_temp as $$
+declare d text := regexp_replace(public.normalize_phone(p_in), '\D', '', 'g');
+begin
+  return coalesce(p_in, '') ~ '^\+?[0-9٠-٩۰-۹[:space:]().-]+$'
+    and length(d) between 8 and 15
+    and d !~ '^(.)\1+$'
+    and d !~ '(0123456789|1234567890|9876543210|0987654321)'
+    and d !~ '(.)\1{6,}$';
+end $$;
+
+create or replace function public.is_plausible_identity_text(p_in text, p_min int default 2)
+returns boolean language plpgsql immutable set search_path = public, pg_temp as $$
 declare
-  v_user  uuid := auth.uid();
-  v_email text := coalesce(auth.jwt() ->> 'email', '');
+  v text := public.safe_text(p_in, 500);
+  n text := lower(regexp_replace(v, '[[:space:]._/\\-]+', ' ', 'g'));
+  compact text;
+begin
+  compact := regexp_replace(n, '[[:space:]]', '', 'g');
+  if length(v) < greatest(1, p_min) then return false; end if;
+  if n = any(array['test','testing','demo','dummy','fake','sample','none','null','undefined','unknown','n/a','na','xxx','xxxx',
+      'اختبار','تجربة','تجريبي','وهمي','غير معروف','بدون','لا يوجد','لايوجد','اسم','عنوان','عميل','مستخدم','مورد','شركة',
+      'شركة وهمية','شركة تجريبية','customer','user','supplier','company']) then return false; end if;
+  if length(compact) >= 3 and compact ~ '^(.)\1+$' then return false; end if;
+  if compact ~ '^(1234567890|0123456789|9876543210|0987654321)+$' then return false; end if;
+  return length(regexp_replace(v, '[^[:alpha:]]', '', 'g')) >= 2;
+end $$;
+
+create or replace function public.is_allowed_email(p_email text) returns boolean
+language sql immutable set search_path = public, pg_temp as $$
+  select lower(split_part(btrim(coalesce(p_email, '')), '@', 2)) = any(array[
+    'gmail.com','googlemail.com','yahoo.com','yahoo.co.uk','yahoo.fr','yahoo.de','yahoo.it','yahoo.es','yahoo.ca','yahoo.com.au','yahoo.co.in','yahoo.co.jp','ymail.com','rocketmail.com',
+    'hotmail.com','hotmail.co.uk','hotmail.fr','hotmail.de','hotmail.it','hotmail.es','outlook.com','outlook.sa','outlook.fr','outlook.de','outlook.es','outlook.com.au','live.com','live.co.uk','msn.com','icloud.com','me.com','mac.com'
+  ])
+  and length(btrim(coalesce(p_email, ''))) <= 254
+  and btrim(coalesce(p_email, '')) ~* '^[a-z0-9.!#$%&''*+/=?^_`{|}~-]+@[a-z0-9-]+(\.[a-z0-9-]+)+$'
+  and split_part(btrim(coalesce(p_email, '')), '@', 1) !~ '(^\.|\.$|\.\.)'
+  and regexp_replace(lower(split_part(split_part(btrim(coalesce(p_email, '')), '@', 1), '+', 1)), '[._-]', '', 'g')
+    <> all(array['test','testing','demo','dummy','fake','example','sample','user','unknown','noreply','noemail','xxx'])
+  and regexp_replace(lower(split_part(split_part(btrim(coalesce(p_email, '')), '@', 1), '+', 1)), '[._-]', '', 'g') !~ '^(.)\1{3,}$';
+$$;
+
+create or replace function public.register_company_with_year(
+  p_company_name text, p_name text, p_phone text, p_address text,
+  p_year_start date, p_year_end date
+) returns uuid
+language plpgsql security definer set search_path = public, auth, pg_temp as $$
+declare
+  v_user uuid := auth.uid();
+  v_email text;
   v_company uuid;
+  v_phone text := public.normalize_phone(p_phone);
+  v_company_name text := public.safe_text(p_company_name, 120);
+  v_name text := public.safe_text(p_name, 120);
+  v_address text := public.safe_text(p_address, 300);
 begin
   if v_user is null then raise exception 'يجب تسجيل الدخول أولاً.'; end if;
-  if p_company_name is null or btrim(p_company_name) = '' then
-    raise exception 'اسم الشركة مطلوب.';
-  end if;
-
   select company_id into v_company from public.profiles where id = v_user;
-  if v_company is not null then
-    return v_company;
+  if v_company is not null then return v_company; end if;
+  v_email := lower(coalesce(nullif(auth.jwt() ->> 'email', ''), (select email from auth.users where id = v_user), ''));
+  if not public.is_allowed_email(v_email) then raise exception 'البريد الإلكتروني غير صالح أو غير مسموح.'; end if;
+  if not public.is_plausible_identity_text(v_company_name, 2) then raise exception 'اسم الشركة مطلوب ويجب أن يكون حقيقياً.'; end if;
+  if not public.is_plausible_identity_text(v_name, 2) then raise exception 'اسم المسؤول مطلوب ويجب أن يكون حقيقياً.'; end if;
+  if not public.is_plausible_identity_text(v_address, 5) then raise exception 'عنوان المسؤول مطلوب ويجب أن يكون حقيقياً.'; end if;
+  if not public.valid_phone(p_phone) then raise exception 'رقم الهاتف مطلوب ويجب أن يكون حقيقياً وصحيحاً.'; end if;
+  if p_year_start is null or p_year_end is null or p_year_start < date '1900-01-01' or p_year_end > date '2200-12-31'
+     or (p_year_end - p_year_start + 1) not between 180 and 550 then
+    raise exception 'نطاق السنة المالية غير صالح؛ المدة المسموحة من 180 إلى 550 يوماً.';
   end if;
+  perform pg_advisory_xact_lock(hashtextextended('signup-phone:' || v_phone, 0));
+  perform pg_advisory_xact_lock(hashtextextended('signup-email:' || v_email, 0));
+  if exists(select 1 from public.companies where public.normalize_phone(phone) = v_phone)
+    or exists(select 1 from public.profiles where public.normalize_phone(phone) = v_phone)
+    then raise exception 'رقم الهاتف مستخدم بالفعل في حساب آخر.'; end if;
+  if exists(select 1 from public.companies where lower(btrim(email)) = v_email)
+    or exists(select 1 from public.profiles where lower(btrim(email)) = v_email and id <> v_user)
+    then raise exception 'البريد الإلكتروني مستخدم بالفعل في حساب آخر.'; end if;
 
-  insert into public.companies (name, phone, email)
-  values (btrim(p_company_name), p_phone, v_email)
-  returning id into v_company;
-  insert into public.profiles (id, company_id, email, name) values (v_user, v_company, v_email, p_name);
-  perform public.log_activity('signup', 'company', v_company::text, p_company_name);
+  insert into public.companies(name, phone, email, address, currency, vat_rate)
+  values(v_company_name, v_phone, v_email, v_address, 'ر.س', 15) returning id into v_company;
+  insert into public.profiles(id, company_id, email, name, phone, address, role, is_active)
+  values(v_user, v_company, v_email, v_name, v_phone, v_address, 'owner', true)
+  on conflict(id) do update set company_id=excluded.company_id, email=excluded.email, name=excluded.name,
+    phone=excluded.phone, address=excluded.address, role='owner', is_active=true;
+  insert into public.financial_years(company_id, year, date_from, date_to, status, notes)
+  values(v_company, extract(year from p_year_start)::integer, p_year_start, p_year_end, 'open', 'السنة المالية الأولى');
+  perform public.log_activity('company.register', 'company', v_company::text, 'company + first financial year');
   return v_company;
 end $$;
 
-revoke execute on function public.register_company(text, text, text) from public, anon;
-grant execute on function public.register_company(text, text, text) to authenticated;
+-- المسار القديم يسمح بشركة بلا سنة مالية، لذلك يُلغى تنفيذه نهائياً.
+create or replace function public.register_company(p_company_name text, p_name text default '', p_phone text default '')
+returns uuid language plpgsql security definer set search_path = public as $$
+begin
+  raise exception 'مسار التسجيل القديم متوقف. حدّث التطبيق وأنشئ السنة المالية مع الشركة.';
+end $$;
+revoke all on function public.register_company(text, text, text) from public, anon, authenticated;
+revoke all on function public.register_company_with_year(text, text, text, text, date, date) from public, anon;
+grant execute on function public.register_company_with_year(text, text, text, text, date, date) to authenticated;
 
 -- ---------------------------------------------------------------------------
 -- دوال إدارة المطوّر (فحص is_admin داخلياً)
 -- ---------------------------------------------------------------------------
+create or replace function public.has_company_feature(p_feature_key text) returns boolean
+language sql stable security definer set search_path = public as $$
+  select coalesce(exists (
+    select 1 from public.company_features cf
+     where cf.company_id = public.auth_company_id()
+       and cf.feature_key = p_feature_key
+       and cf.enabled
+  ), false);
+$$;
+
+create or replace function public.admin_set_company_feature(
+  p_company_id uuid, p_feature_key text, p_enabled boolean
+) returns void
+language plpgsql security definer set search_path = public as $$
+begin
+  if not public.is_admin() then raise exception 'غير مصرح لك بهذا الإجراء.'; end if;
+  if not exists (select 1 from public.companies where id = p_company_id) then raise exception 'الشركة غير موجودة.'; end if;
+  if not exists (select 1 from public.feature_catalog where feature_key = p_feature_key) then raise exception 'الميزة غير معروفة.'; end if;
+  insert into public.company_features (company_id, feature_key, enabled, updated_by, updated_at)
+  values (p_company_id, p_feature_key, coalesce(p_enabled, false), auth.uid(), now())
+  on conflict (company_id, feature_key) do update
+    set enabled = excluded.enabled, updated_by = excluded.updated_by, updated_at = now();
+  perform public.log_activity(
+    case when p_enabled then 'admin.enable_feature' else 'admin.disable_feature' end,
+    'company_feature', p_company_id::text, p_feature_key);
+end $$;
+
 create or replace function public.admin_set_company_status(p_company_id uuid, p_active boolean) returns void
 language plpgsql security definer set search_path = public as $$
 begin
@@ -544,9 +766,13 @@ begin
   perform public.log_activity('admin.delete_company', 'company', p_company_id::text, '');
 end $$;
 
+revoke execute on function public.has_company_feature(text) from public, anon;
+revoke execute on function public.admin_set_company_feature(uuid, text, boolean) from public, anon;
 revoke execute on function public.admin_set_company_status(uuid, boolean) from public, anon;
 revoke execute on function public.admin_set_subscription(uuid, text, date) from public, anon;
 revoke execute on function public.admin_delete_company(uuid) from public, anon;
+grant execute on function public.has_company_feature(text) to authenticated, service_role;
+grant execute on function public.admin_set_company_feature(uuid, text, boolean) to authenticated, service_role;
 grant execute on function public.admin_set_company_status(uuid, boolean) to authenticated, service_role;
 grant execute on function public.admin_set_subscription(uuid, text, date) to authenticated, service_role;
 grant execute on function public.admin_delete_company(uuid) to authenticated, service_role;

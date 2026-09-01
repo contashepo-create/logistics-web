@@ -19,7 +19,7 @@ function setup(): void {
 }
 
 async function seedInvoice() {
-  const cust = await repo.saveCustomer({ name: "عميل", opening_balance: 100 });
+  const cust = await repo.saveCustomer({ name: "شركة العميل", opening_balance: 100 });
   const inv = await repo.saveInvoice({
     date: "2026-05-05",
     customer_id: cust,
@@ -143,7 +143,7 @@ describe("إشعارات الدين/الدائن", () => {
     const notes = await repo.listCreditDebitNotes("2026-01-01", "2026-12-31", "debit");
     expect(notes).toHaveLength(1);
     expect(notes[0].invoice_number).toBe(table("invoices")[0].number);
-    expect(notes[0].customer_name).toBe("عميل");
+    expect(notes[0].customer_name).toBe("شركة العميل");
     expect(notes[0].total).toBeCloseTo(115, 2);
 
     const invNotes = await repo.listCreditDebitNotesForInvoice(inv);

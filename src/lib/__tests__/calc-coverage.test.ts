@@ -42,7 +42,7 @@ describe("tripProfit", () => {
   it("يحسب صافي النقلة مع فلترة تاريخية للسندات", async () => {
     setup();
     await repo.saveYear({ year: 2026, date_from: "2026-01-01", date_to: "2026-12-31" });
-    const cust = await repo.saveCustomer({ name: "عميل", opening_balance: 0 });
+    const cust = await repo.saveCustomer({ name: "شركة العميل", opening_balance: 0 });
     const cb = await repo.saveAccount("cashbox", { name: "خزينة", created_date: "2026-01-01", opening_balance: 100000 });
     const inv = await repo.saveInvoice({
       date: "2026-03-01", customer_id: cust, attachments: [],
@@ -67,7 +67,7 @@ describe("getInvoiceFull", () => {
   it("يعيد الفاتورة كاملة مع العميل والنقلات والمصروفات", async () => {
     setup();
     await repo.saveYear({ year: 2026, date_from: "2026-01-01", date_to: "2026-12-31" });
-    const cust = await repo.saveCustomer({ name: "عميل", opening_balance: 0 });
+    const cust = await repo.saveCustomer({ name: "شركة العميل", opening_balance: 0 });
     const inv = await repo.saveInvoice({
       date: "2026-03-01", customer_id: cust, notes: "n", attachments: [],
       trips: [
@@ -77,7 +77,7 @@ describe("getInvoiceFull", () => {
     });
     const full = await calc.getInvoiceFull(inv);
     expect(full).not.toBeNull();
-    expect(full!.customer!.name).toBe("عميل");
+    expect(full!.customer!.name).toBe("شركة العميل");
     expect(full!.trips).toHaveLength(2);
     expect(full!.trips[0].expenses).toHaveLength(1);
     expect(full!.trips_total).toBeCloseTo(1500, 2);
@@ -91,7 +91,7 @@ describe("tripsOptions / accountName / allAccounts / accountsWithBalance / custo
   it("tripsOptions يبني تسمية لكل نقلة", async () => {
     setup();
     await repo.saveYear({ year: 2026, date_from: "2026-01-01", date_to: "2026-12-31" });
-    const cust = await repo.saveCustomer({ name: "عميل", opening_balance: 0 });
+    const cust = await repo.saveCustomer({ name: "شركة العميل", opening_balance: 0 });
     await repo.saveInvoice({ date: "2026-03-01", customer_id: cust, attachments: [], trips: [{ from_loc: "أ", to_loc: "ب", price: 100, expenses: [] }] });
     const opts = await calc.tripsOptions();
     expect(opts).toHaveLength(1);
@@ -119,7 +119,7 @@ describe("tripsOptions / accountName / allAccounts / accountsWithBalance / custo
 
   it("customersWithBalance يعيد أرصدة", async () => {
     setup();
-    await repo.saveCustomer({ name: "عميل", opening_balance: 1500 });
+    await repo.saveCustomer({ name: "شركة العميل", opening_balance: 1500 });
     const rows = await calc.customersWithBalance();
     expect(rows).toHaveLength(1);
     expect(rows[0].balance).toBeCloseTo(1500, 2);
@@ -130,7 +130,7 @@ describe("yearSnapshotData", () => {
   it("يبني لقطة بأرصدة العملاء والحسابات والأرباح", async () => {
     setup();
     const yid = await repo.saveYear({ year: 2026, date_from: "2026-01-01", date_to: "2026-12-31" });
-    await repo.saveCustomer({ name: "عميل", opening_balance: 0 });
+    await repo.saveCustomer({ name: "شركة العميل", opening_balance: 0 });
     await repo.saveAccount("cashbox", { name: "خزينة", created_date: "2026-01-01", opening_balance: 500 });
 
     const snap = await calc.yearSnapshotData(yid);

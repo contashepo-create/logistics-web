@@ -32,13 +32,13 @@ async function seedDemo(): Promise<Record<string, number>> {
   await repo.saveYear({ year: y, date_from: `${y}-01-01`, date_to: `${y}-12-31`, notes: "" });
   const cust1 = await repo.saveCustomer({ name: "مؤسسة الرياض للإنشاءات", phone: "0551112222", address: "الرياض", opening_balance: 15000, notes: "" });
   const cust2 = await repo.saveCustomer({ name: "شركة مكة للمقاولات", phone: "0563334444", address: "مكة", opening_balance: 0, notes: "" });
-  const drv1 = await repo.saveEmployee({ name: "أحمد الغامدي", nationality: "سعودي", phone: "0501111111", emp_type: "driver", notes: "" });
-  const drv2 = await repo.saveEmployee({ name: "خالد المصري", nationality: "مصري", phone: "0502222222", emp_type: "driver", notes: "" });
-  await repo.saveEmployee({ name: "سالم الحربي", nationality: "سعودي", phone: "0503333333", emp_type: "admin", notes: "" });
+  const drv1 = await repo.saveEmployee({ name: "أحمد الغامدي", nationality: "سعودي", phone: "0501234101", emp_type: "driver", notes: "" });
+  const drv2 = await repo.saveEmployee({ name: "خالد المصري", nationality: "مصري", phone: "0502345202", emp_type: "driver", notes: "" });
+  await repo.saveEmployee({ name: "سالم الحربي", nationality: "سعودي", phone: "0503456303", emp_type: "admin", notes: "" });
   const veh1 = await repo.saveVehicle({ plate_number: "أ ب ج 1234", vehicle_type: "تريلة", default_driver_id: drv1, notes: "" });
   const veh2 = await repo.saveVehicle({ plate_number: "د هـ و 5678", vehicle_type: "سطحة", default_driver_id: drv2, notes: "" });
   const cb = await repo.saveAccount("cashbox", { name: "الخزينة الرئيسية", created_date: `${y}-01-01`, opening_balance: 20000, notes: "" });
-  const bnk = await repo.saveAccount("bank", { name: "بنك الراجحي", created_date: `${y}-01-01`, account_number: "002", iban: "SA00", opening_balance: 80000, notes: "" });
+  const bnk = await repo.saveAccount("bank", { name: "بنك الراجحي", created_date: `${y}-01-01`, account_number: "002", iban: "SA0380000000608010167519", opening_balance: 80000, notes: "" });
 
   const d = (m: number, day: number) => `${y}-${String(m).padStart(2, "0")}-${String(day).padStart(2, "0")}`;
   const inv1 = await repo.saveInvoice({
@@ -186,7 +186,7 @@ describe("سحب نقدي لصاحب المنشأة", () => {
   it("يُسجَّل كسند دفع، يخصم من الخزينة، ويُخصم من أرباح تقرير P&L", async () => {
     setupCompany(0);
     await repo.saveYear({ year: 2026, date_from: "2026-01-01", date_to: "2026-12-31" });
-    const cust = await repo.saveCustomer({ name: "عميل", opening_balance: 0 });
+    const cust = await repo.saveCustomer({ name: "شركة العميل", opening_balance: 0 });
     const cb = await repo.saveAccount("cashbox", { name: "الخزينة", created_date: "2026-01-01", opening_balance: 10000 });
     const inv = await repo.saveInvoice({
       date: "2026-05-05", customer_id: cust, attachments: [],
@@ -231,7 +231,7 @@ describe("ضريبة القيمة المضافة (مرجعية)", () => {
   it("تُضاف الضريبة لإجمالي العميل ولا تدخل في إيراد الربح", async () => {
     setupCompany(15);
     await repo.saveYear({ year: 2026, date_from: "2026-01-01", date_to: "2026-12-31" });
-    const cust = await repo.saveCustomer({ name: "عميل", opening_balance: 0 });
+    const cust = await repo.saveCustomer({ name: "شركة العميل", opening_balance: 0 });
     const inv = await repo.saveInvoice({
       date: "2026-05-05", customer_id: cust, attachments: [],
       trips: [{ from_loc: "أ", to_loc: "ب", price: 1000, expenses: [] }],

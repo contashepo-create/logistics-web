@@ -2,6 +2,7 @@
 
 import { supabase } from "./supabase";
 import type { FinancialYear } from "./types";
+import { safeField, safeIsoDate, safeNumber } from "./security";
 
 export class RuleError extends Error {
   constructor(message: string) {
@@ -24,13 +25,31 @@ export function roundMoney(x: unknown): number {
   return v;
 }
 
-/** تحديد طول النصوص لمنع إغراق قاعدة البيانات. */
+/** تحقق وتعقيم مركزي لكل نص قبل وصوله إلى Supabase. */
 export function txt(value: unknown, field: string, maxLen = 5000): string {
-  const s = String(value ?? "");
-  if (s.length > maxLen) {
-    throw new RuleError(`حقل ${field} طويل جداً (الحد ${maxLen} محرفاً).`);
+  try {
+    return safeField(value, { label: field, max: maxLen });
+  } catch (error) {
+    throw new RuleError(error instanceof Error ? error.message : `قيمة حقل ${field} غير صالحة.`);
   }
-  return s;
+}
+
+/** معرّف قاعدة بيانات موجب وصحيح؛ يمنع NaN والكسور والمعرّفات خارج النطاق. */
+export function positiveId(value: unknown, field = "المعرّف"): number {
+  try {
+    return safeNumber(value, { label: field, integer: true, min: 1, max: Number.MAX_SAFE_INTEGER });
+  } catch (error) {
+    throw new RuleError(error instanceof Error ? error.message : `قيمة ${field} غير صالحة.`);
+  }
+}
+
+/** رقم عشري محدود وصالح للاستخدام في الحقول غير المالية. */
+export function boundedNumber(value: unknown, field: string, min: number, max: number, integer = false): number {
+  try {
+    return safeNumber(value, { label: field, min, max, integer });
+  } catch (error) {
+    throw new RuleError(error instanceof Error ? error.message : `قيمة ${field} غير صالحة.`);
+  }
 }
 
 export function ensurePositive(amount: unknown, field = "المبلغ"): void {
@@ -45,7 +64,12 @@ export function ensureNotBlank(value: unknown, field: string): void {
 }
 
 export function isValidIsoDate(s: string): boolean {
-  return /^\d{4}-\d{2}-\d{2}$/.test(s) && !Number.isNaN(Date.parse(s));
+  try {
+    safeIsoDate(s);
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 // ---------------------------------------------------------------------------

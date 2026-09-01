@@ -34,7 +34,7 @@ const TENANT_TABLES = new Set([
   "financial_years", "customers", "employees", "vehicles", "cashboxes", "banks",
   "invoices", "invoice_trips", "trip_expenses", "receipt_vouchers",
   "payment_vouchers", "payrolls", "advance_settlements", "year_snapshots", "activation_requests",
-  "credit_debit_notes",
+  "credit_debit_notes", "company_features", "suppliers", "purchase_invoices", "purchase_items",
 ]);
 
 // ---------------------------------------------------------------------------
@@ -44,6 +44,7 @@ const EMBED_FK: Record<string, Record<string, string>> = {
   payrolls: { employees: "employee_id" },
   advance_settlements: { payrolls: "payroll_id", payment_vouchers: "payment_voucher_id" },
   credit_debit_notes: { invoices: "invoice_id", customers: "customer_id" },
+  purchase_invoices: { suppliers: "supplier_id", vehicles: "vehicle_id" },
 };
 
 function resolveEmbeds(parentTable: string, row: Row, selectCols: string[]): Row {
@@ -52,6 +53,13 @@ function resolveEmbeds(parentTable: string, row: Row, selectCols: string[]): Row
     const m = col.match(/^([a-z_]+)\s*\(([^)]*)\)$/);
     if (!m) continue;
     const rel = m[1];
+    if (parentTable === "purchase_invoices" && rel === "purchase_items") {
+      const wanted = m[2].split(",").map((s) => s.trim()).filter(Boolean);
+      out[rel] = table("purchase_items")
+        .filter((item) => item.invoice_id === row.id)
+        .map((item) => wanted.includes("*") ? { ...item } : Object.fromEntries(wanted.map((key) => [key, item[key]])));
+      continue;
+    }
     const fk = EMBED_FK[parentTable]?.[rel];
     if (!fk) continue;
     const fkVal = row[fk];
@@ -207,6 +215,8 @@ class MemQuery {
     const out: Row = {};
     if (hasStar || explicit.length === 0) Object.assign(out, row);
     for (const c of explicit) out[c] = row[c];
+    // المفتاح مطلوب لمحاكاة العلاقة العكسية purchase_invoices -> purchase_items.
+    if (this.tname === "purchase_invoices" && embedCols.some((c) => c.startsWith("purchase_items("))) out.id = row.id;
     return resolveEmbeds(this.tname, out, embedCols);
   }
 
@@ -548,12 +558,71 @@ function rpcSavePayroll(args: any): { data: any; error: any } {
   return { data: payrollId, error: null };
 }
 
+function purchaseInvoiceTotal(items: any[], vatIncluded: boolean): number {
+  const total = items.reduce((sum, item) => {
+    const gross = Number(item.qty) * Number(item.unit_price);
+    return sum + (vatIncluded ? gross : gross * (1 + Number(item.vat_rate ?? 0) / 100));
+  }, 0);
+  return Math.round(total * 100) / 100;
+}
+
+function rpcSavePurchaseV14(args: any): { data: any; error: any } {
+  const cid = companyOfUser();
+  if (!cid) return err("جلسة غير صالحة.");
+  const existing = args.p_invoice_id ? table("purchase_invoices").find((row) => row.id === args.p_invoice_id && row.company_id === cid) : null;
+  if (args.p_invoice_id && !existing) return err("فاتورة المشتريات غير موجودة.");
+  const linkedManual = table("payment_vouchers").find((p) => p.purchase_invoice_id === args.p_invoice_id && p.voucher_type !== "purchase");
+  if (linkedManual) return err("لا يمكن تعديل فاتورة مشتريات مرتبطة بسداد مورّد.");
+  if (args.p_purchase_type === "credit" && !table("suppliers").some((s) => s.id === args.p_supplier_id && s.company_id === cid)) return err("اختر مورّداً صحيحاً للفاتورة الآجلة.");
+  if (args.p_purchase_type === "cash" && !["cashbox", "bank"].includes(args.p_account_kind)) return err("اختر الخزينة أو البنك للدفع المباشر.");
+  const id = existing?.id ?? nextId("purchase_invoices");
+  const number = existing?.number ?? Math.max(0, ...table("purchase_invoices").filter((r) => r.company_id === cid).map((r) => Number(r.number))) + 1;
+  const row = {
+    id, company_id: cid, number, date: args.p_date, purchase_type: args.p_purchase_type,
+    supplier_id: args.p_purchase_type === "credit" ? args.p_supplier_id : null,
+    supplier_ref: args.p_supplier_ref ?? "", expense_category: args.p_expense_category,
+    vehicle_id: args.p_vehicle_id ?? null,
+    account_kind: args.p_purchase_type === "cash" ? args.p_account_kind : null,
+    account_id: args.p_purchase_type === "cash" ? args.p_account_id : null,
+    vat_rate: args.p_vat_rate, vat_included: args.p_vat_included, notes: args.p_notes ?? "",
+  };
+  if (existing) Object.assign(existing, row); else table("purchase_invoices").push(row);
+  for (const item of [...table("purchase_items")].filter((i) => i.invoice_id === id)) table("purchase_items").splice(table("purchase_items").indexOf(item), 1);
+  for (const item of args.p_items ?? []) table("purchase_items").push({ id: nextId("purchase_items"), company_id: cid, invoice_id: id, ...item });
+  const total = purchaseInvoiceTotal(args.p_items ?? [], Boolean(args.p_vat_included));
+  const auto = table("payment_vouchers").find((p) => p.purchase_invoice_id === id && p.voucher_type === "purchase");
+  if (args.p_purchase_type === "cash") {
+    const payment = {
+      id: auto?.id ?? nextId("payment_vouchers"), company_id: cid,
+      number: auto?.number ?? Math.max(0, ...table("payment_vouchers").filter((r) => r.company_id === cid).map((r) => Number(r.number))) + 1,
+      date: args.p_date, account_kind: args.p_account_kind, account_id: args.p_account_id,
+      voucher_type: "purchase", purchase_invoice_id: id, vehicle_id: args.p_vehicle_id ?? null,
+      supplier_id: null, trip_id: null, employee_id: null, quantity: 1, unit_amount: total, amount: total,
+      description: "دفع مباشر لفاتورة مشتريات نقدية",
+    };
+    if (auto) Object.assign(auto, payment); else table("payment_vouchers").push(payment);
+  } else if (auto) table("payment_vouchers").splice(table("payment_vouchers").indexOf(auto), 1);
+  return { data: id, error: null };
+}
+
+function rpcDeletePurchaseV14(args: any): { data: any; error: any } {
+  const invoice = table("purchase_invoices").find((p) => p.id === args.p_invoice_id && p.company_id === companyOfUser());
+  if (!invoice) return err("فاتورة المشتريات غير موجودة.");
+  if (table("payment_vouchers").some((p) => p.purchase_invoice_id === invoice.id && p.voucher_type !== "purchase")) return err("لا يمكن حذف الفاتورة لوجود سندات سداد مورّد مرتبطة بها.");
+  for (const p of [...table("payment_vouchers")].filter((p) => p.purchase_invoice_id === invoice.id)) table("payment_vouchers").splice(table("payment_vouchers").indexOf(p), 1);
+  for (const item of [...table("purchase_items")].filter((p) => p.invoice_id === invoice.id)) table("purchase_items").splice(table("purchase_items").indexOf(item), 1);
+  table("purchase_invoices").splice(table("purchase_invoices").indexOf(invoice), 1);
+  return { data: null, error: null };
+}
+
 const rpc = async (fn: string, args?: any) => {
   if (fn === "register_company") {
     throw new Error("rpc register_company not implemented in memory mock");
   }
   if (fn === "save_invoice") return rpcSaveInvoice(args);
   if (fn === "save_payroll") return rpcSavePayroll(args);
+  if (fn === "save_purchase_invoice_v14") return rpcSavePurchaseV14(args);
+  if (fn === "delete_purchase_invoice_v14") return rpcDeletePurchaseV14(args);
   return { data: null, error: { message: `rpc ${fn} not mocked` } };
 };
 

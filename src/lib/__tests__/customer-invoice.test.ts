@@ -9,6 +9,7 @@ vi.mock("@/lib/supabase", async () => {
 import { resetDb, setUser, seedTable } from "./memory-supabase";
 import * as repo from "@/lib/repo";
 import { customerInvoiceHtml } from "@/components/dialogs/operations";
+import { clearFeatureCache, TAX_INVOICE_WARNING } from "@/lib/features";
 
 async function seed() {
   resetDb();
@@ -19,7 +20,7 @@ async function seed() {
     currency: "ج.م", vat_rate: 14, vat_note: "فاتورة ضريبية", plan_type: "open", is_active: true,
   }]);
   await repo.saveYear({ year: 2026, date_from: "2026-01-01", date_to: "2026-12-31" });
-  const cust = await repo.saveCustomer({ name: "مصانع الدلتا", phone: "0111111111", address: "طلخا", opening_balance: 0 });
+  const cust = await repo.saveCustomer({ name: "مصانع الدلتا", phone: "01123456789", address: "طلخا", opening_balance: 0 });
   const drv = await repo.saveEmployee({ name: "سائق سرّي", emp_type: "driver" });
   const cb = await repo.saveAccount("cashbox", { name: "الخزينة", created_date: "2026-01-01", opening_balance: 10000 });
   const inv = await repo.saveInvoice({
@@ -98,5 +99,19 @@ describe("فاتورة العميل المطبوعة", () => {
     expect(html).toContain("الدفع خلال ٣٠ يوماً");
     expect(html).toContain("توقيع المستلم");
     expect(html).toContain("عن الشركة");
+  });
+
+  it("تحذير زاتكا مخصص للواجهة ولا يدخل في الفاتورة المطبوعة", async () => {
+    const result = await customerInvoiceHtml(ids.inv);
+    expect(result?.warnTaxInvoice).toBe(true);
+    expect(result?.html).not.toContain(TAX_INVOICE_WARNING);
+    expect(result?.html).not.toContain('alt="QR"');
+  });
+
+  it("يختفي تحذير المالك بعد تفعيل المطوّر للفاتورة الضريبية", async () => {
+    seedTable("company_features", [{ company_id: "c1", feature_key: "tax_invoice", enabled: true }]);
+    clearFeatureCache();
+    const result = await customerInvoiceHtml(ids.inv);
+    expect(result?.warnTaxInvoice).toBe(false);
   });
 });

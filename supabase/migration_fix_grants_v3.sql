@@ -166,10 +166,18 @@ begin
   j := jsonb_set(j, '{email}', to_jsonb(v_email));
 
   if j ? 'role' then
-    j := jsonb_set(
-      j, '{role}',
-      to_jsonb(case when v_email = 'conta.moha@gmail.com' then 'admin' else 'user' end)
-    );
+    -- v11 أعادت الدور بقيم owner/additional وأضافت phone كعلامة للمخطط الجديد.
+    -- عند إعادة تشغيل v3 لاحقاً نحافظ على الدور ولا نعيده إلى user/admin.
+    if j ? 'phone' then
+      j := jsonb_set(j, '{role}', to_jsonb(
+        case when j ->> 'role' in ('owner', 'additional') then j ->> 'role' else 'owner' end
+      ));
+    else
+      j := jsonb_set(
+        j, '{role}',
+        to_jsonb(case when v_email = 'conta.moha@gmail.com' then 'admin' else 'user' end)
+      );
+    end if;
   end if;
 
   if j ? 'is_active' then

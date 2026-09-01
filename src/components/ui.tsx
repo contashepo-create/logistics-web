@@ -304,14 +304,16 @@ export function DictSelect({
   onChange,
   options,
   placeholder = "— اختر —",
+  disabled = false,
 }: {
   value: number | null | undefined;
   onChange: (v: number | null) => void;
   options: { id: number; label: string }[];
   placeholder?: string;
+  disabled?: boolean;
 }) {
   return (
-    <Select value={value ?? ""} onChange={(e) => onChange(e.target.value ? Number(e.target.value) : null)}>
+    <Select value={value ?? ""} disabled={disabled} onChange={(e) => onChange(e.target.value ? Number(e.target.value) : null)}>
       <option value="">{placeholder}</option>
       {options.map((o) => (
         <option key={o.id} value={o.id}>{o.label}</option>
@@ -325,15 +327,18 @@ export function AccountSelect({
   value,
   onChange,
   options,
+  disabled = false,
 }: {
   value: { kind: string; id: number } | null;
   onChange: (v: { kind: string; id: number } | null) => void;
   options: { kind: string; id: number; label: string }[];
+  disabled?: boolean;
 }) {
   const key = value ? `${value.kind}:${value.id}` : "";
   return (
     <Select
       value={key}
+      disabled={disabled}
       onChange={(e) => {
         if (!e.target.value) return onChange(null);
         const [kind, id] = e.target.value.split(":");

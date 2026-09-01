@@ -411,6 +411,27 @@ table.data-table .total-row td { font-weight: 700; background: #f8fafc; }
   transition: border-color 0.15s, box-shadow 0.15s;
 }
 .input-base:focus { outline: none; border-color: var(--primary); box-shadow: 0 0 0 3px var(--primary-glow); }
+.password-input-wrap { position: relative; width: 100%; direction: ltr; }
+.password-input-wrap > input { padding-right: 48px; }
+.password-visibility-btn {
+  position: absolute;
+  right: 5px;
+  top: 50%;
+  width: 38px;
+  height: 38px;
+  padding: 8px;
+  transform: translateY(-50%);
+  display: grid;
+  place-items: center;
+  border: 0;
+  border-radius: 9px;
+  background: transparent;
+  color: var(--muted);
+  cursor: pointer;
+}
+.password-visibility-btn:hover { color: var(--primary); background: var(--primary-glow); }
+.password-visibility-btn:focus-visible { outline: 2px solid var(--primary); outline-offset: 1px; }
+.password-visibility-btn svg { width: 21px; height: 21px; fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
 .auth-card {
   background: #fff;
   border: 1px solid var(--border);
@@ -438,6 +459,9 @@ table.data-table .total-row td { font-weight: 700; background: #f8fafc; }
 .auth-foot { text-align: center; margin-top: 20px; color: var(--muted); font-size: 13.5px; }
 .auth-link { color: var(--primary); font-weight: 700; text-decoration: none; }
 .auth-link:hover { text-decoration: underline; }
+.auth-required-section { padding: 13px; border: 1px solid var(--primary); border-radius: 13px; background: var(--primary-glow); }
+.auth-section-title { color: var(--primary-dark); font-size: 14px; font-weight: 800; margin-bottom: 2px; }
+.auth-required-section .field-hint { margin: 0 0 9px; }
 .two-col { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
 @media (max-width: 480px) { .two-col { grid-template-columns: 1fr; } }
 
@@ -1217,3 +1241,134 @@ table.data-table thead th { position: sticky; top: 0; z-index: 1; }
 /* خلية تحذيرية في تقارير أعمار الديون */
 .cell-danger { color: #b91c1c; font-weight: 700; }
 [data-theme="dark"] .cell-danger { color: #fca5a5; }
+
+/* ===== معاينة الفاتورة الاحترافية ===== */
+.invoice-preview-card {
+  --invoice-accent: #1d4ed8;
+  overflow: hidden;
+  border: 1px solid var(--border);
+  border-radius: 18px;
+  background: var(--card);
+  box-shadow: var(--shadow-sm);
+}
+.invoice-preview-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 24px;
+  padding: 24px 26px;
+  color: #fff;
+  background: linear-gradient(135deg, #0f2d59, var(--invoice-accent));
+}
+.invoice-preview-kicker {
+  display: block;
+  margin-bottom: 4px;
+  color: #bfdbfe;
+  font-size: 12px;
+  font-weight: 800;
+  letter-spacing: .04em;
+}
+.invoice-preview-head h2 { margin: 0; font-size: 27px; letter-spacing: .025em; }
+.invoice-preview-head p { margin: 7px 0 0; color: #dbeafe; font-size: 12.5px; }
+.invoice-preview-customer { min-width: 230px; padding-inline-start: 22px; border-inline-start: 1px solid rgba(255,255,255,.28); }
+.invoice-preview-customer span, .invoice-preview-customer small { display: block; color: #bfdbfe; font-size: 11.5px; }
+.invoice-preview-customer strong { display: block; margin: 3px 0; font-size: 17px; }
+.invoice-preview-meta {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  gap: 0;
+  border-bottom: 1px solid var(--border);
+  background: var(--surface-2);
+}
+.invoice-preview-meta > div { padding: 11px 18px; border-inline-end: 1px solid var(--border); }
+.invoice-preview-meta span { display: block; margin-bottom: 3px; color: var(--muted); font-size: 10.5px; }
+.invoice-preview-meta b { font-size: 12.5px; color: var(--text); }
+.invoice-preview-table-wrap { padding: 20px 22px 8px; overflow-x: auto; }
+.invoice-preview-table { width: 100%; min-width: 670px; border-collapse: separate; border-spacing: 0; font-size: 13px; }
+.invoice-preview-table th {
+  padding: 10px;
+  background: var(--surface-3);
+  color: var(--text-soft);
+  border-block: 1px solid var(--border);
+  text-align: center;
+  font-size: 11.5px;
+}
+.invoice-preview-table th:nth-child(2) { text-align: start; }
+.invoice-preview-table td { padding: 13px 10px; border-bottom: 1px solid var(--border); text-align: center; color: var(--text-soft); }
+.invoice-preview-table td:nth-child(2) { text-align: start; color: var(--text); }
+.invoice-preview-table td small { display: block; margin-top: 3px; color: var(--muted); font-size: 10.5px; }
+.invoice-preview-bottom { display: grid; grid-template-columns: minmax(0, 1fr) minmax(310px, 390px); gap: 28px; align-items: start; padding: 18px 22px 24px; }
+.invoice-preview-note { padding: 13px 15px; border: 1px solid var(--border); border-radius: 12px; background: var(--surface-2); }
+.invoice-preview-note span { display: block; color: var(--muted); font-size: 11px; font-weight: 700; }
+.invoice-preview-note p { margin: 5px 0 0; color: var(--text-soft); font-size: 12.5px; line-height: 1.8; }
+.invoice-totals { overflow: hidden; border: 1px solid var(--border); border-radius: 12px; }
+.invoice-totals > div { display: flex; justify-content: space-between; gap: 18px; padding: 10px 14px; color: var(--text-soft); font-size: 12.5px; }
+.invoice-totals .vat-row { color: #9a5b00; background: #fff8e8; border-block: 1px solid #f4dca4; }
+.invoice-totals .grand-total { align-items: center; color: #fff; background: var(--invoice-accent); font-weight: 900; }
+.invoice-totals .grand-total b { font-size: 18px; }
+.invoice-internal-panel, .invoice-adjustments-panel { margin-top: 16px; padding: 18px; border: 1px solid var(--border); border-radius: 15px; background: var(--card); }
+.invoice-section-heading { display: flex; justify-content: space-between; align-items: end; gap: 12px; margin-bottom: 13px; }
+.invoice-section-heading span { color: var(--primary); font-size: 10.5px; font-weight: 800; }
+.invoice-section-heading h3 { margin: 2px 0 0; color: var(--text); font-size: 15px; }
+.invoice-section-heading small { color: var(--muted); }
+.invoice-internal-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 9px; }
+.invoice-internal-grid > div { padding: 11px 12px; border: 1px solid var(--border); border-radius: 10px; background: var(--surface-2); }
+.invoice-internal-grid span { display: block; margin-bottom: 4px; color: var(--muted); font-size: 11px; }
+.invoice-internal-grid b { color: var(--text); font-size: 14px; }
+.invoice-note-debit { color: #b45309; font-weight: 800; }
+.invoice-note-credit { color: var(--success); font-weight: 800; }
+.invoice-empty-state { padding: 16px; border: 1px dashed var(--border); border-radius: 10px; color: var(--muted); text-align: center; font-size: 12.5px; background: var(--surface-2); }
+
+/* ملخصات سند الصرف المختصرة + الكمية وسعر الوحدة */
+.payment-selection-summary {
+  display: flex;
+  align-items: center;
+  gap: 8px 14px;
+  flex-wrap: wrap;
+  margin: -2px 0 10px;
+  padding: 9px 11px;
+  border: 1px solid var(--border);
+  border-inline-start: 4px solid var(--primary);
+  border-radius: 9px;
+  background: var(--surface-2);
+  color: var(--text-soft);
+  font-size: 12px;
+}
+.payment-selection-summary strong { color: var(--primary); font-family: ui-monospace, monospace; }
+.payment-selection-summary span:last-child { margin-inline-start: auto; }
+.payment-amount-grid { display: grid; grid-template-columns: 1fr 1fr 1.15fr; gap: 12px; }
+.payment-page-shell { border: 1px solid var(--border); border-radius: 14px; background: var(--card); overflow: hidden; }
+.payment-scroll-hint { padding: 9px 16px; background: color-mix(in srgb, var(--primary) 8%, var(--card)); color: var(--muted); font-size: 12.5px; border-bottom: 1px solid var(--border); }
+.payment-page-scroll {
+  max-height: calc(100vh - 220px);
+  min-height: 460px;
+  overflow-y: scroll;
+  scrollbar-gutter: stable;
+  padding: 20px 24px 32px;
+  outline: none;
+}
+.payment-page-scroll:focus-visible { box-shadow: inset 0 0 0 2px var(--primary); }
+.payment-page-scroll::-webkit-scrollbar { width: 14px; }
+.payment-page-scroll::-webkit-scrollbar-track { background: var(--surface-2, #eef2f7); border-inline-start: 1px solid var(--border); }
+.payment-page-scroll::-webkit-scrollbar-thumb { background: #94a3b8; border-radius: 10px; border: 3px solid var(--surface-2, #eef2f7); }
+.payment-page-scroll::-webkit-scrollbar-thumb:hover { background: #64748b; }
+.payment-page-actions { position: sticky; bottom: -32px; margin: 18px -24px -32px; padding: 14px 24px; border-top: 1px solid var(--border); background: color-mix(in srgb, var(--card) 94%, transparent); backdrop-filter: blur(8px); }
+.purchase-routing-card { border: 1px solid color-mix(in srgb, var(--primary) 24%, var(--border)); background: color-mix(in srgb, var(--primary) 4%, var(--card)); border-radius: 14px; padding: 16px; margin-bottom: 14px; }
+.reference-only-note { margin-bottom: 14px; padding: 11px 14px; border: 1px solid #bae6fd; border-radius: 10px; background: #f0f9ff; color: #075985; }
+.advance-status { display: inline-flex; padding: 4px 9px; border-radius: 999px; font-size: 11.5px; font-weight: 700; white-space: nowrap; }
+.advance-open { background: #fef3c7; color: #92400e; }
+.advance-partial { background: #dbeafe; color: #1e40af; }
+.advance-closed { background: #dcfce7; color: #166534; }
+
+@media (max-width: 760px) {
+  .invoice-preview-head { flex-direction: column; padding: 20px; }
+  .invoice-preview-customer { width: 100%; min-width: 0; padding: 12px 0 0; border-inline-start: 0; border-top: 1px solid rgba(255,255,255,.28); }
+  .invoice-preview-bottom { grid-template-columns: 1fr; padding: 15px; }
+  .invoice-preview-table-wrap { padding-inline: 12px; }
+  .invoice-internal-grid { grid-template-columns: 1fr 1fr; }
+  .invoice-section-heading { align-items: flex-start; flex-direction: column; }
+  .payment-amount-grid { grid-template-columns: 1fr; }
+  .payment-selection-summary span:last-child { margin-inline-start: 0; }
+  .payment-page-scroll { max-height: calc(100vh - 185px); min-height: 420px; padding: 14px 14px 28px; }
+  .payment-page-actions { margin-inline: -14px; margin-bottom: -28px; padding-inline: 14px; }
+}

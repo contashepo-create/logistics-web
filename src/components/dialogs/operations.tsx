@@ -1,13 +1,18 @@
 "use client";
 
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { Modal, Field, Input, Select, Textarea, AmountInput, DateInput, Button, AccountSelect } from "@/components/ui";
 import { notify } from "@/components/toast";
 import { listSuppliers, supplierBalance } from "@/lib/suppliers";
 import { listCustomers, listEmployees, listVehicles, saveReceipt, savePayment, getReceipt, getPayment, companyInfo } from "@/lib/repo";
-import { getInvoiceFull, allAccounts, invoiceOptions, tripOptionsByInvoice, tripInvoiceId, tripProfit } from "@/lib/calc";
+import { getInvoiceFull, allAccounts, invoiceOptions, tripOptionsByInvoice, tripInvoiceId } from "@/lib/calc";
 import type { Customer } from "@/lib/types";
 import { money, todayIso, amountToArabicWords, EXPENSE_TYPES, PAYMENT_TYPES, RECEIPT_TYPES, VEHICLE_EXPENSES } from "@/lib/format";
+import { getProfile } from "@/lib/auth";
+import { hasFeature, shouldWarnTaxInvoice, TAX_INVOICE_WARNING } from "@/lib/features";
+import { renderInvoiceTemplate, type InvoiceTemplateLine } from "@/lib/invoice-template-html";
+import { openPrintPreview } from "@/lib/exporter";
+import type { PrintSettings } from "@/lib/print";
 
 
 /* ============================ سند قبض ============================ */
@@ -86,7 +91,7 @@ export function ReceiptDialog({ id, readOnly, onClose }: { id?: number | null; r
 }
 
 /* ============================ سند دفع ============================ */
-export function PaymentDialog({ id, readOnly, onClose }: { id?: number | null; readOnly?: boolean; onClose: (changed?: boolean) => void }) {
+export function PaymentDialog({ id, readOnly, onClose, embedded = false }: { id?: number | null; readOnly?: boolean; onClose: (changed?: boolean) => void; embedded?: boolean }) {
   const [accounts, setAccounts] = useState<{ kind: string; id: number; label: string }[]>([]);
   const [invoiceOpts, setInvoiceOpts] = useState<Awaited<ReturnType<typeof invoiceOptions>>>([]);
   const [tripOpts, setTripOpts] = useState<Awaited<ReturnType<typeof tripOptionsByInvoice>>>([]);
@@ -94,39 +99,36 @@ export function PaymentDialog({ id, readOnly, onClose }: { id?: number | null; r
   const [vehicles, setVehicles] = useState<{ id: number; plate_number: string }[]>([]);
   const [suppliers, setSuppliers] = useState<{ id: number; code: string; name: string }[]>([]);
   const [supplierDue, setSupplierDue] = useState<number | null>(null);
-  const [f, setF] = useState({ account_kind: "cashbox", account_id: "", voucher_type: "trip", invoice_id: "", trip_id: "", employee_id: "", vehicle_id: "", vehicle_expense: "maintenance", supplier_id: "", amount: "", description: "", date: todayIso() });
-  const [invoiceInfo, setInvoiceInfo] = useState<{ number: number; date: string; customer_name: string; total: number; paid: number; remaining: number } | null>(null);
-  const [tripInfo, setTripInfo] = useState<{ price: number; direct: number; later: number; net: number } | null>(null);
+  const [f, setF] = useState({ account_kind: "cashbox", account_id: "", voucher_type: "trip", invoice_id: "", trip_id: "", employee_id: "", vehicle_id: "", vehicle_expense: "maintenance", supplier_id: "", quantity: "1", unit_amount: "", description: "", date: todayIso() });
+  const [invoiceInfo, setInvoiceInfo] = useState<{ number: number; customer_name: string; remaining: number } | null>(null);
   const [saving, setSaving] = useState(false);
   const lastInvoiceRef = useRef<number | null>(null);
 
   useEffect(() => {
     (async () => {
-      const accs = await allAccounts();
+      const [accs, invoices, employeeRows, vehicleRows, supplierRows, voucher] = await Promise.all([
+        allAccounts(),
+        invoiceOptions(),
+        listEmployees(),
+        listVehicles(),
+        listSuppliers(),
+        id ? getPayment(id) : Promise.resolve(null),
+      ]);
       setAccounts(accs);
-      setInvoiceOpts(await invoiceOptions());
-      setEmployees(await listEmployees());
-      setVehicles(await listVehicles());
-      setSuppliers((await listSuppliers()).map((x) => ({ id: x.id, code: x.code, name: x.name })));
-      if (id) {
-        const v = await getPayment(id);
-        if (v) {
-          const invoiceId = await tripInvoiceId(v.trip_id);
-          setF({ account_kind: v.account_kind, account_id: String(v.account_id), voucher_type: v.voucher_type, invoice_id: invoiceId ? String(invoiceId) : "", trip_id: v.trip_id ? String(v.trip_id) : "", employee_id: v.employee_id ? String(v.employee_id) : "", vehicle_id: v.vehicle_id ? String(v.vehicle_id) : "", vehicle_expense: v.vehicle_expense || "maintenance", supplier_id: (v as { supplier_id?: number | null }).supplier_id ? String((v as { supplier_id?: number | null }).supplier_id) : "", amount: String(v.amount), description: v.description, date: v.date });
-          if (invoiceId) {
-            lastInvoiceRef.current = invoiceId;
-            setTripOpts(await tripOptionsByInvoice(invoiceId));
-          }
-        }
-      } else if (accs.length) setF((old) => ({ ...old, account_kind: accs[0].kind, account_id: String(accs[0].id) }));
+      setInvoiceOpts(invoices);
+      setEmployees(employeeRows);
+      setVehicles(vehicleRows);
+      setSuppliers(supplierRows.map((x) => ({ id: x.id, code: x.code, name: x.name })));
+
+      if (voucher) {
+        const invoiceId = await tripInvoiceId(voucher.trip_id);
+        setF({ account_kind: voucher.account_kind, account_id: String(voucher.account_id), voucher_type: voucher.voucher_type, invoice_id: invoiceId ? String(invoiceId) : "", trip_id: voucher.trip_id ? String(voucher.trip_id) : "", employee_id: voucher.employee_id ? String(voucher.employee_id) : "", vehicle_id: voucher.vehicle_id ? String(voucher.vehicle_id) : "", vehicle_expense: voucher.vehicle_expense || "maintenance", supplier_id: voucher.supplier_id ? String(voucher.supplier_id) : "", quantity: String(voucher.quantity || 1), unit_amount: String(voucher.unit_amount || voucher.amount), description: voucher.description, date: voucher.date });
+        if (invoiceId) lastInvoiceRef.current = invoiceId;
+      } else if (!id && accs.length) {
+        setF((old) => ({ ...old, account_kind: accs[0].kind, account_id: String(accs[0].id) }));
+      }
     })();
   }, [id]);
-
-  useEffect(() => {
-    if (f.voucher_type === "trip" && f.trip_id) {
-      tripProfit(Number(f.trip_id)).then(setTripInfo);
-    } else setTripInfo(null);
-  }, [f.voucher_type, f.trip_id]);
 
   // المستحق الحالي للمورّد المختار (مساعدة بصرية قبل الصرف)
   useEffect(() => {
@@ -140,18 +142,16 @@ export function PaymentDialog({ id, readOnly, onClose }: { id?: number | null; r
     if (f.voucher_type !== "trip") {
       setInvoiceInfo(null);
       setTripOpts([]);
-      setTripInfo(null);
       return;
     }
     const id = Number(f.invoice_id);
     if (!id) {
       setInvoiceInfo(null);
       setTripOpts([]);
-      setTripInfo(null);
       return;
     }
     const inv = invoiceOpts.find((i) => i.id === id);
-    setInvoiceInfo(inv ? { number: inv.number, date: inv.date, customer_name: inv.customer_name, total: inv.total, paid: inv.paid, remaining: inv.remaining } : null);
+    setInvoiceInfo(inv ? { number: inv.number, customer_name: inv.customer_name, remaining: inv.remaining } : null);
     if (lastInvoiceRef.current !== id) {
       lastInvoiceRef.current = id;
       setF((p) => ({ ...p, trip_id: "" }));
@@ -160,10 +160,16 @@ export function PaymentDialog({ id, readOnly, onClose }: { id?: number | null; r
     tripOptionsByInvoice(id).then(setTripOpts);
   }, [f.voucher_type, f.invoice_id, invoiceOpts]);
 
+  const quantity = Number(f.quantity);
+  const unitAmount = Number(f.unit_amount);
+  const totalAmount = Number.isFinite(quantity) && Number.isFinite(unitAmount)
+    ? Math.round(quantity * unitAmount * 100) / 100
+    : 0;
+
   const save = async () => {
     if (!f.account_id) return notify("اختر الحساب.", "error");
-    const amt = parseFloat(f.amount);
-    if (!(amt > 0)) return notify("أدخل مبلغاً صحيحاً.", "error");
+    if (!(quantity > 0)) return notify("أدخل عدداً أكبر من صفر.", "error");
+    if (!(unitAmount > 0)) return notify("أدخل قيمة وحدة صحيحة.", "error");
     setSaving(true);
     try {
       await savePayment({
@@ -175,7 +181,7 @@ export function PaymentDialog({ id, readOnly, onClose }: { id?: number | null; r
         vehicle_id: f.voucher_type === "vehicle" && f.vehicle_id ? Number(f.vehicle_id) : null,
         vehicle_expense: f.voucher_type === "vehicle" ? f.vehicle_expense : "",
         supplier_id: f.voucher_type === "supplier" && f.supplier_id ? Number(f.supplier_id) : null,
-        amount: amt, description: f.description,
+        quantity, unit_amount: unitAmount, amount: totalAmount, description: f.description,
       }, id);
       notify("تم حفظ سند الدفع بنجاح.", "success");
       onClose(true);
@@ -186,11 +192,11 @@ export function PaymentDialog({ id, readOnly, onClose }: { id?: number | null; r
     }
   };
 
-  return (
-    <Modal title={id ? (readOnly ? "عرض سند دفع" : "تعديل سند دفع") : "سند دفع جديد"} onClose={() => onClose()}>
+  const content = (
+    <>
       <Field label="نوع السند">
         <Select value={f.voucher_type} onChange={(e) => setF({ ...f, voucher_type: e.target.value })} disabled={readOnly}>
-          {Object.entries(PAYMENT_TYPES).map(([k, v]) => <option key={k} value={k}>{v}</option>)}
+          {Object.entries(PAYMENT_TYPES).filter(([k]) => k !== "purchase").map(([k, v]) => <option key={k} value={k}>{v}</option>)}
         </Select>
       </Field>
 
@@ -217,24 +223,16 @@ export function PaymentDialog({ id, readOnly, onClose }: { id?: number | null; r
               <option value="">— اختر الفاتورة —</option>
               {invoiceOpts.map((t) => (
                 <option key={t.id} value={t.id}>
-                  INV-{String(t.number).padStart(5, "0")} | {t.date} | {t.customer_name} | {money(t.total)}
+                  INV-{String(t.number).padStart(5, "0")} — {t.customer_name}
                 </option>
               ))}
             </Select>
           </Field>
           {invoiceInfo && (
-            <div className="group-box" style={{ marginTop: 0 }}>
-              <div className="group-title">بيانات الفاتورة</div>
-              <table className="data-table">
-                <tbody>
-                  <tr><td>رقم الفاتورة</td><td>INV-{String(invoiceInfo.number).padStart(5, "0")}</td></tr>
-                  <tr><td>التاريخ</td><td>{invoiceInfo.date}</td></tr>
-                  <tr><td>العميل</td><td>{invoiceInfo.customer_name}</td></tr>
-                  <tr><td>إجمالي الفاتورة</td><td>{money(invoiceInfo.total)}</td></tr>
-                  <tr><td>المسدَّد من الفاتورة</td><td>{money(invoiceInfo.paid)}</td></tr>
-                  <tr className="total-row"><td>المتبقي على الفاتورة</td><td>{money(invoiceInfo.remaining)}</td></tr>
-                </tbody>
-              </table>
+            <div className="payment-selection-summary">
+              <strong>INV-{String(invoiceInfo.number).padStart(5, "0")}</strong>
+              <span>{invoiceInfo.customer_name}</span>
+              <span>المتبقي: <b>{money(invoiceInfo.remaining)}</b></span>
             </div>
           )}
           <Field label="النقلة (الرحلة)" required>
@@ -243,19 +241,6 @@ export function PaymentDialog({ id, readOnly, onClose }: { id?: number | null; r
               {tripOpts.map((t) => <option key={t.id} value={t.id}>{t.label}</option>)}
             </Select>
           </Field>
-          {tripInfo && (
-            <div className="group-box" style={{ marginTop: 0 }}>
-              <div className="group-title">ملخص النقلة</div>
-              <table className="data-table">
-                <tbody>
-                  <tr><td>سعر النقلة</td><td>{money(tripInfo.price)}</td></tr>
-                  <tr><td>مصاريف مباشرة مسجلة سابقاً</td><td>{money(tripInfo.direct)}</td></tr>
-                  <tr><td>سندات دفع سابقة على النقلة</td><td>{money(tripInfo.later)}</td></tr>
-                  <tr className="total-row"><td>صافي الربح/الخسارة حتى الآن</td><td>{money(tripInfo.net)}</td></tr>
-                </tbody>
-              </table>
-            </div>
-          )}
         </>
       )}
       {f.voucher_type === "advance" && (
@@ -287,19 +272,40 @@ export function PaymentDialog({ id, readOnly, onClose }: { id?: number | null; r
           value={f.account_id ? { kind: f.account_kind, id: Number(f.account_id) } : null}
           onChange={(v) => setF({ ...f, account_kind: v?.kind ?? "cashbox", account_id: v ? String(v.id) : "" })}
           options={accounts}
+          disabled={readOnly}
         />
       </Field>
-      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
-        <Field label="المبلغ" required><AmountInput value={f.amount} onChange={(v) => setF({ ...f, amount: v })} readOnly={readOnly} /></Field>
-        <Field label="التاريخ" required><DateInput value={f.date} onChange={(v) => setF({ ...f, date: v })} disabled={readOnly} /></Field>
+      <div className="payment-amount-grid">
+        <Field label="العدد" required>
+          <AmountInput value={f.quantity} onChange={(v) => setF({ ...f, quantity: v })} readOnly={readOnly} />
+        </Field>
+        <Field label="قيمة الوحدة" required>
+          <AmountInput value={f.unit_amount} onChange={(v) => setF({ ...f, unit_amount: v })} readOnly={readOnly} />
+        </Field>
+        <Field label="الإجمالي">
+          <Input value={totalAmount > 0 ? money(totalAmount) : "0.00"} readOnly aria-label="إجمالي سند الدفع" />
+        </Field>
       </div>
+      <Field label="التاريخ" required><DateInput value={f.date} onChange={(v) => setF({ ...f, date: v })} disabled={readOnly} /></Field>
       <Field label="البيان"><Textarea value={f.description} onChange={(e) => setF({ ...f, description: e.target.value })} readOnly={readOnly} /></Field>
       {f.voucher_type === "owner" && (
         <span className="field-hint">سحب نقدي خاص بصاحب المنشأة — يخرج من الخزينة/البنك ويُخصم من الأرباح، ويظهر في تقرير الأرباح والخسائر وكشف الحساب.</span>
       )}
-      {!readOnly && <div style={{ marginTop: 14 }}><Button variant="primary" onClick={save} disabled={saving}>💾 حفظ السند</Button></div>}
-    </Modal>
+      {!readOnly && <div className="payment-page-actions"><Button variant="primary" onClick={save} disabled={saving}>💾 حفظ السند</Button></div>}
+    </>
   );
+
+  if (embedded) {
+    return (
+      <div className="payment-page-shell">
+        <div className="payment-scroll-hint">استخدم شريط التمرير الجانبي أو مفاتيح الأسهم وPage Down لرؤية بقية السند.</div>
+        <div className="payment-page-scroll" tabIndex={0} aria-label="نموذج سند الدفع القابل للتمرير">
+          {content}
+        </div>
+      </div>
+    );
+  }
+  return <Modal title={id ? (readOnly ? "عرض سند دفع" : "تعديل سند دفع") : "سند دفع جديد"} onClose={() => onClose()}>{content}</Modal>;
 }
 
 /* ============================ فاتورة العميل (طباعة / PDF) ============================ */
@@ -307,13 +313,15 @@ export function PaymentDialog({ id, readOnly, onClose }: { id?: number | null; r
  * فاتورة بيع للعميل: تعرض ما يُطالَب به فقط (بنود النقل + البنود التي يتحمّلها العميل
  * + الضريبة). لا تُعرض أي تكاليف أو أرباح أو مصادر تمويل أو موردين أو سائقين.
  */
-export async function customerInvoiceHtml(invoiceId: number): Promise<{ html: string; number: number } | null> {
+export async function customerInvoiceHtml(invoiceId: number): Promise<{ html: string; number: number; warnTaxInvoice: boolean; settings: PrintSettings } | null> {
   const inv = await getInvoiceFull(invoiceId);
   if (!inv) return null;
-  const [info, ps, meta] = await Promise.all([
+  const [info, ps, meta, taxInvoiceEnabled, profile] = await Promise.all([
     companyInfo(),
     import("@/lib/print").then((m) => m.getPrintSettings()),
     import("@/lib/exportHelper").then((m) => m.printMeta()),
+    hasFeature("tax_invoice"),
+    getProfile().catch(() => null),
   ]);
   const { buildZatcaQr, zatcaQrDataUrl, zatcaInvoiceType, zatcaMissingFields, ZATCA_TYPE_LABEL } = await import("@/lib/zatca");
   const { formatNationalAddress } = await import("@/lib/tax");
@@ -354,226 +362,137 @@ export async function customerInvoiceHtml(invoiceId: number): Promise<{ html: st
     vatAmount: vat,
   });
   let qrImg = "";
-  try {
-    qrImg = await zatcaQrDataUrl(qrPayload);
-  } catch {
-    qrImg = "";
+  // لا يُنشأ QR أصلاً ما لم يمنح المطوّر ميزة الفاتورة الضريبية لهذه الشركة.
+  if (taxInvoiceEnabled) {
+    try {
+      qrImg = await zatcaQrDataUrl(qrPayload);
+    } catch {
+      qrImg = "";
+    }
   }
   const missing = zatcaMissingFields({
     sellerName: info.company_name, sellerVat, sellerAddress,
     buyerName: buyer?.name, buyerVat, type: invType, date: inv.date,
   });
 
-  // لغة التسميات: عربي أو إنجليزي فقط (لا يُعرض الاثنان معاً أبداً)
-  const enLabels = ps.label_language === "en";
-  const bi = (ar: string, en: string) =>
-    esc(enLabels ? en : ar);
-  const accent = ps.accent_color || "#1d4ed8";
-  const soft = ps.template === "minimal" ? "#111827" : accent;
-  const headBg = ps.template === "classic" || ps.template === "compact" ? accent
-    : ps.template === "minimal" ? "#111827"
-    : ps.template === "elegant" ? "#ffffff"
-    : accent;
-  const headColor = ps.template === "minimal" || ps.template === "elegant" ? (ps.template === "minimal" ? "#111827" : accent) : "#ffffff";
-  const borderStyle = ps.template === "minimal" ? "1px solid #cbd5e1" : "1px solid #e2e8f0";
-  const titleStyle = ps.template === "modern" ? `background:${accent};color:#fff;border-radius:10px;padding:10px 14px;`
-    : ps.template === "classic" ? `border:1.5pt solid ${accent};color:${accent};padding:8px 14px;`
-    : ps.template === "elegant" ? `border-bottom:1pt solid ${accent};color:${accent};padding-bottom:8px;`
-    : ps.template === "compact" ? `background:${accent};color:#fff;padding:7px 14px;`
-    : `color:#111827;border-bottom:1pt solid #111827;padding-bottom:6px;`;
-  const showField = (enabled: boolean, value?: unknown) => enabled && String(value ?? "").trim() !== "";
-  const labelOr = (v: unknown, alt = "") => String(v ?? "").trim() ? String(v) : alt;
+  const toLine = (description: string, detail: string, quantity: number, unitAmount: number, taxableAmount: number): InvoiceTemplateLine => {
+    const vatAmount = Math.round(taxableAmount * vatRate) / 100;
+    return {
+      description,
+      detail,
+      quantity,
+      unitAmount,
+      taxableAmount,
+      vatRate,
+      vatAmount,
+      total: Math.round((taxableAmount + vatAmount) * 100) / 100,
+    };
+  };
 
-  const cell = (v: string, align = "center", extra = "") =>
-    `<td style="padding:9px 10px;border-bottom:1px solid #e6ebf2;text-align:${align};${extra}">${v}</td>`;
+  // بنود العميل فقط: لا تمر أي تكلفة داخلية أو اسم مورد أو مصدر تمويل إلى القالب.
+  const lines: InvoiceTemplateLine[] = [
+    ...inv.trips.map((t) => toLine(
+      `خدمة نقل: ${t.from_loc || "—"} ← ${t.to_loc || "—"}`,
+      t.notes || "",
+      Number(t.qty ?? 1),
+      Number(t.unit_price || t.price) || 0,
+      Number(t.price) || 0,
+    )),
+    ...inv.trips.flatMap((t) => (t.expenses ?? [])
+      .filter((e) => e.source === "customer")
+      .map((e) => toLine(
+        e.notes || EXPENSE_TYPES[e.expense_type] || "بند إضافي",
+        `${t.from_loc || "—"} ← ${t.to_loc || "—"}`,
+        Number(e.qty ?? 1),
+        Number(e.unit_amount || e.amount) || 0,
+        Number(e.amount) || 0,
+      ))),
+  ];
 
-  let idx = 0;
-  const tripRows = inv.trips.map((t) => {
-    idx += 1;
-    const desc = `<b>خدمة نقل: ${esc(t.from_loc || "—")} ← ${esc(t.to_loc || "—")}</b>` +
-      `<div style="font-size:10.5px;color:#64748b;direction:ltr;text-align:left;">Transport service</div>` +
-      (t.notes ? `<div style="color:#64748b;font-size:11.5px;margin-top:2px;">${esc(t.notes)}</div>` : "");
-    const line = Number(t.price) || 0;
-    const lineVat = Math.round(line * vatRate) / 100;
-    const bg = idx % 2 === 0 ? "background:#fafbfd;" : "";
-    return `<tr style="${bg}">` +
-      cell(String(idx)) + cell(desc, "right") +
-      cell(String(t.qty ?? 1)) + cell(money(t.unit_price || t.price)) +
-      cell(money(line)) + cell(`${vatRate}%`) + cell(money(lineVat)) +
-      cell(money(Math.round((line + lineVat) * 100) / 100), "center", "font-weight:700;") + "</tr>";
-  }).join("");
+  const html = renderInvoiceTemplate({
+    invoiceNumber: `INV-${num}`,
+    issueDate: inv.date,
+    invoiceTitleAr: typeLabel.ar,
+    invoiceTitleEn: typeLabel.en,
+    currency: cur,
+    containerNumber: inv.container_number || "",
+    seller: {
+      name: info.company_name || "شركة النقل",
+      nameEn: info.company_name_en || "",
+      taxNumber: sellerVat,
+      commercialRegistration: info.company_commercial_reg || "",
+      unifiedNumber: info.company_unified_number || "",
+      address: sellerAddress,
+      phone: info.company_phone || "",
+      email: info.company_email || "",
+      website: info.company_website || "",
+    },
+    buyer: {
+      name: buyer?.name || "—",
+      nameEn: buyer?.name_en || "",
+      code: inv.customer_code,
+      taxNumber: buyerVat,
+      commercialRegistration: buyer?.commercial_reg || "",
+      address: buyerAddress,
+      phone: buyer?.phone || "",
+    },
+    lines,
+    subtotal,
+    vatRate,
+    vatAmount: vat,
+    total,
+    amountInWords: amountToArabicWords(total, cur),
+    notes: inv.notes || "",
+    printedBy: meta.printedBy || "—",
+    printedAt: meta.printedAt,
+    qrDataUrl: taxInvoiceEnabled && qrImg && missing.length === 0 ? qrImg : "",
+    qrCaption: "رمز الفاتورة الضريبية",
+    footerText: ps.header_note || "",
+  }, ps);
 
-  // بنود إضافية يتحمّلها العميل (بلا أي إشارة لمصدر التمويل أو المورد)
-  const billableRows = inv.trips
-    .flatMap((t) => (t.expenses ?? []).filter((e) => e.source === "customer").map((e) => ({ t, e })))
-    .map(({ t, e }) => {
-      idx += 1;
-      const label = esc(e.notes || EXPENSE_TYPES[e.expense_type] || "بند إضافي");
-      const desc = `<b>${label}</b><div style="color:#64748b;font-size:11.5px;margin-top:2px;">${esc(t.from_loc || "")} ← ${esc(t.to_loc || "")}</div>`;
-      const line = Number(e.amount) || 0;
-      const lineVat = Math.round(line * vatRate) / 100;
-      const bg = idx % 2 === 0 ? "background:#fafbfd;" : "";
-      return `<tr style="${bg}">` +
-        cell(String(idx)) + cell(desc, "right") +
-        cell(String(e.qty ?? 1)) + cell(money(e.unit_amount || e.amount)) +
-        cell(money(line)) + cell(`${vatRate}%`) + cell(money(lineVat)) +
-        cell(money(Math.round((line + lineVat) * 100) / 100), "center", "font-weight:700;") + "</tr>";
-    }).join("");
+  return {
+    html,
+    number: inv.number,
+    warnTaxInvoice: shouldWarnTaxInvoice({ featureEnabled: taxInvoiceEnabled, vatRate, profile }),
+    settings: ps,
+  };
+}
 
-  const totalLine = (ar: string, en: string, v: string, strong = false) =>
-    `<tr>
-      <td style="padding:7px 12px;color:${strong ? "#0f172a" : "#475569"};font-weight:${strong ? 800 : 500};font-size:${strong ? "14px" : "12.5px"};">
-        ${bi(ar, en)}
-      </td>
-      <td style="padding:7px 12px;text-align:left;font-weight:${strong ? 800 : 700};color:${strong ? accent : "#0f172a"};font-size:${strong ? "15px" : "13px"};white-space:nowrap;">${v}</td>
-    </tr>`;
-
-  const infoBox = (titleAr: string, titleEn: string, body: string) => `
-    <div style="flex:1;border:${borderStyle};border-radius:10px;overflow:hidden;">
-      <div style="background:${headBg};padding:6px 12px;font-size:11.5px;font-weight:700;color:${headColor};">
-        ${bi(titleAr, titleEn)}
-      </div>
-      <div style="padding:10px 12px;font-size:12.5px;line-height:1.85;">${body}</div>
-    </div>`;
-
-  const kv = (ar: string, en: string, v: string) =>
-    v ? `<div><span style="color:#64748b;">${bi(ar, en)}:</span> <b>${esc(v)}</b></div>` : "";
-
-  const html = `
-  <div style="font-family:'IBM Plex Sans Arabic','Segoe UI',Tahoma,sans-serif;color:#0f172a;direction:rtl;">
-
-    <!-- ترويسة -->
-    <table width="100%" style="border-collapse:collapse;margin-bottom:12px;">
-      <tr>
-        <td style="vertical-align:top;">
-          ${showField(ps.invoice_show_company_name, info.company_name) ? `<div style="font-size:20px;font-weight:800;color:${accent};line-height:1.35;">${esc(info.company_name || "شركة النقل")}</div>` : ""}
-          ${showField(ps.invoice_show_company_name, info.company_name_en) ? `<div style="font-size:12.5px;font-weight:700;color:#475569;direction:ltr;">${esc(info.company_name_en)}</div>` : ""}
-          <div style="font-size:11.5px;color:#64748b;line-height:1.85;margin-top:4px;">
-            ${showField(ps.invoice_show_company_address, sellerAddress) ? esc(sellerAddress) + "<br/>" : ""}
-            ${showField(ps.invoice_show_company_phone, info.company_phone) ? bi("هاتف", "Tel") + ": " + esc(info.company_phone) + "&nbsp;&nbsp;" : ""}
-            ${showField(ps.invoice_show_company_email, info.company_email) ? esc(info.company_email) + "&nbsp;&nbsp;" : ""}
-            ${showField(ps.invoice_show_company_website, info.company_website) ? esc(info.company_website) : ""}
-          </div>
-          <div style="font-size:11.5px;color:#0f172a;line-height:1.85;margin-top:4px;">
-            ${showField(ps.invoice_show_company_tax_number, sellerVat) ? kv("الرقم الضريبي", "VAT No.", sellerVat) : ""}
-            ${showField(ps.invoice_show_company_cr, info.company_commercial_reg) ? kv("السجل التجاري", "CR No.", labelOr(info.company_commercial_reg)) : ""}
-            ${showField(ps.invoice_show_company_unified, info.company_unified_number) ? kv("الرقم الموحّد", "Unified No.", labelOr(info.company_unified_number)) : ""}
-          </div>
-        </td>
-        <td style="vertical-align:top;text-align:left;width:250px;">
-          <div style="${titleStyle};text-align:center;${ps.template === "minimal" ? "border:1pt solid #111827;" : ""}${ps.template === "elegant" ? "border-bottom:1pt solid " + accent + ";" : ""}">
-            <div style="font-size:16px;font-weight:800;letter-spacing:.4px;">${bi(typeLabel.ar, typeLabel.en)}</div>
-          </div>
-          <table width="100%" style="margin-top:8px;border-collapse:collapse;font-size:12px;">
-            <tr><td style="padding:3px 0;color:#64748b;">${bi("رقم الفاتورة", "Invoice No.")}</td><td style="padding:3px 0;text-align:left;font-weight:800;">INV-${num}</td></tr>
-            <tr><td style="padding:3px 0;color:#64748b;">${bi("تاريخ الإصدار", "Issue date")}</td><td style="padding:3px 0;text-align:left;font-weight:700;">${esc(inv.date)}</td></tr>
-            ${showField(ps.invoice_show_currency, cur) ? `<tr><td style="padding:3px 0;color:#64748b;">${bi("العملة", "Currency")}</td><td style="padding:3px 0;text-align:left;font-weight:700;">${esc(cur)}${enLabels ? " (SAR)" : ""}</td></tr>` : ""}
-            <tr><td style="padding:3px 0;color:#64748b;">${bi("طُبع بواسطة", "Printed by")}</td><td style="padding:3px 0;text-align:left;font-weight:700;">${esc(meta.printedBy || "—")}</td></tr>
-            <tr><td style="padding:3px 0;color:#64748b;">${bi("وقت الطباعة", "Printed at")}</td><td style="padding:3px 0;text-align:left;font-weight:700;">${esc(meta.printedAt)}</td></tr>
-          </table>
-        </td>
-      </tr>
-    </table>
-
-    <div style="height:3px;background:linear-gradient(90deg,${soft},${accent} 60%,transparent);border-radius:3px;margin-bottom:12px;"></div>
-
-    <!-- بيانات البائع والمشتري -->
-    <div style="display:flex;gap:12px;margin-bottom:12px;">
-      ${infoBox("فاتورة إلى (المشتري)", "Bill to (Buyer)", `
-        ${showField(ps.invoice_show_customer_name, buyer?.name) ? `<div style="font-weight:800;font-size:13.5px;">${esc(buyer?.name ?? "—")}</div>` : ""}
-        ${showField(ps.invoice_show_customer_code, inv.customer_code) ? `<div style="color:#475569;">${bi("كود العميل", "Customer code")}: ${esc(inv.customer_code)}</div>` : ""}
-        ${showField(ps.invoice_show_customer_name, buyer?.name_en) && buyer?.name_en ? `<div style="direction:ltr;color:#475569;font-size:11.5px;">${esc(buyer.name_en)}</div>` : ""}
-        ${showField(ps.invoice_show_customer_tax_number, buyerVat) ? kv("الرقم الضريبي", "VAT No.", buyerVat) : ""}
-        ${showField(ps.invoice_show_customer_cr, buyer?.commercial_reg) ? kv("السجل التجاري", "CR No.", labelOr(buyer?.commercial_reg)) : ""}
-        ${showField(ps.invoice_show_customer_address, buyerAddress) ? `<div style="color:#475569;">${esc(buyerAddress)}</div>` : ""}
-        ${showField(ps.invoice_show_customer_phone, buyer?.phone) ? `<div style="color:#475569;">${bi("هاتف", "Tel")}: ${esc(buyer!.phone)}</div>` : ""}
-        ${!showField(ps.invoice_show_customer_name, buyer?.name) && !showField(ps.invoice_show_customer_code, inv.customer_code) ? `<div style="color:#64748b;">${bi("—", "—")}</div>` : ""}
-      `)}
-      ${infoBox("ملخص الفاتورة", "Invoice summary", `
-        ${inv.container_number ? `<div>${bi("رقم الحاوية", "Container No.")}: <b dir="ltr">${esc(inv.container_number)}</b></div>` : ""}
-        <div>${bi("عدد البنود", "Line items")}: <b>${idx}</b></div>
-        <div>${bi("نسبة الضريبة", "VAT rate")}: <b>${vatRate}%</b></div>
-        <div>${bi("الإجمالي المستحق", "Total due")}: <b style="color:${accent};">${money(total)} ${esc(cur)}</b></div>
-      `)}
-    </div>
-
-    <!-- بنود الفاتورة -->
-    <table width="100%" style="border-collapse:collapse;font-size:12.5px;border:1px solid #e2e8f0;border-radius:10px;overflow:hidden;">
-      <thead>
-        <tr style="background:#1d4ed8;color:#fff;font-size:11.5px;">
-          <th style="padding:8px 6px;width:34px;">${bi("#", "No.")}</th>
-          <th style="padding:8px 10px;text-align:right;">${bi("بيان الخدمة", "Description")}</th>
-          <th style="padding:8px 6px;width:56px;">${bi("العدد", "Qty")}</th>
-          <th style="padding:8px 6px;width:88px;">${bi("سعر الوحدة", "Unit price")}</th>
-          <th style="padding:8px 6px;width:92px;">${bi("الإجمالي", "Taxable amount")}</th>
-          <th style="padding:8px 6px;width:56px;">${bi("النسبة", "VAT %")}</th>
-          <th style="padding:8px 6px;width:88px;">${bi("الضريبة", "VAT amount")}</th>
-          <th style="padding:8px 6px;width:100px;">${bi("شامل الضريبة", "Total incl. VAT")}</th>
-        </tr>
-      </thead>
-      <tbody>${tripRows}${billableRows}</tbody>
-    </table>
-
-    <!-- الإجماليات ورمز زاتكا -->
-    <table width="100%" style="margin-top:12px;border-collapse:collapse;">
-      <tr>
-        <td style="vertical-align:top;width:150px;text-align:center;">
-          ${ps.invoice_show_barcode && qrImg && missing.length === 0 ? `<img src="${qrImg}" alt="QR" style="width:120px;height:120px;border:1px solid #e2e8f0;border-radius:8px;padding:4px;background:#fff;"/>` : ""}
-        </td>
-        <td style="vertical-align:top;padding-inline:12px;">
-          <div style="border:1px solid #e2e8f0;border-radius:10px;padding:9px 12px;font-size:12px;background:#f8fafc;">
-            <div style="color:#64748b;font-weight:700;margin-bottom:4px;">${bi("المبلغ كتابةً", "Amount in words")}</div>
-            <div style="font-weight:700;line-height:1.85;">${esc(amountToArabicWords(total, cur))}</div>
-          </div>
-          ${inv.notes ? `<div style="margin-top:8px;border:1px solid #e2e8f0;border-radius:10px;padding:9px 12px;font-size:12px;">
-            <div style="color:#64748b;font-weight:700;margin-bottom:4px;">${bi("ملاحظات", "Notes")}</div>
-            <div style="line-height:1.85;">${esc(inv.notes)}</div></div>` : ""}
-        </td>
-        <td style="width:290px;vertical-align:top;">
-          <table width="100%" style="border-collapse:collapse;border:${borderStyle};border-radius:10px;overflow:hidden;">
-            ${totalLine("الإجمالي الخاضع للضريبة", "Total taxable amount", `${money(subtotal)} ${esc(cur)}`)}
-            ${totalLine(`ضريبة القيمة المضافة (${vatRate}%)`, "VAT", `${money(vat)} ${esc(cur)}`)}
-            <tr><td colspan="2" style="padding:0;"><div style="height:2px;background:${accent};"></div></td></tr>
-            ${totalLine("الإجمالي شامل الضريبة", "Total amount due", `${money(total)} ${esc(cur)}`, true)}
-          </table>
-        </td>
-      </tr>
-    </table>
-
-    <!-- التوقيعات -->
-    <table width="100%" style="margin-top:22px;border-collapse:collapse;font-size:12px;color:#475569;">
-      <tr>
-        <td style="text-align:center;padding-top:6px;">
-          <div style="border-top:1px dashed #94a3b8;padding-top:6px;width:190px;margin:0 auto;">${bi("توقيع المستلم", "Receiver")}</div>
-        </td>
-        <td style="text-align:center;padding-top:6px;">
-          <div style="border-top:1px dashed #94a3b8;padding-top:6px;width:190px;margin:0 auto;">${bi("عن الشركة", "For the company")}</div>
-        </td>
-      </tr>
-    </table>
-
-    ${ps.footer_text ? `<div style="margin-top:14px;border-top:1px solid #e2e8f0;padding-top:8px;font-size:11px;color:#64748b;text-align:center;line-height:1.7;">${esc(ps.footer_text)}</div>` : ""}
-  </div>`;
-
-  return { html, number: inv.number };
+/** تحذير واجهة فقط؛ لا يدخل مطلقاً في HTML المطبوع أو ملف PDF. */
+function showTaxInvoiceWarning(show: boolean): void {
+  if (!show || typeof window === "undefined") return;
+  window.alert(TAX_INVOICE_WARNING);
 }
 
 export async function printCustomerInvoice(invoiceId: number): Promise<void> {
-  const res = await customerInvoiceHtml(invoiceId);
-  if (!res) return notify("الفاتورة غير موجودة.", "error");
-  const { getPrintSettings, printCss } = await import("@/lib/print");
-  const { printHtml } = await import("@/lib/exporter");
-  const ps = await getPrintSettings();
-  printHtml(res.html, `فاتورة ${res.number}`, { css: printCss(ps), watermark: ps.watermark });
+  // يجب أن يتم window.open داخل حدث النقر نفسه؛ وإلا قد يحجبه المتصفح بعد await.
+  const preview = openPrintPreview("معاينة الفاتورة");
+  if (!preview) {
+    notify("تعذّر فتح معاينة الطباعة. اسمح بالنوافذ المنبثقة لهذا الموقع ثم حاول مجدداً.", "error");
+    return;
+  }
+  try {
+    const res = await customerInvoiceHtml(invoiceId);
+    if (!res) {
+      preview?.close();
+      return notify("الفاتورة غير موجودة.", "error");
+    }
+    showTaxInvoiceWarning(res.warnTaxInvoice);
+    const [{ printCss }, { printHtml }] = await Promise.all([
+      import("@/lib/print"),
+      import("@/lib/exporter"),
+    ]);
+    printHtml(res.html, `فاتورة ${res.number}`, { css: printCss(res.settings), watermark: res.settings.watermark }, preview);
+  } catch (error) {
+    preview?.close();
+    notify(error instanceof Error ? error.message : "تعذّر تجهيز معاينة الطباعة.", "error");
+  }
 }
 
 export async function exportCustomerInvoicePdf(invoiceId: number): Promise<void> {
   const res = await customerInvoiceHtml(invoiceId);
   if (!res) return notify("الفاتورة غير موجودة.", "error");
+  showTaxInvoiceWarning(res.warnTaxInvoice);
   const { exportPdfHtml } = await import("@/lib/exporter");
   await exportPdfHtml(res.html, `فاتورة-${res.number}.pdf`);
-}
-
-function esc(s: unknown): string {
-  return String(s ?? "").replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
 }

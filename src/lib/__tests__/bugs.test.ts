@@ -71,7 +71,7 @@ describe("ترتيب كشف حساب العميل (حركات بنفس التا�
   it("يُرتب الفاتورة قبل السند بنفس التاريخ ويراكم الرصيد بشكل صحيح", async () => {
     setup();
     await repo.saveYear({ year: 2026, date_from: "2026-01-01", date_to: "2026-12-31" });
-    const cust = await repo.saveCustomer({ name: "عميل", opening_balance: 0 });
+    const cust = await repo.saveCustomer({ name: "شركة العميل", opening_balance: 0 });
     const cb = await repo.saveAccount("cashbox", { name: "خزينة", created_date: "2026-01-01", opening_balance: 0 });
     await repo.saveInvoice({ date: "2026-03-01", customer_id: cust, attachments: [], trips: [{ from_loc: "أ", to_loc: "ب", price: 1000, expenses: [] }] });
     await repo.saveReceipt({ date: "2026-03-01", account_kind: "cashbox", account_id: cb, voucher_type: "customer", customer_id: cust, amount: 400, description: "" });
@@ -90,7 +90,7 @@ describe("فترات معكوسة / مستقبلية", () => {
   it("كشف بفترة معكوسة (من > إلى) لا يُرجع صفوفاً", async () => {
     setup();
     await repo.saveYear({ year: 2026, date_from: "2026-01-01", date_to: "2026-12-31" });
-    const cust = await repo.saveCustomer({ name: "عميل", opening_balance: 0 });
+    const cust = await repo.saveCustomer({ name: "شركة العميل", opening_balance: 0 });
     const st = await calc.customerStatement(cust, "2026-12-31", "2026-01-01");
     expect(st.rows).toHaveLength(0);
   });
