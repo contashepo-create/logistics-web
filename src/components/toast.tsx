@@ -34,7 +34,7 @@ export function ToastHost() {
   };
 
   return (
-    <div style={{ position: "fixed", bottom: 18, left: 18, zIndex: 100, display: "flex", flexDirection: "column", gap: 8 }}>
+    <div className="toast-host" style={{ position: "fixed", bottom: 18, left: 18, right: 18, zIndex: 100, display: "flex", flexDirection: "column", alignItems: "flex-start", gap: 8, pointerEvents: "none" }}>
       {toasts.map((t) => (
         <div
           key={t.id}

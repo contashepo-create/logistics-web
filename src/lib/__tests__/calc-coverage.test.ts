@@ -43,10 +43,10 @@ describe("tripProfit", () => {
     setup();
     await repo.saveYear({ year: 2026, date_from: "2026-01-01", date_to: "2026-12-31" });
     const cust = await repo.saveCustomer({ name: "عميل", opening_balance: 0 });
-    const cb = await repo.saveAccount("cashbox", { name: "خزينة", created_date: "2026-01-01", opening_balance: 0 });
+    const cb = await repo.saveAccount("cashbox", { name: "خزينة", created_date: "2026-01-01", opening_balance: 100000 });
     const inv = await repo.saveInvoice({
       date: "2026-03-01", customer_id: cust, attachments: [],
-      trips: [{ from_loc: "أ", to_loc: "ب", price: 1000, expenses: [{ expense_type: "trip", amount: 100 }] }],
+      trips: [{ from_loc: "أ", to_loc: "ب", price: 1000, expenses: [{ expense_type: "trip", source: "supplier", supplier_name: "محطة", amount: 100 }] }],
     });
     const tripId = table("invoice_trips").find((t) => t.invoice_id === inv)!.id;
     await repo.savePayment({ date: "2026-03-02", account_kind: "cashbox", account_id: cb, voucher_type: "trip", trip_id: tripId, amount: 50, description: "x" });
@@ -71,7 +71,7 @@ describe("getInvoiceFull", () => {
     const inv = await repo.saveInvoice({
       date: "2026-03-01", customer_id: cust, notes: "n", attachments: [],
       trips: [
-        { from_loc: "أ", to_loc: "ب", price: 1000, expenses: [{ expense_type: "fuel", amount: 100, notes: "x" }] },
+        { from_loc: "أ", to_loc: "ب", price: 1000, expenses: [{ expense_type: "fuel", source: "supplier", supplier_name: "محطة", amount: 100, notes: "x" }] },
         { from_loc: "ب", to_loc: "ج", price: 500, expenses: [] },
       ],
     });

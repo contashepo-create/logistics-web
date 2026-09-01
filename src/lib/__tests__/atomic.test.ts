@@ -19,7 +19,7 @@ function setup(): void {
 async function seedBasics() {
   await repo.saveYear({ year: 2026, date_from: "2026-01-01", date_to: "2026-12-31" });
   const cust = await repo.saveCustomer({ name: "عميل", opening_balance: 0 });
-  const cb = await repo.saveAccount("cashbox", { name: "خزينة", created_date: "2026-01-01", opening_balance: 0 });
+  const cb = await repo.saveAccount("cashbox", { name: "خزينة", created_date: "2026-01-01", opening_balance: 100000 });
   return { cust, cb };
 }
 
@@ -32,7 +32,7 @@ describe("الحفظ الذري للفواتير عبر save_invoice", () => {
       customer_id: cust,
       attachments: [],
       trips: [
-        { from_loc: "أ", to_loc: "ب", price: 1000, expenses: [{ expense_type: "fuel", amount: 100 }] },
+        { from_loc: "أ", to_loc: "ب", price: 1000, expenses: [{ expense_type: "fuel", source: "supplier", supplier_name: "محطة", amount: 100 }] },
         { from_loc: "ب", to_loc: "ج", price: 500, expenses: [] },
       ],
     });

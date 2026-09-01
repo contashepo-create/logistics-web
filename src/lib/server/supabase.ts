@@ -2,11 +2,19 @@
 import "server-only";
 import { createClient, type SupabaseClient } from "@supabase/supabase-js";
 
-export const ADMIN_EMAIL = "conta.moha@gmail.com";
+export const ADMIN_EMAIL = (
+  process.env.ADMIN_EMAIL || process.env.NEXT_PUBLIC_ADMIN_EMAIL || "conta.moha@gmail.com"
+).trim().toLowerCase();
 
 function baseClient(): SupabaseClient {
-  const url = process.env.NEXT_SUPABASE_URL || "";
-  const anon = process.env.NEXT_SUPABASE_ANON_KEY || "";
+  const url =
+    process.env.NEXT_PUBLIC_SUPABASE_URL ||
+    process.env.NEXT_SUPABASE_URL ||
+    "https://placeholder.supabase.co";
+  const anon =
+    process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY ||
+    process.env.NEXT_SUPABASE_ANON_KEY ||
+    "placeholder-anon-key";
   return createClient(url, anon, { auth: { persistSession: false, autoRefreshToken: false } });
 }
 
@@ -55,4 +63,21 @@ export async function requireAdmin(req: Request): Promise<AuthUser | null> {
   const u = await requireUser(req);
   if (!u) return null;
   return u.email.toLowerCase() === ADMIN_EMAIL.toLowerCase() ? u : null;
+}
+
+/** عميل بصلاحيات الخدمة (يتجاوز RLS) — للمسارات العامة المحكومة بالخادم فقط.
+ *  لا يُستخدم إلا بعد التحقق من المدخلات وتقييد المعدل. */
+export function serviceClient(): SupabaseClient {
+  const url =
+    process.env.NEXT_PUBLIC_SUPABASE_URL ||
+    process.env.NEXT_SUPABASE_URL ||
+    "https://placeholder.supabase.co";
+  const key = process.env.SUPABASE_SERVICE_ROLE_KEY || "";
+  if (!key) throw new Error("SUPABASE_SERVICE_ROLE_KEY غير مضبوط على الخادم.");
+  return createClient(url, key, { auth: { persistSession: false, autoRefreshToken: false } });
+}
+
+/** هل مفتاح الخدمة متاح؟ (لتفادي انهيار المسار عند غيابه) */
+export function hasServiceKey(): boolean {
+  return Boolean(process.env.SUPABASE_SERVICE_ROLE_KEY);
 }

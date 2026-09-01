@@ -1,7 +1,7 @@
 "use client";
 
 import { useMemo, useState } from "react";
-import { useQuery, useQueryClient } from "@tanstack/react-query";
+import { useQuery, useQueryClient, keepPreviousData } from "@tanstack/react-query";
 import { DataTable } from "@/components/DataTable";
 import { PageFrame, Spinner, ExportBar, TotalsBar, FilterRow, Select } from "@/components/ui";
 import { PaymentDialog } from "@/components/dialogs/operations";
@@ -23,6 +23,7 @@ export default function PaymentsPage() {
   const { data, isLoading } = useQuery({
     queryKey: ["payments", dFrom, dTo, type],
     queryFn: () => listPayments(dFrom, dTo, type || null),
+    placeholderData: keepPreviousData,
   });
 
   const headers = ["رقم السند", "التاريخ", "النوع", "التوجيه", "صرف من", "المبلغ", "البيان"];
@@ -32,6 +33,7 @@ export default function PaymentsPage() {
       if (v.voucher_type === "trip") target = `رحلة بفاتورة ${invoiceNumberLabel(v.inv_number ?? 0)} (${v.customer_name || "—"})`;
       else if (v.voucher_type === "advance") target = `سلفة: ${v.employee_name || "—"}`;
       else if (v.voucher_type === "vehicle") target = `سيارة: ${v.plate_number || "—"}`;
+      else if (v.voucher_type === "supplier") target = `مورّد: ${v.supplier_name || "—"}`;
       return [voucherNumberLabel("PV", v.number), v.date, PAYMENT_TYPES[v.voucher_type] ?? "—", target, v.account_name || "—", money(v.amount), v.description || "—"];
     }),
     [data]

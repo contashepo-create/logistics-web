@@ -3,6 +3,10 @@
 import { useEffect, useState } from "react";
 import { Modal, Field, Input, Select, Textarea, AmountInput, DateInput, Button } from "@/components/ui";
 import { notify } from "@/components/toast";
+import {
+  ENTITY_TYPES, TAX_STATUSES, SA_REGIONS, COUNTRIES,
+  formatNationalAddress, validateTaxProfile,
+} from "@/lib/tax";
 import { customerBalance, accountBalance } from "@/lib/calc";
 import {
   saveCustomer, deleteCustomer, getCustomer,
@@ -17,29 +21,55 @@ type Props = { id?: number | null; readOnly?: boolean; onClose: (changed?: boole
 
 /* ============================ العميل ============================ */
 export function CustomerDialog({ id, readOnly, onClose }: Props) {
-  const [f, setF] = useState({ name: "", phone: "", address: "", opening_balance: "0", notes: "" });
+  const [f, setF] = useState({
+    name: "", name_en: "", phone: "", email: "", contact_person: "",
+    address: "", opening_balance: "0", notes: "",
+    credit_limit: "0", payment_terms: "0",
+    // بيانات ضريبية
+    tax_number: "", commercial_reg: "", entity_type: "company", tax_status: "taxable",
+    // عنوان وطني
+    country: "SA", region: "", city: "", district: "", street: "",
+    building_no: "", postal_code: "", additional_no: "",
+  });
   const [balance, setBalance] = useState<number | null>(null);
   const [saving, setSaving] = useState(false);
+  const [tab, setTab] = useState<"basic" | "tax" | "address">("basic");
 
   useEffect(() => {
     (async () => {
       if (id) {
-        const c = await getCustomer(id);
-        if (c) setF({ name: c.name, phone: c.phone, address: c.address, opening_balance: String(c.opening_balance), notes: c.notes });
+        const c = (await getCustomer(id)) as Record<string, unknown> | null;
+        if (c) {
+          setF((prev) => {
+            const next = { ...prev };
+            for (const k of Object.keys(prev) as (keyof typeof prev)[]) {
+              const v = c[k as string];
+              if (v !== undefined && v !== null) next[k] = String(v);
+            }
+            return next;
+          });
+        }
         setBalance(await customerBalance(id));
       }
     })();
   }, [id]);
 
+  const set = (k: keyof typeof f, v: string) => setF((p) => ({ ...p, [k]: v }));
+
   const save = async () => {
     if (!f.name.trim()) return notify("اسم العميل مطلوب.", "error");
+    const problems = validateTaxProfile(f);
+    if (problems.length) return notify(problems[0], "error");
     setSaving(true);
     try {
-      const nid = await saveCustomer({
-        name: f.name.trim(), phone: f.phone.trim(), address: f.address.trim(),
-        opening_balance: parseFloat(f.opening_balance || "0") || 0, notes: f.notes,
+      await saveCustomer({
+        ...f,
+        name: f.name.trim(),
+        opening_balance: parseFloat(f.opening_balance || "0") || 0,
+        credit_limit: parseFloat(f.credit_limit || "0") || 0,
+        payment_terms: parseInt(f.payment_terms || "0", 10) || 0,
       }, id);
-      notify(`تم حفظ العميل ${nid ? "" : ""}بنجاح.`, "success");
+      notify("تم حفظ العميل بنجاح.", "success");
       onClose(true);
     } catch (e) {
       notify(e instanceof Error ? e.message : String(e), "error");
@@ -48,21 +78,103 @@ export function CustomerDialog({ id, readOnly, onClose }: Props) {
     }
   };
 
+  const nationalAddress = formatNationalAddress(f);
+
   return (
-    <Modal title={id ? "تعديل عميل" : "عميل جديد"} onClose={() => onClose()} width={920}>
+    <Modal title={id ? "تعديل عميل" : "عميل جديد"} onClose={() => onClose()} width={960}>
       {id && balance != null && (
         <div className="group-box" style={{ marginTop: 0 }}>
           <div className="group-title">الرصيد الحالي</div>
           <div className={`total-value ${balance < 0 ? "neg" : ""}`}>{money(balance)}</div>
         </div>
       )}
-      <Field label="الاسم" required><Input value={f.name} onChange={(e) => setF({ ...f, name: e.target.value })} readOnly={readOnly} /></Field>
-      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
-        <Field label="الهاتف"><Input value={f.phone} onChange={(e) => setF({ ...f, phone: e.target.value })} readOnly={readOnly} /></Field>
-        <Field label="الرصيد الافتتاحي"><AmountInput value={f.opening_balance} onChange={(v) => setF({ ...f, opening_balance: v })} readOnly={readOnly} /></Field>
+
+      <div className="tabs-head" style={{ marginBottom: 10 }}>
+        <button className={tab === "basic" ? "active" : ""} onClick={() => setTab("basic")}>👤 البيانات الأساسية</button>
+        <button className={tab === "tax" ? "active" : ""} onClick={() => setTab("tax")}>🧾 البيانات الضريبية</button>
+        <button className={tab === "address" ? "active" : ""} onClick={() => setTab("address")}>📍 العنوان الوطني</button>
       </div>
-      <Field label="العنوان"><Input value={f.address} onChange={(e) => setF({ ...f, address: e.target.value })} readOnly={readOnly} /></Field>
-      <Field label="ملاحظات"><Textarea value={f.notes} onChange={(e) => setF({ ...f, notes: e.target.value })} readOnly={readOnly} /></Field>
+
+      {tab === "basic" && (
+        <>
+          <div className="form-grid-2">
+            <Field label="الاسم" required><Input value={f.name} onChange={(e) => set("name", e.target.value)} readOnly={readOnly} /></Field>
+            <Field label="الاسم بالإنجليزية"><Input dir="ltr" value={f.name_en} onChange={(e) => set("name_en", e.target.value)} readOnly={readOnly} /></Field>
+          </div>
+          <div className="form-grid-3">
+            <Field label="الهاتف"><Input dir="ltr" value={f.phone} onChange={(e) => set("phone", e.target.value)} readOnly={readOnly} /></Field>
+            <Field label="البريد الإلكتروني"><Input dir="ltr" value={f.email} onChange={(e) => set("email", e.target.value)} readOnly={readOnly} /></Field>
+            <Field label="مسؤول التواصل"><Input value={f.contact_person} onChange={(e) => set("contact_person", e.target.value)} readOnly={readOnly} /></Field>
+          </div>
+          <div className="form-grid-3">
+            <Field label="الرصيد الافتتاحي"><AmountInput value={f.opening_balance} onChange={(v) => set("opening_balance", v)} readOnly={readOnly} /></Field>
+            <Field label="حد الائتمان"><AmountInput value={f.credit_limit} onChange={(v) => set("credit_limit", v)} readOnly={readOnly} /></Field>
+            <Field label="مهلة السداد (يوم)"><Input type="number" min={0} dir="ltr" value={f.payment_terms} onChange={(e) => set("payment_terms", e.target.value)} readOnly={readOnly} /></Field>
+          </div>
+          <Field label="العنوان المختصر"><Input value={f.address} onChange={(e) => set("address", e.target.value)} readOnly={readOnly} /></Field>
+          <Field label="ملاحظات"><Textarea value={f.notes} onChange={(e) => set("notes", e.target.value)} readOnly={readOnly} /></Field>
+        </>
+      )}
+
+      {tab === "tax" && (
+        <>
+          <div className="form-grid-2">
+            <Field label="الرقم الضريبي (15 رقماً)">
+              <Input dir="ltr" inputMode="numeric" maxLength={15} placeholder="3XXXXXXXXXXXXX3"
+                value={f.tax_number} onChange={(e) => set("tax_number", e.target.value)} readOnly={readOnly} />
+              <span className="field-hint">مطلوب لإصدار فاتورة ضريبية لعميل خاضع للضريبة.</span>
+            </Field>
+            <Field label="رقم السجل التجاري (10 أرقام)">
+              <Input dir="ltr" inputMode="numeric" maxLength={10}
+                value={f.commercial_reg} onChange={(e) => set("commercial_reg", e.target.value)} readOnly={readOnly} />
+            </Field>
+          </div>
+          <div className="form-grid-2">
+            <Field label="نوع الجهة">
+              <Select value={f.entity_type} onChange={(e) => set("entity_type", e.target.value)} disabled={readOnly}>
+                {ENTITY_TYPES.map((t) => <option key={t.value} value={t.value}>{t.label}</option>)}
+              </Select>
+            </Field>
+            <Field label="الحالة الضريبية">
+              <Select value={f.tax_status} onChange={(e) => set("tax_status", e.target.value)} disabled={readOnly}>
+                {TAX_STATUSES.map((t) => <option key={t.value} value={t.value}>{t.label}</option>)}
+              </Select>
+            </Field>
+          </div>
+        </>
+      )}
+
+      {tab === "address" && (
+        <>
+          <div className="form-grid-3">
+            <Field label="الدولة">
+              <Select value={f.country} onChange={(e) => set("country", e.target.value)} disabled={readOnly}>
+                {COUNTRIES.map((c) => <option key={c.code} value={c.code}>{c.label}</option>)}
+              </Select>
+            </Field>
+            <Field label="المنطقة">
+              <Input list="sa-regions" value={f.region} onChange={(e) => set("region", e.target.value)} readOnly={readOnly} />
+              <datalist id="sa-regions">{SA_REGIONS.map((r) => <option key={r} value={r} />)}</datalist>
+            </Field>
+            <Field label="المدينة"><Input value={f.city} onChange={(e) => set("city", e.target.value)} readOnly={readOnly} /></Field>
+          </div>
+          <div className="form-grid-2">
+            <Field label="الحي"><Input value={f.district} onChange={(e) => set("district", e.target.value)} readOnly={readOnly} /></Field>
+            <Field label="الشارع"><Input value={f.street} onChange={(e) => set("street", e.target.value)} readOnly={readOnly} /></Field>
+          </div>
+          <div className="form-grid-3">
+            <Field label="رقم المبنى (4 أرقام)"><Input dir="ltr" inputMode="numeric" maxLength={4} value={f.building_no} onChange={(e) => set("building_no", e.target.value)} readOnly={readOnly} /></Field>
+            <Field label="الرمز البريدي (5 أرقام)"><Input dir="ltr" inputMode="numeric" maxLength={5} value={f.postal_code} onChange={(e) => set("postal_code", e.target.value)} readOnly={readOnly} /></Field>
+            <Field label="الرقم الإضافي (4 أرقام)"><Input dir="ltr" inputMode="numeric" maxLength={4} value={f.additional_no} onChange={(e) => set("additional_no", e.target.value)} readOnly={readOnly} /></Field>
+          </div>
+          {nationalAddress && (
+            <div className="field-hint" style={{ marginTop: 6 }}>
+              العنوان المُجمّع: <b>{nationalAddress}</b>
+            </div>
+          )}
+        </>
+      )}
+
       {!readOnly && <div style={{ marginTop: 14 }}><Button variant="primary" onClick={save} disabled={saving}>💾 حفظ</Button></div>}
     </Modal>
   );
@@ -70,18 +182,21 @@ export function CustomerDialog({ id, readOnly, onClose }: Props) {
 
 /* ============================ الموظف ============================ */
 export function EmployeeDialog({ id, readOnly, onClose }: Props) {
-  const [f, setF] = useState({ name: "", nationality: "", phone: "", emp_type: "driver", notes: "" });
+  const [f, setF] = useState({ name: "", nationality: "", phone: "", emp_type: "driver", base_salary: "", notes: "" });
   const [saving, setSaving] = useState(false);
 
   useEffect(() => {
-    if (id) getEmployee(id).then((e) => e && setF({ name: e.name, nationality: e.nationality, phone: e.phone, emp_type: e.emp_type, notes: e.notes }));
+    if (id) getEmployee(id).then((e) => e && setF({
+      name: e.name, nationality: e.nationality, phone: e.phone, emp_type: e.emp_type,
+      base_salary: e.base_salary ? String(e.base_salary) : "", notes: e.notes,
+    }));
   }, [id]);
 
   const save = async () => {
     if (!f.name.trim()) return notify("اسم الموظف مطلوب.", "error");
     setSaving(true);
     try {
-      await saveEmployee({ ...f, name: f.name.trim() }, id);
+      await saveEmployee({ ...f, name: f.name.trim(), base_salary: parseFloat(f.base_salary || "0") || 0 }, id);
       notify("تم حفظ الموظف بنجاح.", "success");
       onClose(true);
     } catch (e) {
@@ -98,12 +213,17 @@ export function EmployeeDialog({ id, readOnly, onClose }: Props) {
         <Field label="الجنسية"><Input value={f.nationality} onChange={(e) => setF({ ...f, nationality: e.target.value })} readOnly={readOnly} /></Field>
         <Field label="الهاتف"><Input value={f.phone} onChange={(e) => setF({ ...f, phone: e.target.value })} readOnly={readOnly} /></Field>
       </div>
-      <Field label="النوع">
-        <Select value={f.emp_type} onChange={(e) => setF({ ...f, emp_type: e.target.value })} disabled={readOnly}>
-          <option value="driver">سائق</option>
-          <option value="admin">إداري</option>
-        </Select>
-      </Field>
+      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
+        <Field label="النوع">
+          <Select value={f.emp_type} onChange={(e) => setF({ ...f, emp_type: e.target.value })} disabled={readOnly}>
+            <option value="driver">سائق</option>
+            <option value="admin">إداري</option>
+          </Select>
+        </Field>
+        <Field label="الراتب الشهري الأساسي" hint="يظهر تلقائياً عند إصدار مسير الراتب ويمكن تعديله">
+          <AmountInput value={f.base_salary} onChange={(v) => setF({ ...f, base_salary: v })} />
+        </Field>
+      </div>
       <Field label="ملاحظات"><Textarea value={f.notes} onChange={(e) => setF({ ...f, notes: e.target.value })} readOnly={readOnly} /></Field>
       {!readOnly && <div style={{ marginTop: 14 }}><Button variant="primary" onClick={save} disabled={saving}>💾 حفظ</Button></div>}
     </Modal>

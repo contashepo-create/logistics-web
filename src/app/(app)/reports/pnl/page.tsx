@@ -1,7 +1,7 @@
 "use client";
 
 import { useState } from "react";
-import { useQuery, useQueryClient } from "@tanstack/react-query";
+import { useQuery, useQueryClient, keepPreviousData } from "@tanstack/react-query";
 import { PageFrame, Spinner, ExportBar, TotalsBar, FilterRow } from "@/components/ui";
 import { pnlReport } from "@/lib/calc";
 import { money, todayIso } from "@/lib/format";
@@ -17,6 +17,7 @@ export default function PnlReportPage() {
   const { data, isLoading } = useQuery({
     queryKey: ["report-pnl", dFrom, dTo],
     queryFn: () => pnlReport(dFrom, dTo),
+    placeholderData: keepPreviousData,
   });
 
   const d = data ?? {};
@@ -25,6 +26,7 @@ export default function PnlReportPage() {
     ["الإيرادات الأخرى (خردة / متنوع)", d.other_revenue ?? 0],
     ["إجمالي الإيرادات", d.total_revenue ?? 0],
     ["مصروفات النقلات المباشرة (تريب/بنزين/كارتة)", d.direct_expenses ?? 0],
+    ["سندات صرف على النقلات (يدوية)", d.trip_payments ?? 0],
     ["الرواتب الصافية المنصرفة", d.salaries ?? 0],
     ["إجمالي السلفيات المسجلة", d.advances ?? 0],
     ["مصاريف الصيانة (سندات السيارات)", d.maintenance ?? 0],

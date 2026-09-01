@@ -1,7 +1,7 @@
 "use client";
 
 import React, { useEffect, useRef, useState } from "react";
-import { money, normalizeDigits, parseFloatSafe } from "@/lib/format";
+import { money, normalizeDigits, parseFloatSafe, balanceSide, balanceSideLabel } from "@/lib/format";
 
 // ---------------------------------------------------------------------------
 export function Button({
@@ -23,13 +23,16 @@ export function Button({
 }
 
 // ---------------------------------------------------------------------------
-export function Field({ label, required, children }: { label: string; required?: boolean; children: React.ReactNode }) {
+export function Field({ label, required, hint, children }: {
+  label: string; required?: boolean; hint?: string; children: React.ReactNode;
+}) {
   return (
-    <div className="min-w-0">
+    <div className="field min-w-0">
       <label className="field-label">
         {label} {required && <span className="req">*</span>}
       </label>
       {children}
+      {hint && <div className="field-hint">{hint}</div>}
     </div>
   );
 }
@@ -187,7 +190,7 @@ export function ExportBar({
   onPrint?: () => void;
 }) {
   return (
-    <div style={{ display: "flex", gap: 6 }}>
+    <div className="export-bar">
       <Button onClick={onExcel} title="تصدير إلى ملف Excel">📊 Excel</Button>
       <Button onClick={onPdf} title="تصدير إلى ملف PDF">📄 PDF</Button>
       <Button onClick={onPrint} title="طباعة بتنسيق احترافي">🖨️ طباعة</Button>
@@ -219,19 +222,18 @@ export function PageFrame({
 }) {
   return (
     <div className="page-card">
-      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: 12, flexWrap: "wrap" }}>
-        <div>
+      <div className="page-head">
+        <div style={{ minWidth: 0 }}>
           <div className="page-title">{title}</div>
           {subtitle && <div className="page-sub">{subtitle}</div>}
         </div>
-        <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
+        <div className="page-tools">
           {onAdd && (
             <Button variant="primary" onClick={onAdd}>{addText ?? "➕ إضافة"}</Button>
           )}
           {onSearch && (
             <input
-              className="input"
-              style={{ maxWidth: 240 }}
+              className="input page-search"
               placeholder="🔍 بحث سريع..."
               value={search}
               onChange={(e) => onSearch(e.target.value)}
@@ -343,5 +345,18 @@ export function AccountSelect({
         <option key={`${o.kind}:${o.id}`} value={`${o.kind}:${o.id}`}>{o.label}</option>
       ))}
     </Select>
+  );
+}
+
+/** رصيد عميل ملوّن مع بيان الجانب: أخضر = عليه، أحمر = له */
+export function Balance({ value, pill = false }: { value: number; pill?: boolean }) {
+  const side = balanceSide(value);
+  const cls = side === "debit" ? "bal-debit" : side === "credit" ? "bal-credit" : "bal-zero";
+  const v = Math.abs(Math.round((Number(value) || 0) * 100) / 100);
+  return (
+    <span className={`${pill ? "bal-pill" : "bal"} ${cls}`} title={side === "debit" ? "مستحق على العميل للشركة" : side === "credit" ? "مستحق للعميل على الشركة" : "لا توجد مديونية"}>
+      {money(v)}
+      <span className="bal-side">({balanceSideLabel(value)})</span>
+    </span>
   );
 }

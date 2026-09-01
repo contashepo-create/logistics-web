@@ -1,3 +1,5 @@
+import { ThemeToggle } from "@/components/ThemeToggle";
+
 export default function AuthLayout({ children }: { children: React.ReactNode }) {
   return (
     <div
@@ -10,7 +12,12 @@ export default function AuthLayout({ children }: { children: React.ReactNode }) 
         padding: 16,
       }}
     >
-      <div style={{ width: "100%", maxWidth: 440 }}>{children}</div>
+      <div style={{ width: "100%", maxWidth: 440 }}>
+        <div style={{ display: "flex", justifyContent: "flex-end", marginBottom: 10 }}>
+          <ThemeToggle compact />
+        </div>
+        {children}
+      </div>
     </div>
   );
 }

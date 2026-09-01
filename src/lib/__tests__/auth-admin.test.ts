@@ -100,16 +100,27 @@ describe("auth.ts — الجلسة والمصادقة", () => {
 
   it("signUp بلا جلسة يطلب التحقق", async () => {
     supabaseMock.auth.signUp = vi.fn(async () => ({ data: { session: null }, error: null }));
-    const r = await authLib.signUp({ email: "a@b.c", password: "p", name: "n", companyName: "c" });
+    const r = await authLib.signUp({ email: "user@gmail.com", password: "Pass1234", name: "n", companyName: "c" });
     expect(r).toEqual({ ok: true, session: null, needsVerification: true });
   });
 
   it("signUp بجلسة ينشئ الشركة فوراً", async () => {
     supabaseMock.auth.signUp = vi.fn(async () => ({ data: { session: { user: {} } }, error: null }));
     supabaseMock.rpc.mockResolvedValue({ data: "c1", error: null });
-    const r = await authLib.signUp({ email: "a@b.c", password: "p", name: "n", companyName: "c", phone: "1" });
+    const r = await authLib.signUp({ email: "user@gmail.com", password: "Pass1234", name: "n", companyName: "c", phone: "1" });
     expect(r).toEqual({ ok: true, session: { user: {} } });
     expect(supabaseMock.rpc).toHaveBeenCalledWith("register_company", expect.objectContaining({ p_company_name: "c" }));
+  });
+
+  it("signUp يرفض البريد الوهمي/غير المسموح", async () => {
+    supabaseMock.auth.signUp = vi.fn();
+    const r1 = await authLib.signUp({ email: "x@mailinator.com", password: "Pass1234", name: "n", companyName: "c" });
+    expect(r1.ok).toBe(false);
+    const r2 = await authLib.signUp({ email: "x@my-company.io", password: "Pass1234", name: "n", companyName: "c" });
+    expect(r2.ok).toBe(false);
+    const r3 = await authLib.signUp({ email: "x@gmail.com", password: "12345678", name: "n", companyName: "c" });
+    expect(r3.ok).toBe(false);
+    expect(supabaseMock.auth.signUp).not.toHaveBeenCalled();
   });
 
   it("registerCurrentCompany يعيد معرّف الشركة", async () => {
@@ -230,21 +241,10 @@ describe("admin.ts", () => {
     expect(st.salaries).toBe(200);
   });
 
-  it("companySummary يفلتر بمعرّف الشركة", async () => {
-    supabaseMock.from.mockImplementation(makeFrom((s) => {
-      const companyFiltered = s.filters.some(([c]) => c === "company_id");
-      const base: Record<string, number> = { customers: 5, invoices: 3, invoice_trips: 12, receipt_vouchers: 2, payment_vouchers: 4, payrolls: 1 };
-      if (s.opts?.head && s.opts?.count === "exact") {
-        // أي عدد يخص الشركة فقط عندما يوجد فلتر company_id
-        return { count: companyFiltered ? (base[s.table] ?? 0) : 0 };
-      }
-      if (s.table === "invoice_trips" && s.cols === "price") return { data: companyFiltered ? [{ price: 900 }] : [], error: null };
-      return { data: [], error: null };
-    }));
-    const s = await adminLib.companySummary("c1");
-    expect(s.customers).toBe(5);
-    expect(s.invoices).toBe(3);
-    expect(s.trips).toBe(12);
-    expect(s.revenue).toBe(900);
+  it("لوحة المطوّر لا تعرض أي دالة تقرأ بيانات العملاء التشغيلية", async () => {
+    const exported = Object.keys(adminLib);
+    for (const forbidden of ["companySummary", "listCompanyInvoices", "companyRevenue"]) {
+      expect(exported).not.toContain(forbidden);
+    }
   });
 });

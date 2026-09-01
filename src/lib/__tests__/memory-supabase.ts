@@ -47,7 +47,7 @@ const EMBED_FK: Record<string, Record<string, string>> = {
 function resolveEmbeds(parentTable: string, row: Row, selectCols: string[]): Row {
   const out = { ...row };
   for (const col of selectCols) {
-    const m = col.match(/^([a-z_]+)\(([^)]*)\)$/);
+    const m = col.match(/^([a-z_]+)\s*\(([^)]*)\)$/);
     if (!m) continue;
     const rel = m[1];
     const fk = EMBED_FK[parentTable]?.[rel];
@@ -70,7 +70,7 @@ function resolveEmbeds(parentTable: string, row: Row, selectCols: string[]): Row
 // محرك الاستعلام
 // ---------------------------------------------------------------------------
 interface Filter {
-  op: "eq" | "neq" | "lt" | "lte" | "gt" | "gte" | "in";
+  op: "eq" | "neq" | "lt" | "lte" | "gt" | "gte" | "in" | "is";
   col: string;
   val: any;
 }
@@ -78,6 +78,8 @@ interface Filter {
 function matches(row: Row, f: Filter): boolean {
   const v = row[f.col];
   switch (f.op) {
+    case "is":
+      return (row[f.col] ?? null) === (f.val ?? null);
     case "eq":
       return v === f.val;
     case "neq":
@@ -114,7 +116,17 @@ class MemQuery {
 
   select(cols: string | Record<string, unknown> = "*", opts?: { count?: string; head?: boolean }): MemQuery {
     if (typeof cols === "string") {
-      this.selectCols = cols.split(",").map((s) => s.trim()).filter(Boolean);
+      // تقسيم يحترم الأقواس: "a, b, rel(x, y)" ⇒ ["a","b","rel(x, y)"]
+      const parts: string[] = [];
+      let depth = 0, cur = "";
+      for (const ch of cols) {
+        if (ch === "(") depth++;
+        if (ch === ")") depth--;
+        if (ch === "," && depth === 0) { parts.push(cur); cur = ""; continue; }
+        cur += ch;
+      }
+      parts.push(cur);
+      this.selectCols = parts.map((s) => s.trim()).filter(Boolean);
     } else {
       this.selectCols = ["*"];
     }
@@ -130,6 +142,7 @@ class MemQuery {
   gt(col: string, val: any): MemQuery { this.filters.push({ op: "gt", col, val }); return this; }
   gte(col: string, val: any): MemQuery { this.filters.push({ op: "gte", col, val }); return this; }
   in(col: string, val: any[]): MemQuery { this.filters.push({ op: "in", col, val }); return this; }
+  is(col: string, val: any): MemQuery { this.filters.push({ op: "is", col, val }); return this; }
 
   order(col: string, opts?: { ascending?: boolean }): MemQuery {
     this.orders.push({ col, asc: opts?.ascending !== false });
@@ -161,6 +174,14 @@ class MemQuery {
   private rows(): Row[] {
     const all = table(this.tname);
     let rows = all.filter((r) => this.filters.every((f) => matches(r, f)));
+    // محاكاة RLS: لا تُقرأ صفوف شركة أخرى إطلاقاً (إلا للمطوّر)
+    if (TENANT_TABLES.has(this.tname)) {
+      const cid = currentUser
+        ? table("profiles").find((p) => p.id === currentUser!.id)?.company_id ?? null
+        : null;
+      const isAdminUser = (currentUser?.email ?? "").toLowerCase() === "conta.moha@gmail.com";
+      if (!isAdminUser) rows = rows.filter((r) => r.company_id == null || r.company_id === cid);
+    }
     if (this.orders.length) {
       rows = [...rows].sort((a, b) => {
         for (const o of this.orders) {
@@ -178,8 +199,8 @@ class MemQuery {
 
   private project(row: Row): Row {
     const cols = this.selectCols;
-    const embedCols = cols.filter((c) => /^[a-z_]+\([^)]*\)$/.test(c));
-    const explicit = cols.filter((c) => c !== "*" && !/^[a-z_]+\([^)]*\)$/.test(c));
+    const embedCols = cols.filter((c) => /^[a-z_]+\s*\([^)]*\)$/.test(c));
+    const explicit = cols.filter((c) => c !== "*" && !/^[a-z_]+\s*\([^)]*\)$/.test(c));
     const hasStar = cols.includes("*");
     const out: Row = {};
     if (hasStar || explicit.length === 0) Object.assign(out, row);
@@ -212,6 +233,17 @@ class MemQuery {
       if (cid != null) row.company_id = cid;
     }
     return row;
+  }
+
+  /** محاكاة RLS على الكتابة: لا تعديل/حذف لصفوف شركة أخرى. */
+  private tenantScoped(list: Row[]): Row[] {
+    if (!TENANT_TABLES.has(this.tname)) return list;
+    const isAdminUser = (currentUser?.email ?? "").toLowerCase() === "conta.moha@gmail.com";
+    if (isAdminUser) return list;
+    const cid = currentUser
+      ? table("profiles").find((p) => p.id === currentUser!.id)?.company_id ?? null
+      : null;
+    return list.filter((r) => r.company_id == null || r.company_id === cid);
   }
 
   private execWrite(): any {
@@ -247,20 +279,66 @@ class MemQuery {
       return { error: null };
     }
     if (op === "update") {
-      const target = rows.filter((r) => this.filters.every((f) => matches(r, f)));
+      const target = this.tenantScoped(rows.filter((r) => this.filters.every((f) => matches(r, f))));
       for (const r of target) Object.assign(r, this.pendingWrite!.payload);
       return { error: null };
     }
     if (op === "delete") {
-      const target = rows.filter((r) => this.filters.every((f) => matches(r, f)));
-      for (const r of target) rows.splice(rows.indexOf(r), 1);
+      const target = this.tenantScoped(rows.filter((r) => this.filters.every((f) => matches(r, f))));
+      for (const r of target) {
+        rows.splice(rows.indexOf(r), 1);
+        applyCascade(this.tname, r);
+      }
       return { error: null };
     }
     return { error: { message: "unknown op" } };
   }
 }
 
+
+// ---------------------------------------------------------------------------
+// محاكاة قيود المفاتيح الأجنبية عند الحذف (مطابقة لـ supabase/schema.sql)
+// ---------------------------------------------------------------------------
+const CASCADE_RULES: Record<string, { table: string; column: string; action: "cascade" | "set null" }[]> = {
+  invoices: [{ table: "invoice_trips", column: "invoice_id", action: "cascade" }],
+  invoice_trips: [
+    { table: "trip_expenses", column: "trip_id", action: "cascade" },
+    { table: "payment_vouchers", column: "trip_id", action: "set null" },
+  ],
+  trip_expenses: [{ table: "payment_vouchers", column: "source_expense_id", action: "cascade" }],
+  payment_vouchers: [{ table: "advance_settlements", column: "payment_voucher_id", action: "cascade" }],
+  payrolls: [{ table: "advance_settlements", column: "payroll_id", action: "cascade" }],
+  financial_years: [{ table: "year_snapshots", column: "year_id", action: "cascade" }],
+};
+
+function applyCascade(parentTable: string, deleted: Record<string, any>): void {
+  for (const rule of CASCADE_RULES[parentTable] ?? []) {
+    const child = table(rule.table);
+    if (rule.action === "set null") {
+      for (const row of child) if (row[rule.column] === deleted.id) row[rule.column] = null;
+      continue;
+    }
+    const doomed = child.filter((row) => row[rule.column] === deleted.id);
+    for (const row of doomed) {
+      child.splice(child.indexOf(row), 1);
+      applyCascade(rule.table, row);
+    }
+  }
+}
+
+// عدّاد الاستعلامات — يُستخدم في اختبارات الأداء لمنع عودة نمط N+1
+let queryCount = 0;
+
+export function resetQueryCount(): void {
+  queryCount = 0;
+}
+
+export function getQueryCount(): number {
+  return queryCount;
+}
+
 function from(name: string): MemQuery {
+  queryCount += 1;
   return new MemQuery(name);
 }
 
@@ -326,32 +404,82 @@ function rpcSaveInvoice(args: any): { data: any; error: any } {
 
   const kept = new Set(trips.filter((t: any) => t.id != null).map((t: any) => Number(t.id)));
   for (const t of table("invoice_trips").filter((t) => t.invoice_id === invoiceId && !kept.has(t.id))) {
-    if (table("payment_vouchers").some((v) => v.voucher_type === "trip" && v.trip_id === t.id)) {
-      return err("لا يمكن حذف نقلة مرتبطة بسندات دفع (مصروف يخص الرحلة).");
+    if (table("payment_vouchers").some((v) => v.voucher_type === "trip" && v.trip_id === t.id && v.source_expense_id == null)) {
+      return err("لا يمكن حذف نقلة مرتبطة بسندات دفع يدوية. احذف السندات المرتبطة أولاً.");
     }
   }
   for (const t of table("invoice_trips").filter((t) => t.invoice_id === invoiceId && !kept.has(t.id))) {
+    for (const v of table("payment_vouchers").filter((v) => v.trip_id === t.id && v.source_expense_id != null)) {
+      table("payment_vouchers").splice(table("payment_vouchers").indexOf(v), 1);
+    }
     table("invoice_trips").splice(table("invoice_trips").indexOf(t), 1);
   }
 
+  const round2 = (x: number) => Math.round(x * 100) / 100;
+
   for (const t of trips) {
-    if (!(t.price > 0)) return err("سعر النقلة يجب أن يكون أكبر من صفر.");
+    const qty = Math.max(1, Math.trunc(Number(t.qty ?? 1) || 1));
+    const unit = Number(t.unit_price ?? 0) > 0 ? Number(t.unit_price) : Number(t.price ?? 0) / qty;
+    const line = round2(qty * unit);
+    if (!(line > 0)) return err("سعر النقلة يجب أن يكون أكبر من صفر.");
     let tripId: number;
+    const base = {
+      vehicle_id: t.vehicle_id ?? null, driver_id: t.driver_id ?? null,
+      from_loc: t.from_loc ?? "", to_loc: t.to_loc ?? "",
+      qty, unit_price: unit, price: line, notes: t.notes ?? "",
+    };
     if (t.id != null) {
       tripId = Number(t.id);
       const tr = table("invoice_trips").find((x) => x.id === tripId && x.invoice_id === invoiceId);
       if (!tr) return err("النقلة غير موجودة ضمن هذه الفاتورة.");
-      Object.assign(tr, { vehicle_id: t.vehicle_id ?? null, driver_id: t.driver_id ?? null, from_loc: t.from_loc ?? "", to_loc: t.to_loc ?? "", price: t.price, notes: t.notes ?? "" });
+      Object.assign(tr, base);
       for (const e of table("trip_expenses").filter((e) => e.trip_id === tripId)) {
+        // السندات التلقائية تتبع مصروفها (حذف تتابعي)
+        for (const v of table("payment_vouchers").filter((v) => v.source_expense_id === e.id)) {
+          table("payment_vouchers").splice(table("payment_vouchers").indexOf(v), 1);
+        }
         table("trip_expenses").splice(table("trip_expenses").indexOf(e), 1);
       }
     } else {
       tripId = nextId("invoice_trips");
-      table("invoice_trips").push({ id: tripId, company_id: cid, invoice_id: invoiceId, vehicle_id: t.vehicle_id ?? null, driver_id: t.driver_id ?? null, from_loc: t.from_loc ?? "", to_loc: t.to_loc ?? "", price: t.price, notes: t.notes ?? "" });
+      table("invoice_trips").push({ id: tripId, company_id: cid, invoice_id: invoiceId, ...base });
     }
+
     for (const e of t.expenses ?? []) {
-      if (!(e.amount > 0)) return err("مبلغ مصروف النقلة يجب أن يكون أكبر من صفر.");
-      table("trip_expenses").push({ id: nextId("trip_expenses"), company_id: cid, trip_id: tripId, expense_type: e.expense_type ?? "other", amount: e.amount, notes: e.notes ?? "" });
+      const eqty = Number(e.qty ?? 1) || 1;
+      const eunit = Number(e.unit_amount ?? 0) > 0 ? Number(e.unit_amount) : Number(e.amount ?? 0) / eqty;
+      const amount = round2(eqty * eunit);
+      if (!(amount > 0)) return err("مبلغ مصروف النقلة يجب أن يكون أكبر من صفر.");
+      const source = e.source ?? "cash";
+      if (!["cash", "driver", "supplier", "customer"].includes(source)) return err("مصدر تمويل المصروف غير صالح.");
+      if (source === "cash") {
+        if (!e.account_kind || !e.account_id) return err("اختر الخزينة أو البنك الذي صُرف منه المصروف النقدي.");
+        const tbl = e.account_kind === "cashbox" ? "cashboxes" : "banks";
+        if (!table(tbl).some((a) => a.id === Number(e.account_id) && a.company_id === cid)) {
+          return err(e.account_kind === "cashbox" ? "الخزينة المحددة غير موجودة." : "البنك المحدد غير موجود.");
+        }
+      }
+      if (source === "driver" && !base.driver_id) return err("حدّد السائق في النقلة قبل تسجيل مصروف من عهدته.");
+
+      const expId = nextId("trip_expenses");
+      table("trip_expenses").push({
+        id: expId, company_id: cid, trip_id: tripId, expense_type: e.expense_type ?? "other",
+        qty: eqty, unit_amount: eunit, amount, source,
+        account_kind: source === "cash" ? e.account_kind : null,
+        account_id: source === "cash" ? Number(e.account_id) : null,
+        supplier_name: e.supplier_name ?? "", notes: e.notes ?? "",
+      });
+
+      if (source === "cash") {
+        const pnum = table("payment_vouchers").filter((r) => r.company_id === cid).reduce((m, r) => Math.max(m, r.number ?? 0), 0) + 1;
+        table("payment_vouchers").push({
+          id: nextId("payment_vouchers"), company_id: cid, number: pnum, date: args.p_date,
+          account_kind: e.account_kind, account_id: Number(e.account_id), voucher_type: "trip",
+          trip_id: tripId, employee_id: base.driver_id, vehicle_id: base.vehicle_id,
+          amount, description: `مصروف نقلة (تلقائي): ${e.notes ?? e.expense_type ?? ""}`,
+          source_expense_id: expId,
+        });
+      }
     }
   }
   return { data: invoiceId, error: null };

@@ -20,7 +20,7 @@ export function DataTable({
   loading = false,
 }: {
   headers: string[];
-  rows: (string | number)[][];
+  rows: React.ReactNode[][];
   ids: (number | string)[];
   actions?: string[];
   extra?: RowAction[];
@@ -57,7 +57,7 @@ export function DataTable({
               ))}
               {showActions && (
                 <td>
-                  <div style={{ display: "flex", gap: 3, justifyContent: "center" }}>
+                  <div className="row-actions">
                     {allActionLabels.map((a) => (
                       <Button
                         key={a.key}

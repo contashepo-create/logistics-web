@@ -22,7 +22,22 @@ describe("companyHeaderHtml", () => {
     expect(html).toContain("055 | الرياض");
   });
   it("يتجاهل بيانات اتصال فارغة", () => {
-    expect(companyHeaderHtml({ company_name: "شركة" })).toBe("<b style=\"font-size:16pt\">شركة</b>");
+    const html = companyHeaderHtml({ company_name: "شركة" });
+    expect(html).toBe('<div class="doc-company">شركة</div>');
+    expect(html).not.toContain("doc-contact");
+  });
+  it("يحترم خيارات إخفاء الهاتف والعنوان", () => {
+    const html = companyHeaderHtml(
+      { company_name: "شركة", company_phone: "055", company_address: "الرياض" },
+      { showPhone: false, showAddress: false }
+    );
+    expect(html).not.toContain("055");
+    expect(html).not.toContain("الرياض");
+  });
+  it("يضيف الشعار والنص الإضافي عند تفعيلهما", () => {
+    const html = companyHeaderHtml({ company_name: "شركة" }, { showLogo: true, logoUrl: "https://x/logo.png", headerNote: "فرع جدة" });
+    expect(html).toContain("logo.png");
+    expect(html).toContain("فرع جدة");
   });
 });
 
@@ -60,6 +75,15 @@ describe("buildReportHtml", () => {
   it("يستخدم الحاشية الافتراضية من info عند غياب footerNote", () => {
     const html = buildReportHtml({ info, title: "ت", headers: ["a"], rows: [] });
     expect(html).toContain("فاتورة مرجعية");
+  });
+  it("يحترم خيارات المستند: إخفاء الترويسة وإظهار التوقيع", () => {
+    const html = buildReportHtml({
+      info, title: "ت", headers: ["a"], rows: [["v"]],
+      doc: { showHeader: false, showSignature: true, signatureLabel: "المدير المالي", showCount: false },
+    });
+    expect(html).not.toContain("doc-head");
+    expect(html).toContain("المدير المالي");
+    expect(html).not.toContain("عدد السجلات");
   });
   it("يتجاهل الجدول والملخص عند غيابهما", () => {
     const html = buildReportHtml({ info, title: "ت" });

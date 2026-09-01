@@ -11,6 +11,9 @@ const mocks = vi.hoisted(() => ({
   createTwoFactorToken: vi.fn(),
   verifyTwoFactorToken: vi.fn(),
   generateOtp: vi.fn(),
+  sameOrigin: vi.fn(() => true),
+  hasSessionSecret: vi.fn(() => true),
+  COOKIE_OPTIONS: { httpOnly: true, secure: false, sameSite: "strict" as const, path: "/", maxAge: 43200 },
   // telegram
   sendTelegramCode: vi.fn(),
   notifyAdmin: vi.fn(),
@@ -29,6 +32,9 @@ vi.mock("@/lib/server/admin-session", () => ({
   createTwoFactorToken: mocks.createTwoFactorToken,
   verifyTwoFactorToken: mocks.verifyTwoFactorToken,
   generateOtp: mocks.generateOtp,
+  sameOrigin: mocks.sameOrigin,
+  hasSessionSecret: mocks.hasSessionSecret,
+  COOKIE_OPTIONS: mocks.COOKIE_OPTIONS,
 }));
 vi.mock("@/lib/server/telegram", () => ({
   sendTelegramCode: mocks.sendTelegramCode,
@@ -37,10 +43,10 @@ vi.mock("@/lib/server/telegram", () => ({
   escapeTelegramHtml: mocks.escapeTelegramHtml,
 }));
 
-import { POST as verifyPost } from "@/app/api/admin/2fa/verify/route";
-import { POST as sendPost } from "@/app/api/admin/2fa/send/route";
-import { GET as statusGet } from "@/app/api/admin/2fa/status/route";
-import { POST as notifyPost } from "@/app/api/notify-admin/route";
+import { POST as verifyPost } from "@/app/api/zerocold/2fa/verify/route";
+import { POST as sendPost } from "@/app/api/zerocold/2fa/send/route";
+import { GET as statusGet } from "@/app/api/zerocold/2fa/status/route";
+import { POST as notifyPost } from "@/app/api/zerocold/notify/route";
 
 function fakeReq(over: {
   headers?: Record<string, string>;
@@ -63,7 +69,7 @@ beforeEach(async () => {
   otp.clearOtp("conta.moha@gmail.com");
 });
 
-describe("POST /api/admin/2fa/verify", () => {
+describe("POST /api/zerocold/2fa/verify", () => {
   it("يرفض غير المطوّر (403)", async () => {
     mocks.requireAdmin.mockResolvedValue(null);
     const res = await verifyPost(fakeReq({ body: { code: "123456" } }));
@@ -98,7 +104,7 @@ describe("POST /api/admin/2fa/verify", () => {
   });
 });
 
-describe("POST /api/admin/2fa/send", () => {
+describe("POST /api/zerocold/2fa/send", () => {
   it("يرفض غير المطوّر (403)", async () => {
     mocks.requireAdmin.mockResolvedValue(null);
     expect((await sendPost(fakeReq())).status).toBe(403);
@@ -121,7 +127,7 @@ describe("POST /api/admin/2fa/send", () => {
   });
 });
 
-describe("GET /api/admin/2fa/status", () => {
+describe("GET /api/zerocold/2fa/status", () => {
   it("يرفض غير المطوّر (403)", async () => {
     mocks.requireAdmin.mockResolvedValue(null);
     expect((await statusGet(fakeReq())).status).toBe(403);
@@ -130,17 +136,19 @@ describe("GET /api/admin/2fa/status", () => {
     mocks.verifyTwoFactorToken.mockReturnValue(true);
     const res = await statusGet(fakeReq({ cookie: "tok" }));
     expect(res.status).toBe(200);
-    expect(await res.json()).toEqual({ success: true, verified: true });
+    expect(await res.json()).toEqual({ success: true, verified: true, reason: "ok" });
     expect(mocks.verifyTwoFactorToken).toHaveBeenCalledWith("tok", "conta.moha@gmail.com");
   });
-  it("يعيد verified=false عند غياب الكوكي", async () => {
+  it("يعيد verified=false مع سبب no-cookie عند غياب الكوكي", async () => {
     mocks.verifyTwoFactorToken.mockReturnValue(false);
     const res = await statusGet(fakeReq());
-    expect((await res.json()).verified).toBe(false);
+    const body = await res.json();
+    expect(body.verified).toBe(false);
+    expect(body.reason).toBe("no-cookie");
   });
 });
 
-describe("POST /api/notify-admin", () => {
+describe("POST /api/zerocold/notify", () => {
   beforeEach(() => {
     mocks.requireUser.mockResolvedValue({ id: "u1", email: "owner@x.com" });
     mocks.extractAccessToken.mockReturnValue("jwt");

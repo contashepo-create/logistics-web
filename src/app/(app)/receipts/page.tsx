@@ -1,7 +1,7 @@
 "use client";
 
 import { useMemo, useState } from "react";
-import { useQuery, useQueryClient } from "@tanstack/react-query";
+import { useQuery, useQueryClient, keepPreviousData } from "@tanstack/react-query";
 import { DataTable } from "@/components/DataTable";
 import { PageFrame, Spinner, ExportBar, TotalsBar, FilterRow, Select } from "@/components/ui";
 import { ReceiptDialog } from "@/components/dialogs/operations";
@@ -23,6 +23,7 @@ export default function ReceiptsPage() {
   const { data, isLoading } = useQuery({
     queryKey: ["receipts", dFrom, dTo, type],
     queryFn: () => listReceipts(dFrom, dTo, type || null),
+    placeholderData: keepPreviousData,
   });
 
   const headers = ["رقم السند", "التاريخ", "النوع", "العميل / المصدر", "أودع في", "المبلغ", "البيان"];

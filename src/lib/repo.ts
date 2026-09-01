@@ -2,6 +2,7 @@
 // مكافئ حرفي لـ app/core/repo.py
 
 import { supabase } from "./supabase";
+import { normalizeTaxProfile, validateTaxProfile } from "./tax";
 import { num, accountTable, accountKindLabel } from "./calc";
 import type { Company } from "./types";
 import {
@@ -9,6 +10,7 @@ import {
   ensureDateInOpenYear,
   ensureMovementEditable,
   ensureNotBlank,
+  ensureSufficientFunds,
   ensurePositive,
   roundMoney,
   txt,
@@ -30,49 +32,114 @@ import type {
 // حقول الشركة (تُستخدم في ترويسة الفواتير والتقارير والإعدادات)
 const DEFAULT_SETTINGS: Record<string, string> = {
   company_name: "شركة النقل للخدمات اللوجستية",
+  company_name_en: "",
   company_phone: "",
+  company_email: "",
+  company_website: "",
   company_address: "",
   company_vat_note: "فاتورة مرجعية — ضريبة القيمة المضافة 15%",
   currency: "ر.س",
   vat_rate: "15",
+  // البيانات الضريبية والسجلات الرسمية
+  company_tax_number: "",
+  company_commercial_reg: "",
+  company_unified_number: "",
+  company_entity_type: "establishment",
+  company_tax_status: "taxable",
+  // العنوان الوطني التفصيلي
+  company_country: "SA",
+  company_region: "",
+  company_city: "",
+  company_district: "",
+  company_street: "",
+  company_building_no: "",
+  company_postal_code: "",
+  company_additional_no: "",
+  company_address_note: "",
 };
 
 // خريطة مفاتيح الإعدادات ← أعمدة جدول الشركات
 const COMPANY_FIELDS: Record<string, string> = {
   company_name: "name",
+  company_name_en: "name_en",
   company_phone: "phone",
+  company_email: "email",
+  company_website: "website",
   company_address: "address",
   company_vat_note: "vat_note",
   currency: "currency",
   vat_rate: "vat_rate",
+  company_tax_number: "tax_number",
+  company_commercial_reg: "commercial_reg",
+  company_unified_number: "unified_number",
+  company_entity_type: "entity_type",
+  company_tax_status: "tax_status",
+  company_country: "country",
+  company_region: "region",
+  company_city: "city",
+  company_district: "district",
+  company_street: "street",
+  company_building_no: "building_no",
+  company_postal_code: "postal_code",
+  company_additional_no: "additional_no",
+  company_address_note: "address_note",
 };
 
 // ---------------------------------------------------------------------------
 // الشركة والإعدادات (تُحفظ في جدول companies — عزل عبر company_id)
 // ---------------------------------------------------------------------------
-export async function getCompany(): Promise<Company | null> {
-  const { data: me } = await supabase.auth.getUser();
-  if (!me.user) return null;
-  const { data: p } = await supabase.from("profiles").select("company_id").eq("id", me.user.id).maybeSingle();
-  if (!p?.company_id) return null;
-  const { data } = await supabase.from("companies").select("*").eq("id", p.company_id).maybeSingle();
-  return (data as Company) ?? null;
+// كاش قصير لبيانات الشركة: كانت كل قراءة إعداد تُنفّذ ثلاث رحلات شبكة،
+// و`companyInfo()` تقرأ ~29 إعداداً ⇒ عشرات الرحلات في كل شاشة.
+// يُعطَّل الكاش في بيئة الاختبار حتى تُقرأ البيانات المزروعة حديثاً دائماً.
+const CACHE_ENABLED = process.env.NODE_ENV !== "test";
+const COMPANY_TTL_MS = 20_000;
+let companyCache: { at: number; value: Company | null } | null = null;
+let companyInFlight: Promise<Company | null> | null = null;
+
+/** إبطال كاش الشركة (يُستدعى بعد أي تعديل على بياناتها). */
+export function invalidateCompanyCache(): void {
+  companyCache = null;
+  companyInFlight = null;
+}
+
+export async function getCompany(force = false): Promise<Company | null> {
+  if (!force && CACHE_ENABLED && companyCache && Date.now() - companyCache.at < COMPANY_TTL_MS) return companyCache.value;
+  if (!force && companyInFlight) return companyInFlight;
+
+  companyInFlight = (async () => {
+    const { data: me } = await supabase.auth.getUser();
+    if (!me.user) return null;
+    const { data: p } = await supabase.from("profiles").select("company_id").eq("id", me.user.id).maybeSingle();
+    if (!p?.company_id) return null;
+    const { data } = await supabase.from("companies").select("*").eq("id", p.company_id).maybeSingle();
+    return (data as Company) ?? null;
+  })();
+
+  try {
+    const value = await companyInFlight;
+    companyCache = { at: Date.now(), value };
+    return value;
+  } finally {
+    companyInFlight = null;
+  }
 }
 
 export async function updateCompany(fields: Record<string, unknown>): Promise<void> {
   const c = await getCompany();
   if (!c) throw new RuleError("لا توجد شركة مرتبطة بحسابك.");
   const { error } = await supabase.from("companies").update(fields).eq("id", c.id);
+  invalidateCompanyCache();
   if (error) throw new RuleError(error.message);
 }
 
-export async function getSetting(key: string, def = ""): Promise<string> {
+function settingFrom(c: Company | null, key: string, def: string): string {
   const col = COMPANY_FIELDS[key];
-  const c = await getCompany();
-  if (col && c && (c as unknown as Record<string, unknown>)[col] != null) {
-    return String((c as unknown as Record<string, unknown>)[col]);
-  }
-  return def;
+  const raw = col && c ? (c as unknown as Record<string, unknown>)[col] : null;
+  return raw != null ? String(raw) : def;
+}
+
+export async function getSetting(key: string, def = ""): Promise<string> {
+  return settingFrom(await getCompany(), key, def);
 }
 
 export async function setSetting(key: string, value: string): Promise<void> {
@@ -82,11 +149,11 @@ export async function setSetting(key: string, value: string): Promise<void> {
   await updateCompany({ [col]: v });
 }
 
+/** كل بيانات الشركة باستعلام واحد (كانت تُنفَّذ رحلة شبكة لكل إعداد). */
 export async function companyInfo(): Promise<Record<string, string>> {
+  const c = await getCompany();
   const out: Record<string, string> = {};
-  for (const [k, v] of Object.entries(DEFAULT_SETTINGS)) {
-    out[k] = await getSetting(k, v);
-  }
+  for (const [k, v] of Object.entries(DEFAULT_SETTINGS)) out[k] = settingFrom(c, k, v);
   return out;
 }
 
@@ -135,11 +202,15 @@ async function stampCode(table: string, rowId: number, prefix: string): Promise<
   return code;
 }
 
-async function count(table: string, column: string, value: unknown): Promise<number> {
-  const { count: c } = await supabase
-    .from(table)
-    .select("id", { count: "exact", head: true })
-    .eq(column, value);
+async function count(
+  table: string,
+  column: string,
+  value: unknown,
+  extra?: { column: string; value: unknown }
+): Promise<number> {
+  let q = supabase.from(table).select("id", { count: "exact", head: true }).eq(column, value);
+  if (extra) q = q.eq(extra.column, extra.value);
+  const { count: c } = await q;
   return c ?? 0;
 }
 
@@ -277,17 +348,44 @@ export async function saveCustomer(data: Record<string, any>, customerId?: numbe
   const notes = txt(data.notes ?? "", "الملاحظات");
   const opening = roundMoney(data.opening_balance ?? 0);
 
+  // البيانات الضريبية والعنوان الوطني (تُطبَّع وتُتحقّق قبل الحفظ)
+  const profile = normalizeTaxProfile({
+    tax_number: String(data.tax_number ?? ""),
+    commercial_reg: String(data.commercial_reg ?? ""),
+    entity_type: String(data.entity_type ?? "company"),
+    tax_status: String(data.tax_status ?? "taxable"),
+    country: String(data.country ?? "SA"),
+    region: String(data.region ?? ""),
+    city: String(data.city ?? ""),
+    district: String(data.district ?? ""),
+    street: String(data.street ?? ""),
+    building_no: String(data.building_no ?? ""),
+    postal_code: String(data.postal_code ?? ""),
+    additional_no: String(data.additional_no ?? ""),
+  });
+  const problems = validateTaxProfile(profile);
+  if (problems.length) throw new RuleError(problems[0]);
+
+  const extra = {
+    ...profile,
+    name_en: txt(data.name_en ?? "", "الاسم بالإنجليزية"),
+    email: txt(data.email ?? "", "البريد الإلكتروني"),
+    contact_person: txt(data.contact_person ?? "", "مسؤول التواصل"),
+    credit_limit: roundMoney(data.credit_limit ?? 0),
+    payment_terms: Math.max(0, Math.trunc(Number(data.payment_terms ?? 0) || 0)),
+  };
+
   if (customerId) {
     const { error } = await supabase
       .from("customers")
-      .update({ name, address, phone, opening_balance: opening, notes })
+      .update({ name, address, phone, opening_balance: opening, notes, ...extra })
       .eq("id", customerId);
     if (error) throw new RuleError(error.message);
     return customerId;
   }
   const { data: inserted, error } = await supabase
     .from("customers")
-    .insert({ name, address, phone, opening_balance: opening, notes })
+    .insert({ name, address, phone, opening_balance: opening, notes, ...extra })
     .select()
     .single();
   if (error) throw new RuleError(error.message);
@@ -332,6 +430,8 @@ export async function saveEmployee(data: Record<string, any>, employeeId?: numbe
   const nationality = txt(data.nationality ?? "", "الجنسية");
   const phone = txt(data.phone ?? "", "الهاتف");
   const notes = txt(data.notes ?? "", "الملاحظات");
+  const baseSalary = roundMoney(data.base_salary ?? 0);
+  if (baseSalary < 0) throw new RuleError("الراتب الأساسي لا يمكن أن يكون سالباً.");
 
   if (employeeId) {
     const old = await getEmployee(employeeId);
@@ -349,14 +449,14 @@ export async function saveEmployee(data: Record<string, any>, employeeId?: numbe
     }
     const { error } = await supabase
       .from("employees")
-      .update({ name, nationality, phone, emp_type: data.emp_type, notes })
+      .update({ name, nationality, phone, emp_type: data.emp_type, base_salary: baseSalary, notes })
       .eq("id", employeeId);
     if (error) throw new RuleError(error.message);
     return employeeId;
   }
   const { data: inserted, error } = await supabase
     .from("employees")
-    .insert({ name, nationality, phone, emp_type: data.emp_type, notes })
+    .insert({ name, nationality, phone, emp_type: data.emp_type, base_salary: baseSalary, notes })
     .select()
     .single();
   if (error) throw new RuleError(error.message);
@@ -501,9 +601,11 @@ export async function saveAccount(
 }
 
 export async function deleteAccount(kind: string, accountId: number): Promise<void> {
-  const nRec = await count("receipt_vouchers", "account_id", accountId);
-  const nPay = await count("payment_vouchers", "account_id", accountId);
-  const nSal = await count("payrolls", "account_id", accountId);
+  // المطابقة على نوع الحساب أيضاً: الخزائن والبنوك ترقيمهما مستقل وقد يتشابه المعرّف
+  const k = { column: "account_kind", value: kind };
+  const nRec = await count("receipt_vouchers", "account_id", accountId, k);
+  const nPay = await count("payment_vouchers", "account_id", accountId, k);
+  const nSal = await count("payrolls", "account_id", accountId, k);
   if (nRec || nPay || nSal) {
     throw new RuleError(
       `لا يمكن الحذف لوجود حركات مرتبطة (قبض: ${nRec}، دفع: ${nPay}، رواتب: ${nSal}).`
@@ -545,9 +647,28 @@ export async function saveInvoice(data: Record<string, any>, invoiceId?: number 
     }
   }
   for (const t of trips) {
-    if (roundMoney(t.price ?? 0) <= 0) throw new RuleError("سعر النقلة يجب أن يكون أكبر من صفر.");
+    const qty = Math.max(1, Math.trunc(num(t.qty ?? 1)));
+    t.qty = qty;
+    t.unit_price = roundMoney(t.unit_price ?? (num(t.price) / qty));
+    t.price = roundMoney(qty * t.unit_price);
+    if (t.price <= 0) throw new RuleError("سعر النقلة يجب أن يكون أكبر من صفر.");
     for (const e of t.expenses ?? []) {
-      if (roundMoney(e.amount ?? 0) <= 0) throw new RuleError("مبلغ مصروف النقلة يجب أن يكون أكبر من صفر.");
+      const eq = num(e.qty ?? 1) || 1;
+      e.qty = eq;
+      e.unit_amount = roundMoney(e.unit_amount ?? (num(e.amount) / eq));
+      e.amount = roundMoney(eq * e.unit_amount);
+      if (e.amount <= 0) throw new RuleError("مبلغ مصروف النقلة يجب أن يكون أكبر من صفر.");
+      const src = e.source ?? "cash";
+      if (!["cash", "driver", "supplier", "customer"].includes(src)) {
+        throw new RuleError("مصدر تمويل المصروف غير صالح.");
+      }
+      e.source = src;
+      if (src === "cash" && (!e.account_kind || !e.account_id)) {
+        throw new RuleError("اختر الخزينة أو البنك الذي صُرف منه المصروف النقدي.");
+      }
+      if (src === "driver" && !t.driver_id) {
+        throw new RuleError("حدّد السائق في النقلة قبل تسجيل مصروف من عهدته.");
+      }
     }
   }
 
@@ -570,14 +691,48 @@ export async function saveInvoice(data: Record<string, any>, invoiceId?: number 
     driver_id: t.driver_id ?? null,
     from_loc: t.from_loc ?? "",
     to_loc: t.to_loc ?? "",
+    qty: t.qty ?? 1,
+    unit_price: roundMoney(t.unit_price ?? 0),
     price: roundMoney(t.price ?? 0),
     notes: t.notes ?? "",
     expenses: (t.expenses ?? []).map((e: any) => ({
       expense_type: e.expense_type,
+      qty: e.qty ?? 1,
+      unit_amount: roundMoney(e.unit_amount ?? 0),
       amount: roundMoney(e.amount ?? 0),
+      source: e.source ?? "cash",
+      account_kind: e.source === "cash" ? (e.account_kind ?? null) : null,
+      account_id: e.source === "cash" && e.account_id ? Number(e.account_id) : null,
+      supplier_name: e.supplier_name ?? "",
       notes: e.notes ?? "",
     })),
   }));
+
+  // منع الرصيد السالب: مجموع المصروفات النقدية لكل جهة صرف (مع استثناء
+  // السندات التلقائية القديمة لهذه الفاتورة لأنها ستُستبدل)
+  const cashNeeded = new Map<string, number>();
+  for (const t of tripsPayload) {
+    for (const e of t.expenses) {
+      if (e.source !== "cash" || !e.account_kind || !e.account_id) continue;
+      const key = `${e.account_kind}:${e.account_id}`;
+      cashNeeded.set(key, (cashNeeded.get(key) ?? 0) + e.amount);
+    }
+  }
+  if (cashNeeded.size) {
+    let oldExpenseIds: number[] = [];
+    if (invoiceId) {
+      const { data: oldTrips } = await supabase.from("invoice_trips").select("id").eq("invoice_id", invoiceId);
+      const oldTripIds = (oldTrips ?? []).map((t) => t.id);
+      if (oldTripIds.length) {
+        const { data: oldExps } = await supabase.from("trip_expenses").select("id").in("trip_id", oldTripIds);
+        oldExpenseIds = (oldExps ?? []).map((e) => e.id);
+      }
+    }
+    for (const [key, amount] of cashNeeded) {
+      const [kind, accId] = key.split(":");
+      await ensureSufficientFunds(kind, Number(accId), amount, { sourceExpenseIds: oldExpenseIds });
+    }
+  }
 
   const { data: savedId, error } = await supabase.rpc("save_invoice", {
     p_invoice_id: invoiceId ?? null,
@@ -605,6 +760,8 @@ export async function deleteInvoice(invoiceId: number): Promise<void> {
       .from("payment_vouchers")
       .select("id", { count: "exact", head: true })
       .eq("voucher_type", "trip")
+      // السندات المتولّدة تلقائياً من مصروفات الفاتورة تُحذف معها تتابعياً
+      .is("source_expense_id", null)
       .in("trip_id", tripIds);
     linked = c ?? 0;
   }
@@ -639,9 +796,12 @@ export async function listReceipts(
   const { data, error } = await q;
   if (error) throw new RuleError(error.message);
 
-  const { data: custs } = await supabase.from("customers").select("id, name");
-  const { data: cbs } = await supabase.from("cashboxes").select("id, name");
-  const { data: bks } = await supabase.from("banks").select("id, name");
+  // جداول المسمّيات تُجلب على التوازي بدل التسلسل
+  const [{ data: custs }, { data: cbs }, { data: bks }] = await Promise.all([
+    supabase.from("customers").select("id, name"),
+    supabase.from("cashboxes").select("id, name"),
+    supabase.from("banks").select("id, name"),
+  ]);
   const custMap = new Map((custs ?? []).map((c) => [c.id, c.name]));
   const cbMap = new Map((cbs ?? []).map((c) => [c.id, c.name]));
   const bkMap = new Map((bks ?? []).map((b) => [b.id, b.name]));
@@ -728,14 +888,22 @@ export async function listPayments(
   const { data, error } = await q;
   if (error) throw new RuleError(error.message);
 
-  const { data: emps } = await supabase.from("employees").select("id, name");
-  const { data: vehs } = await supabase.from("vehicles").select("id, plate_number");
-  const { data: trips } = await supabase.from("invoice_trips").select("id, invoice_id");
-  const { data: invs } = await supabase.from("invoices").select("id, number, customer_id");
-  const { data: custs } = await supabase.from("customers").select("id, name");
-  const { data: cbs } = await supabase.from("cashboxes").select("id, name");
-  const { data: bks } = await supabase.from("banks").select("id, name");
+  // كل جداول المسمّيات على التوازي (كانت ثمانية استعلامات متتابعة)
+  const [
+    { data: emps }, { data: vehs }, { data: trips }, { data: invs },
+    { data: custs }, { data: cbs }, { data: bks }, { data: sups },
+  ] = await Promise.all([
+    supabase.from("employees").select("id, name"),
+    supabase.from("vehicles").select("id, plate_number"),
+    supabase.from("invoice_trips").select("id, invoice_id"),
+    supabase.from("invoices").select("id, number, customer_id"),
+    supabase.from("customers").select("id, name"),
+    supabase.from("cashboxes").select("id, name"),
+    supabase.from("banks").select("id, name"),
+    supabase.from("suppliers").select("id, name"),
+  ]);
 
+  const supMap = new Map((sups ?? []).map((x) => [x.id, x.name]));
   const empMap = new Map((emps ?? []).map((e) => [e.id, e.name]));
   const vehMap = new Map((vehs ?? []).map((v) => [v.id, v.plate_number]));
   const tripMap = new Map((trips ?? []).map((t) => [t.id, t.invoice_id]));
@@ -753,6 +921,7 @@ export async function listPayments(
       plate_number: vehMap.get(v.vehicle_id ?? 0) ?? null,
       inv_number: inv?.number ?? null,
       customer_name: inv ? custMap.get(inv.customer_id) ?? null : null,
+      supplier_name: supMap.get(v.supplier_id ?? 0) ?? null,
       account_name: v.account_kind === "cashbox" ? cbMap.get(v.account_id) ?? null : bkMap.get(v.account_id) ?? null,
     };
   });
@@ -760,7 +929,7 @@ export async function listPayments(
 
 async function validatePayment(data: Record<string, any>): Promise<void> {
   const vt = data.voucher_type;
-  if (!["trip", "advance", "vehicle", "general"].includes(vt)) {
+  if (!["trip", "advance", "vehicle", "general", "supplier"].includes(vt)) {
     throw new RuleError("اختر نوع السند.");
   }
   const amount = roundMoney(data.amount ?? 0);
@@ -772,6 +941,11 @@ async function validatePayment(data: Record<string, any>): Promise<void> {
   if (vt === "trip" && !data.trip_id) throw new RuleError("اختر الرحلة (النقلة) التي يخصها المصروف.");
   if (vt === "advance" && !data.employee_id) throw new RuleError("اختر الموظف/السائق للسلفة.");
   if (vt === "vehicle" && !data.vehicle_id) throw new RuleError("اختر السيارة لمصروف الصيانة.");
+  if (vt === "supplier" && !data.supplier_id) throw new RuleError("اختر المورّد المستفيد من السداد.");
+  if (vt === "supplier") {
+    const { data: sup } = await supabase.from("suppliers").select("id").eq("id", data.supplier_id).maybeSingle();
+    if (!sup) throw new RuleError("المورّد المحدد غير موجود.");
+  }
   if (data.trip_id) {
     const { data: t } = await supabase.from("invoice_trips").select("id").eq("id", data.trip_id).single();
     if (!t) throw new RuleError("الرحلة المحددة غير موجودة.");
@@ -798,6 +972,8 @@ export async function savePayment(data: Record<string, any>, voucherId?: number 
     employee_id: data.voucher_type === "advance" ? data.employee_id ?? null : null,
     vehicle_id: data.voucher_type === "vehicle" ? data.vehicle_id ?? null : null,
     vehicle_expense: data.voucher_type === "vehicle" ? data.vehicle_expense ?? "" : "",
+    supplier_id: data.voucher_type === "supplier" ? data.supplier_id ?? null : null,
+    purchase_invoice_id: data.voucher_type === "supplier" ? data.purchase_invoice_id ?? null : null,
     amount: roundMoney(data.amount ?? 0),
     description: txt(data.description ?? "", "البيان"),
   };
@@ -821,11 +997,13 @@ export async function savePayment(data: Record<string, any>, voucherId?: number 
       }
     }
     await ensureMovementEditable(old.date, date);
+    await ensureSufficientFunds(row.account_kind, row.account_id, row.amount, { paymentId: voucherId });
     const { error } = await supabase.from("payment_vouchers").update(row).eq("id", voucherId);
     if (error) throw new RuleError(error.message);
     return voucherId;
   }
   await ensureDateInOpenYear(date);
+  await ensureSufficientFunds(row.account_kind, row.account_id, row.amount);
   const inserted = await insertNumbered<{ id: number }>("payment_vouchers", row);
   return inserted.id;
 }
@@ -1001,6 +1179,8 @@ export async function savePayroll(data: Record<string, any>, payrollId?: number 
   } else {
     await ensureDateInOpenYear(date);
   }
+
+  await ensureSufficientFunds(data.account_kind, data.account_id, net, { payrollId: payrollId ?? null });
 
   // حفظ ذرّي (صف الراتب + تسويات السلف + ترقيم مُقفَل) في معاملة واحدة
   const { data: savedId, error } = await supabase.rpc("save_payroll", {

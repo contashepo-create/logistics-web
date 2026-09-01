@@ -16,7 +16,9 @@ export interface Company {
   currency: string;
   vat_rate: number;
   vat_note: string;
-  plan_type: "monthly" | "yearly" | "open";
+  plan_type: "trial" | "monthly" | "yearly" | "open";
+  /** رقم العميل الفريد (8 خانات عشوائية غير متتابعة). */
+  client_code?: string;
   trial_end: string | null;
   subscription_start: string | null;
   subscription_end: string | null; // null = مفتوح بلا تحديد
@@ -60,6 +62,8 @@ export interface Employee {
   nationality: string;
   phone: string;
   emp_type: "driver" | "admin";
+  /** الراتب الشهري الأساسي المسجّل (يُقترح تلقائياً في المسير) */
+  base_salary: number;
   notes: string;
   created_at?: string;
 }
@@ -115,16 +119,36 @@ export interface InvoiceTrip {
   driver_id: number | null;
   from_loc: string;
   to_loc: string;
+  /** عدد النقلات لنفس الوجهة */
+  qty: number;
+  /** سعر النقلة الواحدة */
+  unit_price: number;
+  /** إجمالي السطر = qty × unit_price */
   price: number;
   notes: string;
   expenses: TripExpense[];
 }
 
+/** مصدر تمويل مصروف النقلة. */
+export type ExpenseSource = "cash" | "driver" | "supplier" | "customer";
+
 export interface TripExpense {
   id?: number;
   trip_id?: number;
   expense_type: "trip" | "fuel" | "card" | "other";
+  /** العدد (مثال: 3 كارتات) */
+  qty: number;
+  /** قيمة الوحدة */
+  unit_amount: number;
+  /** الإجمالي = qty × unit_amount */
   amount: number;
+  /** من أين مُوِّل المصروف */
+  source: ExpenseSource;
+  /** للمصروف النقدي فقط: الخزينة/البنك المصروف منه */
+  account_kind?: "cashbox" | "bank" | null;
+  account_id?: number | null;
+  /** للمصروف الآجل: اسم المورد/المحطة */
+  supplier_name?: string;
   notes: string;
 }
 
@@ -150,7 +174,10 @@ export interface PaymentVoucher {
   date: string;
   account_kind: "cashbox" | "bank";
   account_id: number;
-  voucher_type: "trip" | "advance" | "vehicle" | "general";
+  voucher_type: "trip" | "advance" | "vehicle" | "general" | "supplier";
+  supplier_id?: number | null;
+  supplier_name?: string | null;
+  purchase_invoice_id?: number | null;
   trip_id: number | null;
   employee_id: number | null;
   vehicle_id: number | null;

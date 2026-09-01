@@ -1,7 +1,7 @@
 "use client";
 
 import { useMemo, useState } from "react";
-import { useQuery, useQueryClient } from "@tanstack/react-query";
+import { useQuery, useQueryClient, keepPreviousData } from "@tanstack/react-query";
 import { DataTable } from "@/components/DataTable";
 import { PageFrame, Spinner, ExportBar, TotalsBar, FilterRow, DictSelect } from "@/components/ui";
 import { InvoiceDialog, exportCustomerInvoicePdf, printCustomerInvoice } from "@/components/dialogs/operations";
@@ -24,6 +24,7 @@ export default function InvoicesPage() {
   const { data, isLoading } = useQuery({
     queryKey: ["invoices", dFrom, dTo, customerId],
     queryFn: () => invoiceList(dFrom, dTo, customerId),
+    placeholderData: keepPreviousData,
   });
 
   const headers = ["رقم الفاتورة", "التاريخ", "العميل", "عدد النقلات", "إجمالي النقلات", "المصروفات المباشرة", "الربح المتوقع", "مصاريف لاحقة (سندات)", "الربح الفعلي"];

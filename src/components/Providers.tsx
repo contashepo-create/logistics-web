@@ -8,7 +8,16 @@ export function Providers({ children }: { children: React.ReactNode }) {
     () =>
       new QueryClient({
         defaultOptions: {
-          queries: { refetchOnWindowFocus: false, retry: 1, staleTime: 10_000 },
+          queries: {
+            refetchOnWindowFocus: false,
+            refetchOnMount: false,
+            retry: 1,
+            // البيانات تبقى «طازجة» دقيقتين: العودة لقسم سبق فتحه تعرضه فوراً
+            // من الذاكرة بلا شاشة تحميل، والتحديث يتم عند الحفظ (invalidate) أو
+            // بزرّ التحديث في شريط الأدوات.
+            staleTime: 120_000,
+            gcTime: 30 * 60_000,
+          },
         },
       })
   );

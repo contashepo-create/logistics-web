@@ -55,16 +55,30 @@ export async function customerBalance(
   const { data: invs } = await invQuery;
   const invIds = (invs ?? []).map((r) => r.id);
 
-  // إجمالي الفاتورة على العميل = قيمة النقلات + ضريبة القيمة المضافة
+  // إجمالي الفاتورة على العميل = قيمة النقلات + المصروفات التي يتحمّلها العميل + الضريبة
   let inv = 0;
   if (invIds.length) {
     const { data: trips } = await supabase
       .from("invoice_trips")
-      .select("invoice_id, price")
+      .select("id, invoice_id, price")
       .in("invoice_id", invIds);
     const subByInv = new Map<number, number>();
+    const invOfTrip = new Map<number, number>();
     for (const t of trips ?? []) {
+      invOfTrip.set(t.id, t.invoice_id);
       subByInv.set(t.invoice_id, (subByInv.get(t.invoice_id) ?? 0) + num(t.price));
+    }
+    const tripIds = [...invOfTrip.keys()];
+    if (tripIds.length) {
+      const { data: exps } = await supabase
+        .from("trip_expenses")
+        .select("trip_id, amount, source")
+        .eq("source", "customer")
+        .in("trip_id", tripIds);
+      for (const e of exps ?? []) {
+        const iid = invOfTrip.get(e.trip_id);
+        if (iid != null) subByInv.set(iid, (subByInv.get(iid) ?? 0) + num(e.amount));
+      }
     }
     const vatMap = new Map((invs ?? []).map((r) => [r.id, num(r.vat_rate)]));
     for (const [iid, sub] of subByInv) {
@@ -85,14 +99,65 @@ export async function customerBalance(
   return round2(opening + inv - rec);
 }
 
+/**
+ * أرصدة كل العملاء دفعة واحدة.
+ * تُنفَّذ بأربعة استعلامات مجمّعة بدل استعلام لكل عميل (كان N+1 يُبطئ الصفحة كثيراً).
+ */
 export async function customersWithBalance(): Promise<(Customer & { balance: number })[]> {
-  const { data } = await supabase.from("customers").select("*").order("code");
-  const rows = (data ?? []) as Customer[];
-  const out = [];
-  for (const r of rows) {
-    out.push({ ...r, balance: await customerBalance(r.id) });
+  const [custRes, invRes, recRes] = await Promise.all([
+    supabase.from("customers").select("*").order("code"),
+    supabase.from("invoices").select("id, customer_id, vat_rate"),
+    supabase.from("receipt_vouchers").select("customer_id, amount").eq("voucher_type", "customer"),
+  ]);
+
+  const rows = (custRes.data ?? []) as Customer[];
+  const invs = (invRes.data ?? []) as { id: number; customer_id: number; vat_rate: number }[];
+  const invIds = invs.map((i) => i.id);
+
+  let trips: { id: number; invoice_id: number; price: number }[] = [];
+  if (invIds.length) {
+    const { data } = await supabase.from("invoice_trips").select("id, invoice_id, price").in("invoice_id", invIds);
+    trips = (data ?? []) as typeof trips;
   }
-  return out;
+
+  // إجمالي كل فاتورة قبل الضريبة = النقلات + المصروفات التي يتحمّلها العميل
+  const subByInv = new Map<number, number>();
+  const invOfTrip = new Map<number, number>();
+  for (const t of trips) {
+    invOfTrip.set(t.id, t.invoice_id);
+    subByInv.set(t.invoice_id, (subByInv.get(t.invoice_id) ?? 0) + num(t.price));
+  }
+
+  const tripIds = [...invOfTrip.keys()];
+  if (tripIds.length) {
+    const { data: exps } = await supabase
+      .from("trip_expenses")
+      .select("trip_id, amount, source")
+      .eq("source", "customer")
+      .in("trip_id", tripIds);
+    for (const e of exps ?? []) {
+      const iid = invOfTrip.get((e as { trip_id: number }).trip_id);
+      if (iid != null) subByInv.set(iid, (subByInv.get(iid) ?? 0) + num((e as { amount: number }).amount));
+    }
+  }
+
+  const invTotalByCustomer = new Map<number, number>();
+  for (const inv of invs) {
+    const sub = subByInv.get(inv.id) ?? 0;
+    const withVat = sub + round2((sub * num(inv.vat_rate)) / 100);
+    invTotalByCustomer.set(inv.customer_id, (invTotalByCustomer.get(inv.customer_id) ?? 0) + withVat);
+  }
+
+  const paidByCustomer = new Map<number, number>();
+  for (const r of recRes.data ?? []) {
+    const cid = (r as { customer_id: number }).customer_id;
+    paidByCustomer.set(cid, (paidByCustomer.get(cid) ?? 0) + num((r as { amount: number }).amount));
+  }
+
+  return rows.map((r) => ({
+    ...r,
+    balance: round2(num(r.opening_balance) + (invTotalByCustomer.get(r.id) ?? 0) - (paidByCustomer.get(r.id) ?? 0)),
+  }));
 }
 
 // ---------------------------------------------------------------------------
@@ -151,17 +216,36 @@ export async function accountName(kind: string, accountId: number): Promise<stri
   return data ? data.name : "—";
 }
 
+/** أرصدة كل الخزائن (أو البنوك) بأربعة استعلامات مجمّعة بدل استعلام لكل حساب. */
 export async function accountsWithBalance(
   kind: string
 ): Promise<((Cashbox | Bank) & { balance: number })[]> {
   const tbl = accountTable(kind);
-  const { data } = await supabase.from(tbl).select("*").order("code");
-  const rows = (data ?? []) as (Cashbox | Bank)[];
-  const out = [];
-  for (const r of rows) {
-    out.push({ ...r, balance: await accountBalance(kind, r.id) });
-  }
-  return out;
+  const [accRes, recRes, payRes, salRes] = await Promise.all([
+    supabase.from(tbl).select("*").order("code"),
+    supabase.from("receipt_vouchers").select("account_id, amount").eq("account_kind", kind),
+    supabase.from("payment_vouchers").select("account_id, amount").eq("account_kind", kind),
+    supabase.from("payrolls").select("account_id, net_salary").eq("account_kind", kind),
+  ]);
+
+  const rows = (accRes.data ?? []) as (Cashbox | Bank)[];
+  const acc = (list: unknown[], field: string) => {
+    const m = new Map<number, number>();
+    for (const r of list ?? []) {
+      const row = r as Record<string, unknown>;
+      const id = Number(row.account_id);
+      m.set(id, (m.get(id) ?? 0) + num(row[field]));
+    }
+    return m;
+  };
+  const recMap = acc(recRes.data ?? [], "amount");
+  const payMap = acc(payRes.data ?? [], "amount");
+  const salMap = acc(salRes.data ?? [], "net_salary");
+
+  return rows.map((r) => ({
+    ...r,
+    balance: round2(num(r.opening_balance) + (recMap.get(r.id) ?? 0) - (payMap.get(r.id) ?? 0) - (salMap.get(r.id) ?? 0)),
+  }));
 }
 
 export async function allAccounts(): Promise<
@@ -178,8 +262,27 @@ export async function allAccounts(): Promise<
 // ---------------------------------------------------------------------------
 // حسابات الفواتير والرحلات
 // ---------------------------------------------------------------------------
+/** تجميع إجماليات فاتورة من أرقام مُحمّلة مسبقاً (يُستخدم في الحسابات المجمّعة). */
+function totalsFrom(vatRate: number, tripsTotal: number, billableTotal: number, expensesTotal: number, later: number) {
+  const revenue = tripsTotal + billableTotal;
+  const expected = round2(revenue - expensesTotal);
+  const vatAmount = round2((revenue * vatRate) / 100);
+  return {
+    trips_total: round2(tripsTotal),
+    billable_total: round2(billableTotal),
+    expenses_total: round2(expensesTotal),
+    expected_profit: expected,
+    later_payments: round2(later),
+    actual_profit: round2(expected - later),
+    vat_rate: round2(vatRate),
+    vat_amount: vatAmount,
+    customer_total: round2(revenue + vatAmount),
+  };
+}
+
 export async function invoiceTotals(invoiceId: number): Promise<{
   trips_total: number;
+  billable_total: number;
   expenses_total: number;
   expected_profit: number;
   later_payments: number;
@@ -202,37 +305,33 @@ export async function invoiceTotals(invoiceId: number): Promise<{
   const tripIds = (trips ?? []).map((t) => t.id);
   const tripsTotal = sum((trips ?? []).map((t) => num(t.price)));
 
+  // المصروف المُعاد تحميله على العميل ليس تكلفة — يُضاف لقيمة الفاتورة
   let expensesTotal = 0;
+  let billableTotal = 0;
   if (tripIds.length) {
     const { data: exps } = await supabase
       .from("trip_expenses")
-      .select("amount")
+      .select("amount, source")
       .in("trip_id", tripIds);
-    expensesTotal = sum((exps ?? []).map((e) => num(e.amount)));
+    for (const e of exps ?? []) {
+      if ((e as { source?: string }).source === "customer") billableTotal += num(e.amount);
+      else expensesTotal += num(e.amount);
+    }
   }
 
+  // السندات المتولّدة تلقائياً من مصروفات الفاتورة مستبعدة (وإلا احتُسبت مرتين)
   let later = 0;
   if (tripIds.length) {
     const { data: pays } = await supabase
       .from("payment_vouchers")
       .select("amount")
       .eq("voucher_type", "trip")
+      .is("source_expense_id", null)
       .in("trip_id", tripIds);
     later = sum((pays ?? []).map((p) => num(p.amount)));
   }
 
-  const expected = round2(tripsTotal - expensesTotal);
-  const vatAmount = round2((tripsTotal * vatRate) / 100);
-  return {
-    trips_total: round2(tripsTotal),
-    expenses_total: round2(expensesTotal),
-    expected_profit: expected,
-    later_payments: round2(later),
-    actual_profit: round2(expected - later),
-    vat_rate: round2(vatRate),
-    vat_amount: vatAmount,
-    customer_total: round2(tripsTotal + vatAmount),
-  };
+  return totalsFrom(vatRate, tripsTotal, billableTotal, expensesTotal, later);
 }
 
 export async function tripProfit(
@@ -241,14 +340,21 @@ export async function tripProfit(
   pTo?: string | null
 ): Promise<{ price: number; direct: number; later: number; net: number }> {
   const { data: t } = await supabase.from("invoice_trips").select("price").eq("id", tripId).single();
-  const price = t ? num(t.price) : 0;
-  const { data: exps } = await supabase.from("trip_expenses").select("amount").eq("trip_id", tripId);
-  const direct = sum((exps ?? []).map((e) => num(e.amount)));
+  const basePrice = t ? num(t.price) : 0;
+  const { data: exps } = await supabase.from("trip_expenses").select("amount, source").eq("trip_id", tripId);
+  let direct = 0;
+  let billable = 0;
+  for (const e of exps ?? []) {
+    if ((e as { source?: string }).source === "customer") billable += num(e.amount);
+    else direct += num(e.amount);
+  }
+  const price = basePrice + billable;
 
   let payQuery = supabase
     .from("payment_vouchers")
     .select("amount")
     .eq("voucher_type", "trip")
+    .is("source_expense_id", null)
     .eq("trip_id", tripId);
   if (pFrom) payQuery = payQuery.gte("date", pFrom);
   if (pTo) payQuery = payQuery.lte("date", pTo);
@@ -262,6 +368,8 @@ export interface InvoiceListItem extends Invoice {
   customer_name: string;
   customer_code: string;
   trips_total: number;
+  /** مصروفات يتحمّلها العميل (تُضاف لقيمة الفاتورة) */
+  billable_total: number;
   expenses_total: number;
   expected_profit: number;
   later_payments: number;
@@ -272,6 +380,11 @@ export interface InvoiceListItem extends Invoice {
   trips_count: number;
 }
 
+/**
+ * قائمة الفواتير مع إجمالياتها.
+ * تُجلب كل البيانات بخمسة استعلامات مجمّعة ثم تُحسب الإجماليات محلياً،
+ * بدل تنفيذ 4 استعلامات لكل فاتورة (كان يُبطئ الشاشة بشدة عند كثرة الفواتير).
+ */
 export async function invoiceList(
   dFrom?: string | null,
   dTo?: string | null,
@@ -281,26 +394,58 @@ export async function invoiceList(
   if (dFrom) q = q.gte("date", dFrom);
   if (dTo) q = q.lte("date", dTo);
   if (customerId) q = q.eq("customer_id", customerId);
-  const { data } = await q;
-  const invs = (data ?? []) as Invoice[];
 
-  const { data: custs } = await supabase.from("customers").select("id, code, name");
-  const custMap = new Map((custs ?? []).map((c) => [c.id, c]));
+  const [invRes, custRes] = await Promise.all([q, supabase.from("customers").select("id, code, name")]);
+  const invs = (invRes.data ?? []) as Invoice[];
+  const custMap = new Map(((custRes.data ?? []) as { id: number; code: string; name: string }[]).map((c) => [c.id, c]));
+  if (!invs.length) return [];
 
-  const out: InvoiceListItem[] = [];
-  for (const inv of invs) {
-    const totals = await invoiceTotals(inv.id);
-    const { data: trips } = await supabase.from("invoice_trips").select("id").eq("invoice_id", inv.id);
+  const invIds = invs.map((i) => i.id);
+  const { data: tripRows } = await supabase.from("invoice_trips").select("id, invoice_id, price").in("invoice_id", invIds);
+  const trips = (tripRows ?? []) as { id: number; invoice_id: number; price: number }[];
+  const tripIds = trips.map((t) => t.id);
+  const invOfTrip = new Map(trips.map((t) => [t.id, t.invoice_id]));
+
+  let exps: { trip_id: number; amount: number; source?: string }[] = [];
+  let pays: { trip_id: number; amount: number }[] = [];
+  if (tripIds.length) {
+    const [expRes, payRes] = await Promise.all([
+      supabase.from("trip_expenses").select("trip_id, amount, source").in("trip_id", tripIds),
+      supabase.from("payment_vouchers").select("trip_id, amount").eq("voucher_type", "trip").is("source_expense_id", null).in("trip_id", tripIds),
+    ]);
+    exps = (expRes.data ?? []) as typeof exps;
+    pays = (payRes.data ?? []) as typeof pays;
+  }
+
+  const agg = new Map<number, { trips: number; billable: number; cost: number; later: number; count: number }>();
+  const bucket = (id: number) => {
+    let b = agg.get(id);
+    if (!b) { b = { trips: 0, billable: 0, cost: 0, later: 0, count: 0 }; agg.set(id, b); }
+    return b;
+  };
+  for (const t of trips) { const b = bucket(t.invoice_id); b.trips += num(t.price); b.count += 1; }
+  for (const e of exps) {
+    const iid = invOfTrip.get(e.trip_id);
+    if (iid == null) continue;
+    const b = bucket(iid);
+    if (e.source === "customer") b.billable += num(e.amount); else b.cost += num(e.amount);
+  }
+  for (const pmt of pays) {
+    const iid = invOfTrip.get(pmt.trip_id);
+    if (iid != null) bucket(iid).later += num(pmt.amount);
+  }
+
+  return invs.map((inv) => {
+    const b = agg.get(inv.id) ?? { trips: 0, billable: 0, cost: 0, later: 0, count: 0 };
     const cust = custMap.get(inv.customer_id);
-    out.push({
+    return {
       ...inv,
       customer_name: cust?.name ?? "—",
       customer_code: cust?.code ?? "—",
-      trips_count: (trips ?? []).length,
-      ...totals,
-    });
-  }
-  return out;
+      trips_count: b.count,
+      ...totalsFrom(num(inv.vat_rate), b.trips, b.billable, b.cost, b.later),
+    };
+  });
 }
 
 export function invoiceNumberLabel(n: number): string {
@@ -328,18 +473,19 @@ export async function getInvoiceFull(invoiceId: number): Promise<InvoiceFull | n
     .eq("invoice_id", invoiceId)
     .order("id");
 
-  const tripList: InvoiceTrip[] = [];
-  for (const t of trips ?? []) {
-    const { data: exps } = await supabase
-      .from("trip_expenses")
-      .select("*")
-      .eq("trip_id", t.id)
-      .order("id");
-    tripList.push({
-      ...t,
-      expenses: (exps ?? []) as TripExpense[],
-    });
+  // كل مصروفات نقلات الفاتورة باستعلام واحد بدل استعلام لكل نقلة
+  const tripIds = (trips ?? []).map((t) => t.id);
+  const expByTrip = new Map<number, TripExpense[]>();
+  if (tripIds.length) {
+    const { data: exps } = await supabase.from("trip_expenses").select("*").in("trip_id", tripIds).order("id");
+    for (const e of (exps ?? []) as TripExpense[]) {
+      const tid = Number(e.trip_id);
+      const list = expByTrip.get(tid) ?? [];
+      list.push(e);
+      expByTrip.set(tid, list);
+    }
   }
+  const tripList: InvoiceTrip[] = (trips ?? []).map((t) => ({ ...t, expenses: expByTrip.get(t.id) ?? [] }));
 
   const totals = await invoiceTotals(invoiceId);
   return {
@@ -454,6 +600,195 @@ export interface StmtRow {
   credit: number;
   kind: string;
   balance?: number;
+}
+
+// ---------------------------------------------------------------------------
+// تخصيص تحصيلات العميل على فواتيره بالأقدمية (FIFO)
+// ملاحظة: لا تُعرض «حالة الفاتورة» للمستخدم — التخصيص لأغراض بيان الكشف فقط.
+// ---------------------------------------------------------------------------
+export interface AllocationPart { invoice_id: number; number: number; date: string; amount: number }
+export interface CustomerAllocations {
+  /** لكل سند قبض: على أي فواتير وُزّع */
+  byReceipt: Map<number, AllocationPart[]>;
+  /** لكل فاتورة: المسدَّد منها والمتبقي */
+  byInvoice: Map<number, { number: number; date: string; total: number; paid: number; remaining: number }>;
+  /** دفعات غير مخصَّصة (زيادة عن قيمة الفواتير) */
+  unallocated: number;
+}
+
+export async function customerAllocations(customerId: number): Promise<CustomerAllocations> {
+  const { data: invs } = await supabase
+    .from("invoices")
+    .select("id, number, date")
+    .eq("customer_id", customerId)
+    .order("date")
+    .order("number");
+
+  const queue: { invoice_id: number; number: number; date: string; total: number; paid: number }[] = [];
+  for (const inv of invs ?? []) {
+    const t = await invoiceTotals(inv.id);
+    queue.push({ invoice_id: inv.id, number: inv.number, date: inv.date, total: t.customer_total, paid: 0 });
+  }
+
+  const { data: recs } = await supabase
+    .from("receipt_vouchers")
+    .select("id, number, date, amount")
+    .eq("voucher_type", "customer")
+    .eq("customer_id", customerId)
+    .order("date")
+    .order("id");
+
+  const byReceipt = new Map<number, AllocationPart[]>();
+  let unallocated = 0;
+  for (const r of recs ?? []) {
+    let left = num(r.amount);
+    const parts: AllocationPart[] = [];
+    for (const inv of queue) {
+      if (left <= 0.0001) break;
+      const due = round2(inv.total - inv.paid);
+      if (due <= 0.0001) continue;
+      const take = Math.min(due, left);
+      inv.paid = round2(inv.paid + take);
+      left = round2(left - take);
+      parts.push({ invoice_id: inv.invoice_id, number: inv.number, date: inv.date, amount: take });
+    }
+    if (left > 0.0001) unallocated = round2(unallocated + left);
+    byReceipt.set(r.id, parts);
+  }
+
+  const byInvoice = new Map<number, { number: number; date: string; total: number; paid: number; remaining: number }>();
+  for (const inv of queue) {
+    byInvoice.set(inv.invoice_id, {
+      number: inv.number, date: inv.date, total: round2(inv.total),
+      paid: round2(inv.paid), remaining: round2(inv.total - inv.paid),
+    });
+  }
+  return { byReceipt, byInvoice, unallocated };
+}
+
+// ---------------------------------------------------------------------------
+// كشف حساب العميل الاحترافي (تفصيلي وجاهز للإرسال للمطابقة)
+// ---------------------------------------------------------------------------
+export interface CustomerStatementRow {
+  date: string;
+  doc: string;
+  desc: string;
+  detail: string;
+  debit: number;
+  credit: number;
+  balance: number;
+  kind: string;
+}
+export interface CustomerStatementFull {
+  customer: Customer | null;
+  from: string;
+  to: string;
+  opening: number;
+  rows: CustomerStatementRow[];
+  invoiced: number;
+  collected: number;
+  closing: number;
+  /** فواتير عليها متبقٍ (بالأقدمية) لبيان تركيبة الرصيد */
+  openItems: { number: number; date: string; total: number; paid: number; remaining: number }[];
+}
+
+export async function customerStatementFull(
+  customerId: number,
+  dFrom: string,
+  dTo: string
+): Promise<CustomerStatementFull> {
+  const { data: cust } = await supabase.from("customers").select("*").eq("id", customerId).single();
+  const opening = await customerBalance(customerId, dFrom);
+  const alloc = await customerAllocations(customerId);
+
+  const rows: CustomerStatementRow[] = [];
+
+  const { data: invs } = await supabase
+    .from("invoices")
+    .select("id, number, date, notes")
+    .eq("customer_id", customerId)
+    .gte("date", dFrom)
+    .lte("date", dTo)
+    .order("date")
+    .order("number");
+
+  for (const inv of invs ?? []) {
+    const t = await invoiceTotals(inv.id);
+    const { data: trips } = await supabase
+      .from("invoice_trips")
+      .select("from_loc, to_loc, qty")
+      .eq("invoice_id", inv.id)
+      .order("id");
+    const legs = (trips ?? [])
+      .map((x) => `${x.from_loc || "—"} ← ${x.to_loc || "—"}${num(x.qty) > 1 ? ` ×${num(x.qty)}` : ""}`)
+      .join("، ");
+    const vatPart = t.vat_amount > 0 ? ` • ضريبة ${t.vat_amount.toFixed(2)}` : "";
+    rows.push({
+      date: inv.date,
+      doc: `فاتورة ${invoiceNumberLabel(inv.number)}`,
+      desc: legs || "خدمات نقل",
+      detail: `قيمة قبل الضريبة ${(t.trips_total + t.billable_total).toFixed(2)}${vatPart}`,
+      debit: t.customer_total,
+      credit: 0,
+      balance: 0,
+      kind: "invoice",
+    });
+  }
+
+  const { data: recs } = await supabase
+    .from("receipt_vouchers")
+    .select("id, number, date, amount, description")
+    .eq("voucher_type", "customer")
+    .eq("customer_id", customerId)
+    .gte("date", dFrom)
+    .lte("date", dTo)
+    .order("date")
+    .order("id");
+
+  for (const r of recs ?? []) {
+    const parts = alloc.byReceipt.get(r.id) ?? [];
+    const detail = parts.length
+      ? "سداد: " + parts.map((p) => `${invoiceNumberLabel(p.number)} (${p.amount.toFixed(2)})`).join("، ")
+      : "دفعة تحت الحساب";
+    rows.push({
+      date: r.date,
+      doc: `سند قبض ${voucherNumberLabel("RV", r.number)}`,
+      desc: r.description || "تحصيل من العميل",
+      detail,
+      debit: 0,
+      credit: num(r.amount),
+      balance: 0,
+      kind: "receipt",
+    });
+  }
+
+  rows.sort((a, b) => {
+    if (a.date !== b.date) return a.date < b.date ? -1 : 1;
+    const order: Record<string, number> = { invoice: 0, receipt: 1 };
+    return (order[a.kind] ?? 0) - (order[b.kind] ?? 0);
+  });
+
+  let balance = opening;
+  for (const r of rows) {
+    balance = round2(balance + r.debit - r.credit);
+    r.balance = balance;
+  }
+
+  const openItems = [...alloc.byInvoice.values()]
+    .filter((i) => i.remaining > 0.0001)
+    .sort((a, b) => (a.date === b.date ? a.number - b.number : a.date < b.date ? -1 : 1));
+
+  return {
+    customer: (cust ?? null) as Customer | null,
+    from: dFrom,
+    to: dTo,
+    opening: round2(opening),
+    rows,
+    invoiced: round2(rows.reduce((a, r) => a + r.debit, 0)),
+    collected: round2(rows.reduce((a, r) => a + r.credit, 0)),
+    closing: round2(balance),
+    openItems,
+  };
 }
 
 export async function accountStatement(
@@ -621,6 +956,96 @@ export async function tripProfitsReport(
 // ---------------------------------------------------------------------------
 // تقرير 3: كشف حساب موظف/سائق
 // ---------------------------------------------------------------------------
+// ---------------------------------------------------------------------------
+// أرشيف السلفيات: متى صُرفت، وكم خُصم، ومن أي مسير/شهر، وما المتبقي
+// ---------------------------------------------------------------------------
+export interface AdvanceSettlementRow {
+  payroll_id: number;
+  payroll_number: number;
+  payroll_date: string;
+  period_year: number;
+  period_month: number;
+  period_label: string;
+  amount: number;
+}
+export interface AdvanceArchiveRow {
+  id: number;
+  number: number;
+  date: string;
+  amount: number;
+  settled: number;
+  remaining: number;
+  status: "open" | "partial" | "closed";
+  account_label: string;
+  description: string;
+  settlements: AdvanceSettlementRow[];
+  /** تاريخ آخر خصم (إن وُجد) */
+  last_settled_date: string | null;
+}
+
+export async function advanceArchive(employeeId: number): Promise<AdvanceArchiveRow[]> {
+  const { data: advs } = await supabase
+    .from("payment_vouchers")
+    .select("*")
+    .eq("voucher_type", "advance")
+    .eq("employee_id", employeeId)
+    .order("date")
+    .order("id");
+
+  const out: AdvanceArchiveRow[] = [];
+  for (const a of advs ?? []) {
+    const { data: rows } = await supabase
+      .from("advance_settlements")
+      .select("amount, payroll_id, payrolls(number, date, period_year, period_month)")
+      .eq("payment_voucher_id", a.id)
+      .order("payroll_id");
+
+    const settlements: AdvanceSettlementRow[] = (rows ?? []).map((r) => {
+      const p = (Array.isArray(r.payrolls) ? (r.payrolls as any[])[0] : (r.payrolls as any)) ?? {};
+      return {
+        payroll_id: r.payroll_id,
+        payroll_number: num(p.number),
+        payroll_date: p.date ?? "",
+        period_year: num(p.period_year),
+        period_month: num(p.period_month),
+        period_label: p.period_year ? periodLabel(num(p.period_year), num(p.period_month)) : "—",
+        amount: num(r.amount),
+      };
+    });
+    settlements.sort((x, y) => (x.payroll_date < y.payroll_date ? -1 : x.payroll_date > y.payroll_date ? 1 : 0));
+
+    const settled = round2(sum(settlements.map((x) => x.amount)));
+    const amount = num(a.amount);
+    const remaining = round2(amount - settled);
+    out.push({
+      id: a.id,
+      number: num(a.number),
+      date: a.date,
+      amount,
+      settled,
+      remaining,
+      status: settled <= 0.009 ? "open" : remaining <= 0.009 ? "closed" : "partial",
+      account_label: await accountName(a.account_kind, a.account_id),
+      description: a.description ?? "",
+      settlements,
+      last_settled_date: settlements.length ? settlements[settlements.length - 1].payroll_date : null,
+    });
+  }
+  return out;
+}
+
+/** إجماليات أرشيف السلف لموظف */
+export function advanceArchiveTotals(rows: AdvanceArchiveRow[]): {
+  total: number; settled: number; remaining: number; open_count: number;
+} {
+  return {
+    total: round2(sum(rows.map((r) => r.amount))),
+    settled: round2(sum(rows.map((r) => r.settled))),
+    remaining: round2(sum(rows.map((r) => r.remaining))),
+    open_count: rows.filter((r) => r.remaining > 0.009).length,
+  };
+}
+
 export async function employeeStatement(
   employeeId: number,
   dFrom?: string | null,
@@ -656,7 +1081,7 @@ export async function employeeStatement(
     const settled = sum((settles ?? []).map((s) => num(s.amount)));
     const { data: srows } = await supabase
       .from("advance_settlements")
-      .select("amount, payroll_id, payrolls(date, number)")
+      .select("amount, payroll_id, payrolls(date, number, period_year, period_month)")
       .eq("payment_voucher_id", r.id)
       .order("payroll_id");
     const settlements = (srows ?? []).map((s) => ({
@@ -664,6 +1089,10 @@ export async function employeeStatement(
       payroll_id: s.payroll_id,
       pdate: Array.isArray(s.payrolls) ? (s.payrolls as any[])[0]?.date : (s.payrolls as any)?.date,
       pnum: Array.isArray(s.payrolls) ? (s.payrolls as any[])[0]?.number : (s.payrolls as any)?.number,
+      period: (() => {
+        const p2: any = Array.isArray(s.payrolls) ? (s.payrolls as any[])[0] : (s.payrolls as any);
+        return p2?.period_year ? periodLabel(num(p2.period_year), num(p2.period_month)) : "";
+      })(),
     }));
     advances.push({
       ...r,
@@ -815,14 +1244,33 @@ export async function pnlReport(
   const invIds = (invs ?? []).map((i) => i.id);
   let transport = 0;
   let vatCollected = 0;
+  let direct = 0;
   if (invIds.length) {
     const { data: trips } = await supabase
       .from("invoice_trips")
-      .select("invoice_id, price")
+      .select("id, invoice_id, price")
       .in("invoice_id", invIds);
     const subByInv = new Map<number, number>();
+    const invOfTrip = new Map<number, number>();
     for (const t of trips ?? []) {
+      invOfTrip.set(t.id, t.invoice_id);
       subByInv.set(t.invoice_id, (subByInv.get(t.invoice_id) ?? 0) + num(t.price));
+    }
+    // المصروف الذي يتحمّله العميل إيراد إضافي (يدخل وعاء الضريبة)، وما عداه تكلفة مباشرة
+    const tripIds = [...invOfTrip.keys()];
+    if (tripIds.length) {
+      const { data: exps } = await supabase
+        .from("trip_expenses")
+        .select("trip_id, amount, source")
+        .in("trip_id", tripIds);
+      for (const e of exps ?? []) {
+        if ((e as { source?: string }).source === "customer") {
+          const iid = invOfTrip.get(e.trip_id);
+          if (iid != null) subByInv.set(iid, (subByInv.get(iid) ?? 0) + num(e.amount));
+        } else {
+          direct += num(e.amount);
+        }
+      }
     }
     const vatMap = new Map((invs ?? []).map((i) => [i.id, num(i.vat_rate)]));
     for (const [iid, sub] of subByInv) {
@@ -838,17 +1286,6 @@ export async function pnlReport(
     "date"
   );
   const otherRev = sum((otherRows ?? []).map((r) => num(r.amount)));
-
-  // المصروفات المباشرة
-  let direct = 0;
-  if (invIds.length) {
-    const { data: trips } = await supabase.from("invoice_trips").select("id").in("invoice_id", invIds);
-    const tripIds = (trips ?? []).map((t) => t.id);
-    if (tripIds.length) {
-      const { data: exps } = await supabase.from("trip_expenses").select("amount").in("trip_id", tripIds);
-      direct = sum((exps ?? []).map((e) => num(e.amount)));
-    }
-  }
 
   const { data: salRows } = await between(supabase.from("payrolls").select("net_salary"), "date");
   const salaries = sum((salRows ?? []).map((r) => num(r.net_salary)));
@@ -871,13 +1308,21 @@ export async function pnlReport(
   );
   const general = sum((genRows ?? []).map((r) => num(r.amount)));
 
+  // سندات الرحلات اليدوية (المتولّدة تلقائياً محتسبة ضمن direct أعلاه)
+  const { data: tripPayRows } = await between(
+    supabase.from("payment_vouchers").select("amount").eq("voucher_type", "trip").is("source_expense_id", null),
+    "date"
+  );
+  const tripPayments = sum((tripPayRows ?? []).map((r) => num(r.amount)));
+
   const totalRev = round2(transport + otherRev);
-  const totalExp = round2(direct + salaries + advances + maintenance + general);
+  const totalExp = round2(direct + tripPayments + salaries + advances + maintenance + general);
   return {
     transport_revenue: round2(transport),
     other_revenue: round2(otherRev),
     total_revenue: totalRev,
     direct_expenses: round2(direct),
+    trip_payments: round2(tripPayments),
     salaries: round2(salaries),
     advances: round2(advances),
     maintenance: round2(maintenance),

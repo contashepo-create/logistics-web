@@ -1,7 +1,7 @@
 "use client";
 
 import { useState } from "react";
-import { useQuery, useQueryClient } from "@tanstack/react-query";
+import { useQuery, useQueryClient, keepPreviousData } from "@tanstack/react-query";
 import { PageFrame, Spinner, ExportBar, TotalsBar, FilterRow, DictSelect } from "@/components/ui";
 import { vehicleReport } from "@/lib/calc";
 import { listVehicles } from "@/lib/repo";
@@ -20,6 +20,7 @@ export default function VehiclesReportPage() {
   const { data, isLoading } = useQuery({
     queryKey: ["report-vehicles", dFrom, dTo, vehicleId],
     queryFn: () => vehicleReport(dFrom, dTo, vehicleId),
+    placeholderData: keepPreviousData,
   });
 
   const headers = ["الكود", "رقم اللوحة", "النوع", "عدد النقلات", "الإيرادات", "مصروفات مباشرة", "صيانة (سندات دفع)", "صافي ربحية السيارة"];

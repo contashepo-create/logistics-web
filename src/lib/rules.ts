@@ -105,3 +105,76 @@ export async function hasOpenYear(): Promise<boolean> {
   const years = await openYears();
   return years.length > 0;
 }
+
+// ---------------------------------------------------------------------------
+// قاعدة: لا يُسمح بأن يصبح رصيد خزينة أو بنك سالباً
+// ---------------------------------------------------------------------------
+function accTable(kind: string): string {
+  return kind === "cashbox" ? "cashboxes" : "banks";
+}
+
+/** الرصيد الحالي لحساب نقدي، مع إمكانية استثناء حركات (سند/راتب) قيد التعديل. */
+export async function currentAccountBalance(
+  kind: string,
+  accountId: number,
+  exclude?: { paymentId?: number | null; payrollId?: number | null; sourceExpenseIds?: number[] }
+): Promise<number> {
+  const { data: acc } = await supabase
+    .from(accTable(kind))
+    .select("opening_balance")
+    .eq("id", accountId)
+    .single();
+  let bal = Number(acc?.opening_balance ?? 0);
+
+  const { data: recs } = await supabase
+    .from("receipt_vouchers")
+    .select("amount")
+    .eq("account_kind", kind)
+    .eq("account_id", accountId);
+  for (const r of recs ?? []) bal += Number(r.amount ?? 0);
+
+  const { data: pays } = await supabase
+    .from("payment_vouchers")
+    .select("id, amount, source_expense_id")
+    .eq("account_kind", kind)
+    .eq("account_id", accountId);
+  for (const p of pays ?? []) {
+    if (exclude?.paymentId && p.id === exclude.paymentId) continue;
+    if (exclude?.sourceExpenseIds?.length && p.source_expense_id != null
+        && exclude.sourceExpenseIds.includes(Number(p.source_expense_id))) continue;
+    bal -= Number(p.amount ?? 0);
+  }
+
+  const { data: sals } = await supabase
+    .from("payrolls")
+    .select("id, net_salary")
+    .eq("account_kind", kind)
+    .eq("account_id", accountId);
+  for (const s of sals ?? []) {
+    if (exclude?.payrollId && s.id === exclude.payrollId) continue;
+    bal -= Number(s.net_salary ?? 0);
+  }
+
+  return Math.round((bal + Number.EPSILON) * 100) / 100;
+}
+
+/** يرفض أي حركة صرف تجعل رصيد الخزينة/البنك سالباً. */
+export async function ensureSufficientFunds(
+  kind: string,
+  accountId: number,
+  outflow: number,
+  exclude?: { paymentId?: number | null; payrollId?: number | null; sourceExpenseIds?: number[] }
+): Promise<void> {
+  const amount = roundMoney(outflow);
+  if (amount <= 0) return;
+  const balance = await currentAccountBalance(kind, accountId, exclude);
+  if (amount > balance + 0.0001) {
+    const { data: acc } = await supabase.from(accTable(kind)).select("name").eq("id", accountId).single();
+    const label = kind === "cashbox" ? "الخزينة" : "البنك";
+    throw new RuleError(
+      `الرصيد لا يكفي: ${label} «${acc?.name ?? ""}» رصيده ${balance.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}` +
+        ` والمطلوب صرفه ${amount.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}.\n` +
+        "لا يُسمح بجعل الرصيد سالباً — سجّل إيداعاً أولاً أو اختر جهة صرف أخرى."
+    );
+  }
+}
