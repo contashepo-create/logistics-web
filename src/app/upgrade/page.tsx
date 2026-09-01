@@ -146,7 +146,7 @@ function UpgradeInner() {
 
             <div className="upg-total">
               <div><span>سعر الباقة (غير شامل الضريبة)</span><b>{money(net)} {CURRENCY}</b></div>
-              <div><span>ضريبة القيمة المضافة {vatRate}%</span><b>{money(vatOf(net))} {CURRENCY}</b></div>
+              <div><span>ضريبة القيمة المضافة {vatRate}%</span><b>{money(net * vatRate / 100)} {CURRENCY}</b></div>
               <div className="grand"><span>المبلغ المطلوب تحويله</span><b>{money(total)} {CURRENCY}</b></div>
             </div>
 
