@@ -819,12 +819,142 @@ table.data-table thead th { position: sticky; top: 0; z-index: 1; }
   .lp-footer-inner { flex-direction: column; }
 }
 
-/* صفوف مصروفات النقلة داخل الفاتورة */
-.exp-row { border: 1px dashed var(--border); border-radius: 10px; padding: 10px; margin-bottom: 10px; background: var(--surface-2); }
-.exp-grid { display: grid; grid-template-columns: 130px 90px 1fr 1fr 44px; gap: 8px; align-items: end; }
+/* ============================================================
+   نموذج فاتورة النقل — بطاقات نقلات ومصروفات (تصميم احترافي)
+   ============================================================ */
+.inv-form { display: grid; gap: 16px; }
+
+/* شريط بيانات الفاتورة العلوي */
+.inv-head-card {
+  border: 1px solid var(--border); border-radius: 14px; padding: 14px 16px;
+  background: linear-gradient(135deg, var(--primary-glow), transparent 70%), var(--card);
+  display: grid; grid-template-columns: 1.4fr 1fr 1fr; gap: 12px; align-items: end;
+}
+
+/* عنوان قسم مع خط فاصل */
+.inv-sec-title {
+  display: flex; align-items: center; justify-content: space-between; gap: 10px;
+  font-weight: 800; font-size: 15px; color: var(--text); margin: 2px 0 10px;
+}
+.inv-sec-title::before {
+  content: ""; width: 4px; height: 18px; border-radius: 4px; background: var(--primary);
+  margin-inline-end: 8px;
+}
+.inv-sec-title > span:first-child { flex: 1; }
+
+/* ---------------- بطاقة النقلة ---------------- */
+.trip-card {
+  border: 1px solid var(--border); border-radius: 14px; background: var(--card);
+  box-shadow: var(--shadow-sm); overflow: hidden; margin-bottom: 14px;
+  border-inline-start: 5px solid var(--primary);
+}
+.trip-card + .trip-card { margin-top: 2px; }
+
+.trip-card-head {
+  display: flex; align-items: center; gap: 10px; flex-wrap: wrap;
+  padding: 10px 14px; background: var(--surface-3);
+  border-bottom: 1px solid var(--border);
+}
+.trip-badge {
+  width: 30px; height: 30px; border-radius: 50%; flex: 0 0 auto;
+  background: var(--primary); color: #fff; font-weight: 800; font-size: 14px;
+  display: inline-flex; align-items: center; justify-content: center;
+}
+.trip-route { font-weight: 700; color: var(--text); font-size: 14.5px; }
+.trip-route .muted { color: var(--muted); font-weight: 500; }
+.trip-head-spacer { flex: 1; }
+.trip-head-amount {
+  font-weight: 800; color: var(--primary-dark); font-size: 15px;
+  background: var(--primary-glow); border-radius: 8px; padding: 4px 10px;
+}
+.trip-card-body { padding: 14px; display: grid; gap: 12px; }
+
+.trip-grid-4 { display: grid; grid-template-columns: 1fr 1fr 1fr 1fr; gap: 10px; }
+.trip-price-box {
+  display: grid; grid-template-columns: 110px 1fr 1fr; gap: 10px; align-items: end;
+  background: var(--surface-2); border: 1px dashed var(--border);
+  border-radius: 10px; padding: 10px;
+}
+
+/* ملخص النقلة (إيراد/تكلفة/صافي) */
+.trip-summary { display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; }
+.trip-sum-item {
+  border: 1px solid var(--border); border-radius: 10px; padding: 8px 10px;
+  background: var(--surface-2); text-align: center;
+}
+.trip-sum-item .k { display: block; font-size: 11.5px; color: var(--muted); margin-bottom: 2px; }
+.trip-sum-item .v { font-weight: 800; font-size: 14.5px; color: var(--text); }
+.trip-sum-item.is-rev .v { color: var(--primary-dark); }
+.trip-sum-item.is-cost .v { color: var(--danger); }
+.trip-sum-item.is-net .v { color: var(--success); }
+
+/* ---------------- مصروفات النقلة ---------------- */
+.exp-block { border-top: 1px dashed var(--border); padding-top: 12px; }
+.exp-empty {
+  border: 1px dashed var(--border); border-radius: 10px; padding: 12px;
+  text-align: center; color: var(--muted); font-size: 13px; background: var(--surface-2);
+}
+.exp-card {
+  border: 1px solid var(--border); border-radius: 12px; background: var(--surface-2);
+  padding: 10px 12px; margin-bottom: 10px; border-inline-start: 4px solid var(--muted);
+}
+.exp-card.src-cash { border-inline-start-color: #2563eb; }
+.exp-card.src-driver { border-inline-start-color: #d97706; }
+.exp-card.src-supplier { border-inline-start-color: #7c3aed; }
+.exp-card.src-customer { border-inline-start-color: #059669; }
+
+.exp-card-head { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin-bottom: 8px; }
+.exp-chip {
+  display: inline-flex; align-items: center; gap: 5px; border-radius: 20px;
+  padding: 3px 10px; font-size: 12px; font-weight: 700; border: 1px solid transparent;
+}
+.exp-chip.src-cash { background: #dbeafe; color: #1d4ed8; border-color: #bfdbfe; }
+.exp-chip.src-driver { background: #fef3c7; color: #b45309; border-color: #fde68a; }
+.exp-chip.src-supplier { background: #ede9fe; color: #6d28d9; border-color: #ddd6fe; }
+.exp-chip.src-customer { background: #d1fae5; color: #047857; border-color: #a7f3d0; }
+.exp-head-total { margin-inline-start: auto; font-weight: 800; color: var(--text); }
+.exp-head-total.is-billable { color: var(--success); }
+
+.exp-grid { display: grid; grid-template-columns: 150px 86px 1fr 1fr 40px; gap: 8px; align-items: end; }
 .exp-grid-2 { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 8px; align-items: end; margin-top: 8px; }
-.exp-hint { color: var(--muted); font-size: 12px; margin-top: 6px; }
+.exp-hint { color: var(--muted); font-size: 11.5px; margin-top: 8px; line-height: 1.6; }
+
+/* ---------------- لوحة إجماليات الفاتورة ---------------- */
+.inv-totals { display: grid; grid-template-columns: 1.15fr 1fr; gap: 14px; align-items: start; }
+.tot-card { border: 1px solid var(--border); border-radius: 14px; overflow: hidden; background: var(--card); }
+.tot-card-head {
+  padding: 9px 14px; font-weight: 800; font-size: 13.5px; color: #fff;
+  display: flex; align-items: center; justify-content: space-between;
+}
+.tot-card.client .tot-card-head { background: linear-gradient(135deg, #1d4ed8, #2563eb); }
+.tot-card.internal .tot-card-head { background: linear-gradient(135deg, #334155, #475569); }
+.tot-card-body { padding: 6px 14px 12px; }
+.tot-line {
+  display: flex; align-items: center; justify-content: space-between; gap: 10px;
+  padding: 7px 0; border-bottom: 1px dashed var(--border-light); font-size: 13.5px;
+}
+.tot-line:last-child { border-bottom: 0; }
+.tot-line .k { color: var(--muted); }
+.tot-line .v { font-weight: 700; color: var(--text); font-variant-numeric: tabular-nums; }
+.tot-line.grand { border-top: 2px solid var(--primary); margin-top: 4px; padding-top: 10px; font-size: 15.5px; }
+.tot-line.grand .k { color: var(--text); font-weight: 800; }
+.tot-line.grand .v { color: var(--primary-dark); font-weight: 800; }
+.tot-line.is-cost .v { color: var(--danger); }
+.tot-line.is-profit .v { color: var(--success); }
+.tot-note { font-size: 11.5px; color: var(--muted); padding: 0 14px 12px; }
+.tot-vat-row { display: flex; align-items: center; gap: 8px; padding: 8px 0 2px; }
+.tot-vat-row label { font-size: 13px; color: var(--muted); }
+.tot-vat-row input { max-width: 90px; text-align: center; }
+
+@media (max-width: 900px) {
+  .inv-head-card { grid-template-columns: 1fr 1fr; }
+  .inv-totals { grid-template-columns: 1fr; }
+}
 @media (max-width: 720px) {
+  .inv-head-card { grid-template-columns: 1fr; }
+  .trip-grid-4 { grid-template-columns: 1fr 1fr; }
+  .trip-price-box { grid-template-columns: 1fr 1fr; }
+  .trip-summary { grid-template-columns: 1fr; }
   .exp-grid, .exp-grid-2 { grid-template-columns: 1fr 1fr !important; }
   .exp-grid > button { grid-column: span 2; }
 }

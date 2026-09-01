@@ -105,3 +105,64 @@ export function periodLabel(year: number, month: number): string {
 export function clean(text: unknown): string {
   return String(text ?? "").replace(/\s+/g, " ").trim();
 }
+
+// ---------------------------------------------------------------------------
+// تفقيط المبالغ بالعربية (لفاتورة العميل المطبوعة)
+// ---------------------------------------------------------------------------
+const ONES = ["", "واحد", "اثنان", "ثلاثة", "أربعة", "خمسة", "ستة", "سبعة", "ثمانية", "تسعة",
+  "عشرة", "أحد عشر", "اثنا عشر", "ثلاثة عشر", "أربعة عشر", "خمسة عشر", "ستة عشر",
+  "سبعة عشر", "ثمانية عشر", "تسعة عشر"];
+const TENS = ["", "", "عشرون", "ثلاثون", "أربعون", "خمسون", "ستون", "سبعون", "ثمانون", "تسعون"];
+const HUNDREDS = ["", "مائة", "مائتان", "ثلاثمائة", "أربعمائة", "خمسمائة", "ستمائة", "سبعمائة", "ثمانمائة", "تسعمائة"];
+
+function below1000(n: number): string {
+  const parts: string[] = [];
+  const h = Math.floor(n / 100);
+  const rest = n % 100;
+  if (h) parts.push(HUNDREDS[h]);
+  if (rest) {
+    if (rest < 20) parts.push(ONES[rest]);
+    else {
+      const u = rest % 10;
+      const t = Math.floor(rest / 10);
+      parts.push(u ? `${ONES[u]} و${TENS[t]}` : TENS[t]);
+    }
+  }
+  return parts.join(" و");
+}
+
+function groupWord(count: number, forms: [string, string, string, string]): string {
+  // forms: [مفرد, مثنى, جمع (3-10), تمييز (11+)]
+  if (count === 1) return forms[0];
+  if (count === 2) return forms[1];
+  if (count >= 3 && count <= 10) return `${below1000(count)} ${forms[2]}`;
+  return `${below1000(count)} ${forms[3]}`;
+}
+
+/** تحويل رقم صحيح إلى كلمات عربية (حتى المليارات) */
+export function numberToArabicWords(value: number): string {
+  let n = Math.floor(Math.abs(value));
+  if (n === 0) return "صفر";
+  const chunks: { count: number; forms: [string, string, string, string] }[] = [
+    { count: Math.floor(n / 1_000_000_000), forms: ["مليار", "ملياران", "مليارات", "مليار"] },
+    { count: Math.floor((n % 1_000_000_000) / 1_000_000), forms: ["مليون", "مليونان", "ملايين", "مليون"] },
+    { count: Math.floor((n % 1_000_000) / 1000), forms: ["ألف", "ألفان", "آلاف", "ألفاً"] },
+  ];
+  const words: string[] = [];
+  for (const c of chunks) if (c.count) words.push(groupWord(c.count, c.forms));
+  n = n % 1000;
+  if (n) words.push(below1000(n));
+  return words.join(" و");
+}
+
+/** تفقيط مبلغ مالي: "أربعة آلاف وخمسمائة جنيه و٥٠ قرشاً فقط لا غير" */
+export function amountToArabicWords(amount: number, currency = "جنيه", fraction = "قرش"): string {
+  const negative = amount < 0;
+  const rounded = Math.round(Math.abs(amount) * 100) / 100;
+  const whole = Math.floor(rounded);
+  const cents = Math.round((rounded - whole) * 100);
+  let out = `${numberToArabicWords(whole)} ${currency}`;
+  if (cents) out += ` و${numberToArabicWords(cents)} ${fraction}`;
+  out += " فقط لا غير";
+  return negative ? `سالب ${out}` : out;
+}

@@ -5,7 +5,7 @@ import { Modal, Field, Input, Select, Textarea, AmountInput, DateInput, Button, 
 import { notify } from "@/components/toast";
 import { listCustomers, listEmployees, listVehicles, saveInvoice, saveReceipt, savePayment, getReceipt, getPayment, companyInfo, currentVatRate } from "@/lib/repo";
 import { getInvoiceFull, allAccounts, tripsOptions, tripProfit } from "@/lib/calc";
-import { money, todayIso, EXPENSE_TYPES, EXPENSE_SOURCES, EXPENSE_SOURCE_HINTS, PAYMENT_TYPES, RECEIPT_TYPES, VEHICLE_EXPENSES } from "@/lib/format";
+import { money, todayIso, amountToArabicWords, EXPENSE_TYPES, EXPENSE_SOURCES, EXPENSE_SOURCE_HINTS, PAYMENT_TYPES, RECEIPT_TYPES, VEHICLE_EXPENSES } from "@/lib/format";
 
 type ExpRow = {
   id?: number;
@@ -148,161 +148,259 @@ export function InvoiceDialog({ id, readOnly, onClose }: { id?: number | null; r
     }
   };
 
-  return (
-    <Modal title={id ? "تعديل فاتورة نقل" : "فاتورة نقل جديدة"} onClose={() => onClose()} width={920}>
-      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
-        <Field label="العميل" required>
-          <Select value={f.customer_id} onChange={(e) => setF({ ...f, customer_id: e.target.value })}>
-            <option value="">— اختر العميل —</option>
-            {customers.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
-          </Select>
-        </Field>
-        <Field label="التاريخ" required><DateInput value={f.date} onChange={(v) => setF({ ...f, date: v })} /></Field>
-      </div>
+  const perTrip = (t: TripRow) => {
+    let cost = 0, billable = 0;
+    for (const e of t.expenses) (e.source === "customer" ? (billable += expLineTotal(e)) : (cost += expLineTotal(e)));
+    const revenue = tripLineTotal(t) + billable;
+    return { cost, billable, revenue, net: Math.round((revenue - cost) * 100) / 100 };
+  };
 
-      <div className="group-box">
-        <div className="group-title">النقلات</div>
-        {trips.map((t, i) => (
-          <div key={i} className="trip-row">
-            <div className="trip-row-head">
-              <span>نقلة {i + 1}</span>
-              <button className="btn-row-danger" onClick={() => delTrip(i)}>حذف النقلة</button>
-            </div>
-            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
-              <Field label="من"><Input value={t.from_loc} onChange={(e) => updTrip(i, { from_loc: e.target.value })} /></Field>
-              <Field label="إلى"><Input value={t.to_loc} onChange={(e) => updTrip(i, { to_loc: e.target.value })} /></Field>
-              <Field label="السيارة">
-                <Select value={t.vehicle_id} onChange={(e) => updTrip(i, { vehicle_id: e.target.value })}>
-                  <option value="">—</option>
-                  {vehicles.map((v) => <option key={v.id} value={v.id}>{v.plate_number}</option>)}
-                </Select>
-              </Field>
-              <Field label="السائق">
-                <Select value={t.driver_id} onChange={(e) => updTrip(i, { driver_id: e.target.value })}>
-                  <option value="">—</option>
-                  {drivers.map((d) => <option key={d.id} value={d.id}>{d.name}</option>)}
-                </Select>
-              </Field>
-            </div>
-            <div style={{ display: "grid", gridTemplateColumns: "110px 1fr 1fr", gap: 10, alignItems: "end" }}>
-              <Field label="عدد النقلات" required>
-                <Input type="number" min={1} step={1} dir="ltr" style={{ textAlign: "center" }}
-                  value={t.qty} onChange={(e) => updTrip(i, { qty: e.target.value })} />
-              </Field>
-              <Field label="سعر النقلة الواحدة" required>
-                <AmountInput value={t.unit_price} onChange={(v) => updTrip(i, { unit_price: v })} />
-              </Field>
-              <Field label="إجمالي السطر">
-                <Input value={money(tripLineTotal(t))} readOnly />
-              </Field>
-            </div>
-            <Field label="ملاحظات"><Input value={t.notes} onChange={(e) => updTrip(i, { notes: e.target.value })} /></Field>
-            <div className="expenses-head">
-              <span className="section-label">مصروفات النقلة (لكل مصروف مصدر تمويل)</span>
-              <button className="btn" onClick={() => addExp(i)}>+ مصروف</button>
-            </div>
-            {t.expenses.map((e, j) => (
-              <div key={j} className="exp-row">
-                <div className="exp-grid">
-                  <Field label="النوع">
-                    <Select value={e.expense_type} onChange={(ev) => updExp(i, j, { expense_type: ev.target.value })}>
-                      {Object.entries(EXPENSE_TYPES).map(([k, v]) => <option key={k} value={k}>{v}</option>)}
-                    </Select>
-                  </Field>
-                  <Field label="العدد">
-                    <Input type="number" min={1} step={1} dir="ltr" style={{ textAlign: "center" }}
-                      value={e.qty} onChange={(ev) => updExp(i, j, { qty: ev.target.value })} />
-                  </Field>
-                  <Field label="قيمة الوحدة">
-                    <AmountInput value={e.unit_amount} onChange={(v) => updExp(i, j, { unit_amount: v })} />
-                  </Field>
-                  <Field label="الإجمالي">
-                    <Input value={money(expLineTotal(e))} readOnly />
-                  </Field>
-                  <button className="btn btn-danger" title="حذف المصروف" onClick={() => delExp(i, j)}>✕</button>
+  const srcClass = (src: string) => `src-${src}`;
+  const currency = "";
+
+  return (
+    <Modal title={id ? `تعديل فاتورة نقل` : "فاتورة نقل جديدة"} onClose={() => onClose()} width={980}>
+      <div className="inv-form">
+        {/* ------------------------- بيانات الفاتورة ------------------------- */}
+        <div className="inv-head-card">
+          <Field label="العميل" required>
+            <Select value={f.customer_id} onChange={(e) => setF({ ...f, customer_id: e.target.value })} disabled={readOnly}>
+              <option value="">— اختر العميل —</option>
+              {customers.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
+            </Select>
+          </Field>
+          <Field label="تاريخ الفاتورة" required>
+            <DateInput value={f.date} onChange={(v) => setF({ ...f, date: v })} />
+          </Field>
+          <Field label="عدد النقلات في الفاتورة">
+            <Input value={`${trips.length} سطر — ${trips.reduce((a, t) => a + Math.max(1, n(t.qty) || 1), 0)} نقلة`} readOnly />
+          </Field>
+        </div>
+
+        {/* ------------------------- النقلات ------------------------- */}
+        <div>
+          <div className="inv-sec-title">
+            <span>بنود النقل</span>
+            {!readOnly && <button className="btn btn-primary" onClick={addTrip}>＋ إضافة نقلة</button>}
+          </div>
+
+          {trips.length === 0 && (
+            <div className="exp-empty">لا توجد نقلات بعد — اضغط «إضافة نقلة» لبدء تسجيل بنود الفاتورة.</div>
+          )}
+
+          {trips.map((t, i) => {
+            const st = perTrip(t);
+            return (
+              <div key={i} className="trip-card">
+                <div className="trip-card-head">
+                  <span className="trip-badge">{i + 1}</span>
+                  <span className="trip-route">
+                    {t.from_loc || <span className="muted">من …</span>}
+                    <span className="muted"> ← </span>
+                    {t.to_loc || <span className="muted">إلى …</span>}
+                    {Math.max(1, n(t.qty) || 1) > 1 && <span className="muted">{`  ×${Math.max(1, n(t.qty) || 1)} نقلة`}</span>}
+                  </span>
+                  <span className="trip-head-spacer" />
+                  <span className="trip-head-amount">{money(st.revenue)}</span>
+                  {!readOnly && <button className="btn-row-danger" onClick={() => delTrip(i)}>حذف النقلة</button>}
                 </div>
 
-                <div className="exp-grid-2">
-                  <Field label="مصدر التمويل" required>
-                    <Select value={e.source} onChange={(ev) => {
-                      const src = ev.target.value;
-                      const acc = defaultAccount();
-                      updExp(i, j, {
-                        source: src,
-                        account_kind: src === "cash" ? (e.account_kind || acc.kind) : "",
-                        account_id: src === "cash" ? (e.account_id || acc.id) : "",
-                      });
-                    }}>
-                      {Object.entries(EXPENSE_SOURCES).map(([k, v]) => <option key={k} value={k}>{v}</option>)}
-                    </Select>
-                  </Field>
-
-                  {e.source === "cash" && (
-                    <Field label="من الخزينة / البنك" required>
-                      <Select value={e.account_kind && e.account_id ? `${e.account_kind}:${e.account_id}` : ""}
-                        onChange={(ev) => {
-                          const [kind, id] = ev.target.value.split(":");
-                          updExp(i, j, { account_kind: kind ?? "", account_id: id ?? "" });
-                        }}>
-                        <option value="">— اختر —</option>
-                        {accounts.map((a) => (
-                          <option key={`${a.kind}:${a.id}`} value={`${a.kind}:${a.id}`}>{a.label}</option>
-                        ))}
+                <div className="trip-card-body">
+                  <div className="trip-grid-4">
+                    <Field label="من" required><Input value={t.from_loc} onChange={(e) => updTrip(i, { from_loc: e.target.value })} readOnly={readOnly} /></Field>
+                    <Field label="إلى" required><Input value={t.to_loc} onChange={(e) => updTrip(i, { to_loc: e.target.value })} readOnly={readOnly} /></Field>
+                    <Field label="السيارة">
+                      <Select value={t.vehicle_id} onChange={(e) => updTrip(i, { vehicle_id: e.target.value })} disabled={readOnly}>
+                        <option value="">—</option>
+                        {vehicles.map((v) => <option key={v.id} value={v.id}>{v.plate_number}</option>)}
                       </Select>
                     </Field>
-                  )}
-                  {e.source === "supplier" && (
-                    <Field label="المورد / المحطة" required>
-                      <Input value={e.supplier_name} onChange={(ev) => updExp(i, j, { supplier_name: ev.target.value })} />
-                    </Field>
-                  )}
-                  {e.source === "driver" && (
                     <Field label="السائق">
-                      <Input value={drivers.find((d) => String(d.id) === t.driver_id)?.name ?? "— حدّد السائق أعلاه —"} readOnly />
+                      <Select value={t.driver_id} onChange={(e) => updTrip(i, { driver_id: e.target.value })} disabled={readOnly}>
+                        <option value="">—</option>
+                        {drivers.map((d) => <option key={d.id} value={d.id}>{d.name}</option>)}
+                      </Select>
                     </Field>
-                  )}
-                  {e.source === "customer" && (
-                    <Field label="الأثر">
-                      <Input value="يُضاف على الفاتورة (إيراد وليس تكلفة)" readOnly />
-                    </Field>
-                  )}
+                  </div>
 
-                  <Field label="بيان"><Input value={e.notes} onChange={(ev) => updExp(i, j, { notes: ev.target.value })} /></Field>
+                  <div className="trip-price-box">
+                    <Field label="عدد النقلات" required>
+                      <Input type="number" min={1} step={1} dir="ltr" style={{ textAlign: "center" }}
+                        value={t.qty} onChange={(e) => updTrip(i, { qty: e.target.value })} readOnly={readOnly} />
+                    </Field>
+                    <Field label="سعر النقلة الواحدة" required>
+                      <AmountInput value={t.unit_price} onChange={(v) => updTrip(i, { unit_price: v })} />
+                    </Field>
+                    <Field label="إجمالي بند النقل">
+                      <Input value={money(tripLineTotal(t))} readOnly />
+                    </Field>
+                  </div>
+
+                  <Field label="ملاحظات النقلة"><Input value={t.notes} onChange={(e) => updTrip(i, { notes: e.target.value })} readOnly={readOnly} /></Field>
+
+                  {/* ------------------ مصروفات هذه النقلة ------------------ */}
+                  <div className="exp-block">
+                    <div className="inv-sec-title">
+                      <span>{`مصروفات النقلة ${i + 1}`}</span>
+                      {!readOnly && <button className="btn" onClick={() => addExp(i)}>＋ مصروف</button>}
+                    </div>
+
+                    {t.expenses.length === 0 && (
+                      <div className="exp-empty">لا مصروفات على هذه النقلة.</div>
+                    )}
+
+                    {t.expenses.map((e, j) => (
+                      <div key={j} className={`exp-card ${srcClass(e.source)}`}>
+                        <div className="exp-card-head">
+                          <span className={`exp-chip ${srcClass(e.source)}`}>{EXPENSE_SOURCES[e.source] ?? e.source}</span>
+                          <span style={{ color: "var(--muted)", fontSize: 12.5 }}>
+                            {EXPENSE_TYPES[e.expense_type] ?? e.expense_type}
+                            {n(e.qty) > 1 ? ` × ${n(e.qty)}` : ""}
+                          </span>
+                          <span className={`exp-head-total ${e.source === "customer" ? "is-billable" : ""}`}>
+                            {money(expLineTotal(e))}{e.source === "customer" ? " (على العميل)" : ""}
+                          </span>
+                        </div>
+
+                        <div className="exp-grid">
+                          <Field label="نوع المصروف">
+                            <Select value={e.expense_type} onChange={(ev) => updExp(i, j, { expense_type: ev.target.value })} disabled={readOnly}>
+                              {Object.entries(EXPENSE_TYPES).map(([k, v]) => <option key={k} value={k}>{v}</option>)}
+                            </Select>
+                          </Field>
+                          <Field label="العدد">
+                            <Input type="number" min={1} step={1} dir="ltr" style={{ textAlign: "center" }}
+                              value={e.qty} onChange={(ev) => updExp(i, j, { qty: ev.target.value })} readOnly={readOnly} />
+                          </Field>
+                          <Field label="قيمة الوحدة">
+                            <AmountInput value={e.unit_amount} onChange={(v) => updExp(i, j, { unit_amount: v })} />
+                          </Field>
+                          <Field label="إجمالي المصروف">
+                            <Input value={money(expLineTotal(e))} readOnly />
+                          </Field>
+                          {!readOnly && (
+                            <button className="btn btn-danger" title="حذف المصروف" onClick={() => delExp(i, j)}>✕</button>
+                          )}
+                        </div>
+
+                        <div className="exp-grid-2">
+                          <Field label="مصدر التمويل" required>
+                            <Select value={e.source} onChange={(ev) => {
+                              const src = ev.target.value;
+                              const acc = defaultAccount();
+                              updExp(i, j, {
+                                source: src,
+                                account_kind: src === "cash" ? (e.account_kind || acc.kind) : "",
+                                account_id: src === "cash" ? (e.account_id || acc.id) : "",
+                              });
+                            }} disabled={readOnly}>
+                              {Object.entries(EXPENSE_SOURCES).map(([k, v]) => <option key={k} value={k}>{v}</option>)}
+                            </Select>
+                          </Field>
+
+                          {e.source === "cash" && (
+                            <Field label="من الخزينة / البنك" required>
+                              <Select value={e.account_kind && e.account_id ? `${e.account_kind}:${e.account_id}` : ""}
+                                onChange={(ev) => {
+                                  const [kind, aid] = ev.target.value.split(":");
+                                  updExp(i, j, { account_kind: kind ?? "", account_id: aid ?? "" });
+                                }} disabled={readOnly}>
+                                <option value="">— اختر —</option>
+                                {accounts.map((a) => (
+                                  <option key={`${a.kind}:${a.id}`} value={`${a.kind}:${a.id}`}>{a.label}</option>
+                                ))}
+                              </Select>
+                            </Field>
+                          )}
+                          {e.source === "supplier" && (
+                            <Field label="المورد / المحطة" required>
+                              <Input value={e.supplier_name} onChange={(ev) => updExp(i, j, { supplier_name: ev.target.value })} readOnly={readOnly} />
+                            </Field>
+                          )}
+                          {e.source === "driver" && (
+                            <Field label="السائق (عهدة)">
+                              <Input value={drivers.find((d) => String(d.id) === t.driver_id)?.name ?? "— حدّد السائق أعلاه —"} readOnly />
+                            </Field>
+                          )}
+                          {e.source === "customer" && (
+                            <Field label="الأثر على الفاتورة">
+                              <Input value="بند إضافي على العميل (إيراد وليس تكلفة)" readOnly />
+                            </Field>
+                          )}
+
+                          <Field label="بيان المصروف"><Input value={e.notes} onChange={(ev) => updExp(i, j, { notes: ev.target.value })} readOnly={readOnly} /></Field>
+                        </div>
+
+                        <div className="exp-hint">{EXPENSE_SOURCE_HINTS[e.source]}</div>
+                      </div>
+                    ))}
+                  </div>
+
+                  {/* ------------------ ملخص النقلة ------------------ */}
+                  <div className="trip-summary">
+                    <div className="trip-sum-item is-rev"><span className="k">إيراد النقلة</span><span className="v">{money(st.revenue)}</span></div>
+                    <div className="trip-sum-item is-cost"><span className="k">تكلفة المصروفات</span><span className="v">{money(st.cost)}</span></div>
+                    <div className="trip-sum-item is-net"><span className="k">صافي النقلة</span><span className="v">{money(st.net)}</span></div>
+                  </div>
                 </div>
-                <div className="exp-hint">{EXPENSE_SOURCE_HINTS[e.source]}</div>
               </div>
-            ))}
+            );
+          })}
+        </div>
+
+        {/* ------------------------- الإجماليات ------------------------- */}
+        <div className="inv-totals">
+          <div className="tot-card client">
+            <div className="tot-card-head"><span>ما يُطالَب به العميل</span><span>فاتورة رقم {id ? id : "جديدة"}</span></div>
+            <div className="tot-card-body">
+              <div className="tot-line"><span className="k">إجمالي بنود النقل</span><span className="v">{money(totals.tripsTotal)}{currency}</span></div>
+              <div className="tot-line"><span className="k">بنود يتحمّلها العميل</span><span className="v">{money(totals.billable)}</span></div>
+              <div className="tot-line"><span className="k">الإجمالي قبل الضريبة</span><span className="v">{money(totals.subtotal)}</span></div>
+              <div className="tot-line">
+                <span className="k">
+                  <span className="tot-vat-row">
+                    <label>ضريبة القيمة المضافة %</label>
+                    <AmountInput value={f.vat_rate} onChange={(v) => setF({ ...f, vat_rate: v })} />
+                  </span>
+                </span>
+                <span className="v">{money(totals.vat)}</span>
+              </div>
+              <div className="tot-line grand"><span className="k">الإجمالي المستحق</span><span className="v">{money(totals.total)}</span></div>
+            </div>
           </div>
-        ))}
-        {!readOnly && <button className="btn" onClick={addTrip}>+ إضافة نقلة</button>}
-      </div>
 
-      <div className="group-box">
-        <div className="group-title">الضريبة والإجمالي</div>
-        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 12 }}>
-          <Field label="إجمالي النقلات"><Input value={money(totals.tripsTotal)} readOnly /></Field>
-          <Field label="مصروفات يتحمّلها العميل"><Input value={money(totals.billable)} readOnly /></Field>
-          <Field label="الإجمالي قبل الضريبة"><Input value={money(totals.subtotal)} readOnly /></Field>
-          <Field label="نسبة ضريبة القيمة المضافة %"><AmountInput value={f.vat_rate} onChange={(v) => setF({ ...f, vat_rate: v })} /></Field>
-          <Field label="الضريبة"><Input value={money(totals.vat)} readOnly /></Field>
-          <Field label="الإجمالي شامل الضريبة"><Input value={money(totals.total)} readOnly /></Field>
+          <div className="tot-card internal">
+            <div className="tot-card-head"><span>ملخص داخلي (لا يظهر للعميل)</span><span>🔒</span></div>
+            <div className="tot-card-body">
+              <div className="tot-line is-cost"><span className="k">تكلفة المصروفات على الشركة</span><span className="v">{money(totals.cost)}</span></div>
+              <div className="tot-line is-profit"><span className="k">الربح المتوقع</span><span className="v">{money(totals.profit)}</span></div>
+              <div className="tot-line">
+                <span className="k">هامش الربح</span>
+                <span className="v">{totals.subtotal > 0 ? `${Math.round((totals.profit / totals.subtotal) * 1000) / 10}%` : "—"}</span>
+              </div>
+            </div>
+            <div className="tot-note">التكاليف والأرباح لأغراض الإدارة فقط، ولا تُطبع ضمن فاتورة العميل.</div>
+          </div>
         </div>
-        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12, marginTop: 10 }}>
-          <Field label="تكلفة المصروفات (على الشركة)"><Input value={money(totals.cost)} readOnly /></Field>
-          <Field label="الربح المتوقع من الفاتورة"><Input value={money(totals.profit)} readOnly /></Field>
-        </div>
+
+        <Field label="ملاحظات الفاتورة (تظهر للعميل)">
+          <Textarea value={f.notes} onChange={(e) => setF({ ...f, notes: e.target.value })} readOnly={readOnly} />
+        </Field>
+        <Field label="المرفقات">
+          <Input type="file" multiple onChange={async (e) => {
+            const files = Array.from(e.target.files ?? []);
+            setAttachments((p) => [...p, ...files.map((x) => x.name)]);
+          }} />
+          {attachments.length > 0 && <div style={{ marginTop: 6, color: "var(--muted)" }}>{attachments.join("، ")}</div>}
+        </Field>
+
+        {!readOnly && (
+          <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
+            <Button variant="primary" onClick={save} disabled={saving}>💾 حفظ الفاتورة</Button>
+            {id ? <Button onClick={() => printCustomerInvoice(id)}>🖨️ طباعة فاتورة العميل</Button> : null}
+          </div>
+        )}
       </div>
-
-      <Field label="ملاحظات الفاتورة"><Textarea value={f.notes} onChange={(e) => setF({ ...f, notes: e.target.value })} /></Field>
-      <Field label="المرفقات">
-        <Input type="file" multiple onChange={async (e) => {
-          const files = Array.from(e.target.files ?? []);
-          setAttachments((p) => [...p, ...files.map((x) => x.name)]);
-        }} />
-        {attachments.length > 0 && <div style={{ marginTop: 6, color: "var(--muted)" }}>{attachments.join("، ")}</div>}
-      </Field>
-
-      {!readOnly && <div style={{ marginTop: 14 }}><Button variant="primary" onClick={save} disabled={saving}>💾 حفظ الفاتورة</Button></div>}
     </Modal>
   );
 }
@@ -509,56 +607,157 @@ export function PaymentDialog({ id, readOnly, onClose }: { id?: number | null; r
 }
 
 /* ============================ فاتورة العميل (طباعة / PDF) ============================ */
-async function customerInvoiceHtml(invoiceId: number): Promise<{ html: string; number: number } | null> {
+/**
+ * فاتورة بيع للعميل: تعرض ما يُطالَب به فقط (بنود النقل + البنود التي يتحمّلها العميل
+ * + الضريبة). لا تُعرض أي تكاليف أو أرباح أو مصادر تمويل أو موردين أو سائقين.
+ */
+export async function customerInvoiceHtml(invoiceId: number): Promise<{ html: string; number: number } | null> {
   const inv = await getInvoiceFull(invoiceId);
   if (!inv) return null;
   const info = await companyInfo();
+  const cur = info.currency || "ر.س";
   const billable = inv.billable_total ?? 0;
-  const subtotal = inv.trips_total + billable;
-  const vat = inv.vat_amount ?? Math.round(subtotal * (inv.vat_rate ?? 0)) / 100;
-  const total = subtotal + vat;
+  const subtotal = Math.round((inv.trips_total + billable) * 100) / 100;
+  const vatRate = inv.vat_rate ?? 0;
+  const vat = inv.vat_amount ?? Math.round(subtotal * vatRate) / 100;
+  const total = Math.round((subtotal + vat) * 100) / 100;
+  const num = String(inv.number).padStart(5, "0");
 
-  const tripRows = inv.trips
-    .map((t, i) => `<tr>
-      <td>${i + 1}</td>
-      <td>${esc(t.from_loc)}</td><td>${esc(t.to_loc)}</td>
-      <td>${t.qty ?? 1}</td>
-      <td>${money(t.unit_price || t.price)}</td>
-      <td>${money(t.price)}</td>
-    </tr>`)
-    .join("");
+  const cell = (v: string, align = "center", extra = "") =>
+    `<td style="padding:9px 10px;border-bottom:1px solid #e6ebf2;text-align:${align};${extra}">${v}</td>`;
 
-  // المصروفات التي يتحمّلها العميل تظهر كبنود إضافية على الفاتورة
+  let idx = 0;
+  const tripRows = inv.trips.map((t) => {
+    idx += 1;
+    const desc = `<b>خدمة نقل: ${esc(t.from_loc || "—")} ← ${esc(t.to_loc || "—")}</b>` +
+      (t.notes ? `<div style="color:#64748b;font-size:11.5px;margin-top:2px;">${esc(t.notes)}</div>` : "");
+    const bg = idx % 2 === 0 ? "background:#fafbfd;" : "";
+    return `<tr style="${bg}">` +
+      cell(String(idx)) + cell(desc, "right") +
+      cell(String(t.qty ?? 1)) + cell(money(t.unit_price || t.price)) +
+      cell(money(t.price), "center", "font-weight:700;") + "</tr>";
+  }).join("");
+
+  // بنود إضافية يتحمّلها العميل (بلا أي إشارة لمصدر التمويل أو المورد)
   const billableRows = inv.trips
     .flatMap((t) => (t.expenses ?? []).filter((e) => e.source === "customer").map((e) => ({ t, e })))
-    .map(({ t, e }, i) => `<tr>
-      <td>${inv.trips.length + i + 1}</td>
-      <td colspan="2">${esc(e.notes || "مصروف مُعاد تحميله")} (${esc(t.from_loc)} ← ${esc(t.to_loc)})</td>
-      <td>${e.qty ?? 1}</td>
-      <td>${money(e.unit_amount || e.amount)}</td>
-      <td>${money(e.amount)}</td>
-    </tr>`)
-    .join("");
+    .map(({ t, e }) => {
+      idx += 1;
+      const label = esc(e.notes || EXPENSE_TYPES[e.expense_type] || "بند إضافي");
+      const desc = `<b>${label}</b><div style="color:#64748b;font-size:11.5px;margin-top:2px;">${esc(t.from_loc || "")} ← ${esc(t.to_loc || "")}</div>`;
+      const bg = idx % 2 === 0 ? "background:#fafbfd;" : "";
+      return `<tr style="${bg}">` +
+        cell(String(idx)) + cell(desc, "right") +
+        cell(String(e.qty ?? 1)) + cell(money(e.unit_amount || e.amount)) +
+        cell(money(e.amount), "center", "font-weight:700;") + "</tr>";
+    }).join("");
 
-  const rows = tripRows + billableRows;
+  const totalLine = (k: string, v: string, strong = false) =>
+    `<tr>
+      <td style="padding:7px 12px;color:${strong ? "#0f172a" : "#475569"};font-weight:${strong ? 800 : 500};font-size:${strong ? "14.5px" : "13px"};">${k}</td>
+      <td style="padding:7px 12px;text-align:left;font-weight:${strong ? 800 : 700};color:${strong ? "#1d4ed8" : "#0f172a"};font-size:${strong ? "15px" : "13px"};white-space:nowrap;">${v}</td>
+    </tr>`;
 
-  const html = `<div style="font-family:'IBM Plex Sans Arabic','Segoe UI',Tahoma,sans-serif;color:#111;">
-    <div style="display:flex;justify-content:space-between;border-bottom:2px solid #1f4e79;padding-bottom:12px;">
-      <div style="font-weight:700;font-size:18px;color:#1f4e79;">${esc(info.company_name || "شركة النقل")}</div>
-      <div>فاتورة مرجعية<br/><b>رقم: ${inv.number}</b><br/>التاريخ: ${inv.date}</div>
+  const infoBox = (title: string, body: string) => `
+    <div style="flex:1;border:1px solid #e2e8f0;border-radius:10px;overflow:hidden;">
+      <div style="background:#f1f5f9;padding:6px 12px;font-size:11.5px;font-weight:700;color:#475569;letter-spacing:.2px;">${title}</div>
+      <div style="padding:10px 12px;font-size:13px;line-height:1.9;">${body}</div>
+    </div>`;
+
+  const html = `
+  <div style="font-family:'IBM Plex Sans Arabic','Segoe UI',Tahoma,sans-serif;color:#0f172a;direction:rtl;">
+
+    <!-- ترويسة -->
+    <table width="100%" style="border-collapse:collapse;margin-bottom:14px;">
+      <tr>
+        <td style="vertical-align:top;">
+          <div style="font-size:21px;font-weight:800;color:#1d4ed8;line-height:1.4;">${esc(info.company_name || "شركة النقل")}</div>
+          <div style="font-size:12px;color:#64748b;line-height:1.9;">
+            ${info.company_address ? esc(info.company_address) + "<br/>" : ""}
+            ${info.company_phone ? "هاتف: " + esc(info.company_phone) : ""}
+          </div>
+        </td>
+        <td style="vertical-align:top;text-align:left;width:230px;">
+          <div style="background:#1d4ed8;color:#fff;border-radius:10px;padding:10px 14px;text-align:center;">
+            <div style="font-size:16px;font-weight:800;letter-spacing:.5px;">فاتورة نقل</div>
+            <div style="font-size:12.5px;opacity:.92;margin-top:2px;">TAX INVOICE</div>
+          </div>
+          <table width="100%" style="margin-top:8px;border-collapse:collapse;font-size:12.5px;">
+            <tr><td style="padding:3px 0;color:#64748b;">رقم الفاتورة</td><td style="padding:3px 0;text-align:left;font-weight:800;">INV-${num}</td></tr>
+            <tr><td style="padding:3px 0;color:#64748b;">التاريخ</td><td style="padding:3px 0;text-align:left;font-weight:700;">${esc(inv.date)}</td></tr>
+          </table>
+        </td>
+      </tr>
+    </table>
+
+    <div style="height:3px;background:linear-gradient(90deg,#1d4ed8,#60a5fa 60%,transparent);border-radius:3px;margin-bottom:14px;"></div>
+
+    <!-- بيانات العميل والدفع -->
+    <div style="display:flex;gap:12px;margin-bottom:14px;">
+      ${infoBox("فاتورة إلى (العميل)", `
+        <div style="font-weight:800;font-size:14px;">${esc(inv.customer?.name ?? "—")}</div>
+        ${inv.customer?.phone ? `<div style="color:#475569;">هاتف: ${esc(inv.customer.phone)}</div>` : ""}
+        ${inv.customer?.address ? `<div style="color:#475569;">${esc(inv.customer.address)}</div>` : ""}
+      `)}
+      ${infoBox("ملخص الفاتورة", `
+        <div>عدد البنود: <b>${idx}</b></div>
+        <div>العملة: <b>${esc(cur)}</b></div>
+        <div>الإجمالي المستحق: <b style="color:#1d4ed8;">${money(total)} ${esc(cur)}</b></div>
+      `)}
     </div>
-    <h2 style="color:#1f4e79;margin:6px 0;">فاتورة نقل — ${esc(inv.customer?.name ?? "")}</h2>
-    <div>العميل: ${esc(inv.customer?.name ?? "")}${inv.customer?.phone ? " — هاتف: " + esc(inv.customer.phone) : ""}</div>
-    <table width="100%" border="1" cellspacing="0" cellpadding="6" style="border-collapse:collapse;margin-top:12px;font-size:13px;">
-      <thead><tr style="background:#eef3f9;"><th>#</th><th>من</th><th>إلى</th><th>العدد</th><th>سعر الوحدة</th><th>الإجمالي (${esc(info.currency || "ر.س")})</th></tr></thead>
-      <tbody>${rows}</tbody>
+
+    <!-- بنود الفاتورة -->
+    <table width="100%" style="border-collapse:collapse;font-size:13px;border:1px solid #e2e8f0;border-radius:10px;overflow:hidden;">
+      <thead>
+        <tr style="background:#1d4ed8;color:#fff;">
+          <th style="padding:10px 8px;width:38px;">#</th>
+          <th style="padding:10px 10px;text-align:right;">بيان الخدمة</th>
+          <th style="padding:10px 8px;width:70px;">العدد</th>
+          <th style="padding:10px 8px;width:110px;">سعر الوحدة</th>
+          <th style="padding:10px 8px;width:120px;">الإجمالي (${esc(cur)})</th>
+        </tr>
+      </thead>
+      <tbody>${tripRows}${billableRows}</tbody>
     </table>
-    <table width="300px" align="left" style="margin-top:14px;border-collapse:collapse;font-size:13px;">
-      <tr><td>الإجمالي قبل الضريبة</td><td align="center">${money(subtotal)}</td></tr>
-      <tr><td>ضريبة القيمة المضافة (${inv.vat_rate ?? 0}%)</td><td align="center">${money(vat)}</td></tr>
-      <tr style="border-top:2px solid #1f4e79;font-weight:700;font-size:15px;"><td>الإجمالي شامل الضريبة</td><td align="center">${money(total)}</td></tr>
+
+    <!-- الإجماليات -->
+    <table width="100%" style="margin-top:14px;border-collapse:collapse;">
+      <tr>
+        <td style="vertical-align:top;padding-inline-end:12px;">
+          <div style="border:1px solid #e2e8f0;border-radius:10px;padding:10px 12px;font-size:12.5px;background:#f8fafc;">
+            <div style="color:#64748b;font-weight:700;margin-bottom:4px;">المبلغ كتابةً</div>
+            <div style="font-weight:700;line-height:1.9;">${esc(amountToArabicWords(total, cur))}</div>
+          </div>
+          ${inv.notes ? `<div style="margin-top:10px;border:1px solid #e2e8f0;border-radius:10px;padding:10px 12px;font-size:12.5px;">
+            <div style="color:#64748b;font-weight:700;margin-bottom:4px;">ملاحظات</div>
+            <div style="line-height:1.9;">${esc(inv.notes)}</div></div>` : ""}
+        </td>
+        <td style="width:300px;vertical-align:top;">
+          <table width="100%" style="border-collapse:collapse;border:1px solid #e2e8f0;border-radius:10px;overflow:hidden;">
+            ${totalLine("الإجمالي قبل الضريبة", `${money(subtotal)} ${esc(cur)}`)}
+            ${totalLine(`ضريبة القيمة المضافة (${vatRate}%)`, `${money(vat)} ${esc(cur)}`)}
+            <tr><td colspan="2" style="padding:0;"><div style="height:2px;background:#1d4ed8;"></div></td></tr>
+            ${totalLine("الإجمالي المستحق", `${money(total)} ${esc(cur)}`, true)}
+          </table>
+        </td>
+      </tr>
     </table>
-    <div style="margin-top:18px;font-size:12px;color:#555;border-top:1px dashed #999;padding-top:8px;">${esc(info.company_vat_note || "فاتورة مرجعية — ضريبة القيمة المضافة")}</div>
+
+    <!-- التوقيعات -->
+    <table width="100%" style="margin-top:26px;border-collapse:collapse;font-size:12.5px;color:#475569;">
+      <tr>
+        <td style="text-align:center;padding-top:6px;">
+          <div style="border-top:1px dashed #94a3b8;padding-top:6px;width:190px;margin:0 auto;">توقيع المستلم</div>
+        </td>
+        <td style="text-align:center;padding-top:6px;">
+          <div style="border-top:1px dashed #94a3b8;padding-top:6px;width:190px;margin:0 auto;">عن الشركة</div>
+        </td>
+      </tr>
+    </table>
+
+    <div style="margin-top:16px;border-top:1px solid #e2e8f0;padding-top:8px;font-size:11.5px;color:#64748b;text-align:center;">
+      ${esc(info.company_vat_note || "شكراً لتعاملكم معنا")}
+    </div>
   </div>`;
 
   return { html, number: inv.number };
