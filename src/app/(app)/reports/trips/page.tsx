@@ -23,8 +23,8 @@ export default function TripsReportPage() {
     placeholderData: keepPreviousData,
   });
 
-  const headers = ["رقم الفاتورة", "التاريخ", "العميل", "الرحلة (من ← إلى)", "السيارة", "السائق", "الإيراد", "مصاريف مباشرة", "مصاريف لاحقة (سندات)", "صافي الربح الفعلي"];
-  const rows = (data ?? []).map((t: any) => [t.invoice, t.date, t.customer, t.route, t.vehicle, t.driver, money(t.revenue), money(t.direct), money(t.later), money(t.net)]);
+  const headers = ["رقم الفاتورة", "التاريخ", "العميل", "الرحلة (من ← إلى)", "السيارة", "السائق", "الإيراد", "مصاريف مباشرة", "تفاصيل مصاريف مباشرة", "مصاريف لاحقة (سندات)", "تفاصيل سندات الصرف", "صافي الربح الفعلي"];
+  const rows = (data ?? []).map((t: any) => [t.invoice, t.date, t.customer, t.route, t.vehicle, t.driver, money(t.revenue), money(t.direct), t.expense_detail, money(t.later), t.payment_detail, money(t.net)]);
   const totals = {
     rev: (data ?? []).reduce((a, t: any) => a + t.revenue, 0),
     direct: (data ?? []).reduce((a, t: any) => a + t.direct, 0),
@@ -42,7 +42,7 @@ export default function TripsReportPage() {
   ];
 
   return (
-    <PageFrame title="تقرير أرباح الفواتير والرحلات" subtitle="الإيرادات − المصاريف المباشرة وقت الفاتورة − المصاريف اللاحقة من سندات الدفع = صافي الربح الفعلي لكل رحلة"
+    <PageFrame title="تقرير أرباح وخسائر كل رحلة" subtitle="الإيرادات − المصاريف المباشرة وقت الفاتورة − المصاريف اللاحقة من سندات الدفع = صافي الربح الفعلي لكل رحلة"
       toolbar={
         <FilterRow dFrom={dFrom} dTo={dTo} onFrom={setDFrom} onTo={setDTo} onRefresh={() => qc.invalidateQueries({ queryKey: ["report-trips"] })}>
           <div><label className="field-label">العميل</label>
@@ -51,9 +51,9 @@ export default function TripsReportPage() {
         </FilterRow>
       }
       exportBar={<ExportBar
-        onExcel={() => exportPage({ title: "تقرير أرباح الفواتير والرحلات", subtitle, headers, rows, summaryLines: summary, mode: "excel" })}
-        onPdf={() => exportPage({ title: "تقرير أرباح الفواتير والرحلات", subtitle, headers, rows, summaryLines: summary, mode: "pdf" })}
-        onPrint={() => exportPage({ title: "تقرير أرباح الفواتير والرحلات", subtitle, headers, rows, summaryLines: summary, mode: "print" })} />}>
+        onExcel={() => exportPage({ title: "تقرير أرباح وخسائر كل رحلة", subtitle, headers, rows, summaryLines: summary, mode: "excel" })}
+        onPdf={() => exportPage({ title: "تقرير أرباح وخسائر كل رحلة", subtitle, headers, rows, summaryLines: summary, mode: "pdf" })}
+        onPrint={() => exportPage({ title: "تقرير أرباح وخسائر كل رحلة", subtitle, headers, rows, summaryLines: summary, mode: "print" })} />}>
       {isLoading ? <Spinner /> : (
         <>
           <div className="table-wrap">
@@ -62,7 +62,7 @@ export default function TripsReportPage() {
               <tbody>
                 {rows.map((r, i) => <tr key={i}>{r.map((c, j) => <td key={j}>{c}</td>)}</tr>)}
                 {!rows.length && <tr><td colSpan={headers.length} style={{ color: "var(--muted)" }}>لا توجد بيانات</td></tr>}
-                <tr style={{ fontWeight: 700 }}><td>الإجمالي</td><td></td><td></td><td></td><td></td><td></td><td>{money(totals.rev)}</td><td>{money(totals.direct)}</td><td>{money(totals.later)}</td><td>{money(totals.net)}</td></tr>
+                <tr style={{ fontWeight: 700 }}><td>الإجمالي</td><td></td><td></td><td></td><td></td><td></td><td>{money(totals.rev)}</td><td>{money(totals.direct)}</td><td></td><td>{money(totals.later)}</td><td></td><td>{money(totals.net)}</td></tr>
               </tbody>
             </table>
           </div>

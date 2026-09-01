@@ -10,7 +10,7 @@ import { customerStatementHtml } from "@/lib/statementDoc";
 import { getCustomer, getAccount, companyInfo } from "@/lib/repo";
 import { buildReportHtml, exportExcel, exportPdfHtml, printHtml } from "@/lib/exporter";
 import { getPrintSettings, printCss } from "@/lib/print";
-import { docOptions } from "@/lib/exportHelper";
+import { docOptions, printMeta } from "@/lib/exportHelper";
 
 function yearStart(): string {
   return `${new Date().getFullYear()}-01-01`;
@@ -36,7 +36,7 @@ export function CustomerStatementDialog({ customerId, onClose }: {
 
   const doExport = async (mode: "excel" | "pdf" | "print") => {
     if (!st) return;
-    const [info, ps] = await Promise.all([companyInfo(), getPrintSettings()]);
+    const [info, ps, meta] = await Promise.all([companyInfo(), getPrintSettings(), printMeta()]);
     const title = `كشف حساب عميل: ${owner}`;
     if (mode === "excel") {
       const summary: [string, string][] = [
@@ -44,6 +44,8 @@ export function CustomerStatementDialog({ customerId, onClose }: {
         ["الرصيد الافتتاحي", money(st.opening)],
         ["إجمالي الفواتير", money(st.invoiced)],
         ["إجمالي التحصيل", money(st.collected)],
+        ["إشعارات مدين", money(st.notes_debit)],
+        ["إشعارات دائن", money(st.notes_credit)],
         ["الرصيد الختامي", balanceText(st.closing)],
       ];
       await exportExcel({ info, title, headers, rows: textRows, summaryLines: summary, defaultName: `${title}.xlsx` });
@@ -67,6 +69,7 @@ export function CustomerStatementDialog({ customerId, onClose }: {
         <div className="stmt-card"><span className="k">الرصيد الافتتاحي</span><span className="v">{money(st?.opening ?? 0)}</span></div>
         <div className="stmt-card"><span className="k">إجمالي الفواتير</span><span className="v">{money(st?.invoiced ?? 0)}</span></div>
         <div className="stmt-card"><span className="k">إجمالي التحصيل</span><span className="v">{money(st?.collected ?? 0)}</span></div>
+        <div className="stmt-card"><span className="k">إشعارات مدين/دائن</span><span className="v">{money((st?.notes_debit ?? 0) - (st?.notes_credit ?? 0))}</span></div>
         <div className="stmt-card"><span className="k">الرصيد الختامي</span><span className="v"><Balance value={st?.closing ?? 0} /></span></div>
       </div>
 
@@ -93,8 +96,8 @@ export function CustomerStatementDialog({ customerId, onClose }: {
             ))}
             <tr className="total-row">
               <td colSpan={3}>الإجماليات</td>
-              <td>{money(st?.invoiced ?? 0)}</td>
-              <td>{money(st?.collected ?? 0)}</td>
+              <td>{money((st?.invoiced ?? 0) + (st?.notes_debit ?? 0))}</td>
+              <td>{money((st?.collected ?? 0) + (st?.notes_credit ?? 0))}</td>
               <td><Balance value={st?.closing ?? 0} /></td>
             </tr>
           </tbody>
@@ -150,7 +153,7 @@ export function AccountStatementDialog({ kind, accountId, onClose }: {
   const rows = (st?.rows ?? []).map((r) => [r.date, r.doc, r.desc, money(r.in), money(r.out), money(r.balance)]);
 
   const doExport = async (mode: "excel" | "pdf" | "print") => {
-    const [info, ps] = await Promise.all([companyInfo(), getPrintSettings()]);
+    const [info, ps, meta] = await Promise.all([companyInfo(), getPrintSettings(), printMeta()]);
     const kindLabel = kind === "cashbox" ? "خزينة" : "بنك";
     const title = `كشف حساب ${kindLabel}`;
     const summary: [string, string][] = [
@@ -163,7 +166,7 @@ export function AccountStatementDialog({ kind, accountId, onClose }: {
     if (mode === "excel") {
       await exportExcel({ info, title, headers, rows, summaryLines: summary, defaultName: `${title}.xlsx` });
     } else {
-      const html = buildReportHtml({ info, title, subtitle: `${owner} | الفترة: من ${dFrom} إلى ${dTo}`, headers, rows, summaryLines: summary, centerFrom: 1, doc: docOptions(ps) });
+      const html = buildReportHtml({ info, title, subtitle: `${owner} | الفترة: من ${dFrom} إلى ${dTo}`, headers, rows, summaryLines: summary, centerFrom: 1, doc: docOptions(ps, meta.printedBy, meta.printedAt) });
       if (mode === "pdf") await exportPdfHtml(html, `${title}.pdf`);
       else printHtml(html, title, { css: printCss(ps), watermark: ps.watermark });
     }

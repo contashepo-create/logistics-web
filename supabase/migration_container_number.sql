@@ -1,61 +1,10 @@
 -- ============================================================================
--- تطوير نموذج فاتورة النقل:
---   1) كمية للنقلة (عدد النقلات × سعر الوحدة)
---   2) كمية للمصروف (عدد × قيمة الوحدة)
---   3) مصدر تمويل إلزامي لكل مصروف: نقدي / عهدة سائق / آجل على مورد / يتحمّله العميل
---   4) توليد سند دفع تلقائي للمصروف النقدي (يخصم من الخزينة/البنك) بلا ازدواج
--- الصق هذا الملف كاملاً في Supabase Dashboard > SQL Editor > Run (آمن التكرار)
+-- إضافة «رقم الحاوية» إلى الفاتورة (اختياري) + تمريره عبر save_invoice
+-- الصق هذا الملف في Supabase Dashboard > SQL Editor > Run (آمن التكرار).
 -- ============================================================================
 
--- ---------------------------------------------------------------------------
--- 1) أعمدة الكمية في النقلة (price يبقى إجمالي السطر = qty × unit_price)
--- ---------------------------------------------------------------------------
-alter table public.invoice_trips
-  add column if not exists qty        integer          not null default 1,
-  add column if not exists unit_price double precision not null default 0;
+alter table public.invoices add column if not exists container_number text default '';
 
-update public.invoice_trips set unit_price = price, qty = 1
- where unit_price = 0 and price > 0;
-
-alter table public.invoice_trips
-  add constraint invoice_trips_qty_positive check (qty >= 1) not valid;
-
--- ---------------------------------------------------------------------------
--- 2) أعمدة الكمية ومصدر التمويل في مصروف النقلة (amount = qty × unit_amount)
--- ---------------------------------------------------------------------------
-alter table public.trip_expenses
-  add column if not exists qty           double precision not null default 1,
-  add column if not exists unit_amount   double precision not null default 0,
-  add column if not exists source        text not null default 'cash',
-  add column if not exists account_kind  text,
-  add column if not exists account_id    bigint,
-  add column if not exists supplier_name text default '';
-
-update public.trip_expenses set unit_amount = amount, qty = 1
- where unit_amount = 0 and amount > 0;
-
-do $$
-begin
-  if not exists (select 1 from pg_constraint where conname = 'trip_expenses_source_chk') then
-    alter table public.trip_expenses
-      add constraint trip_expenses_source_chk
-      check (source in ('cash', 'driver', 'supplier', 'customer'));
-  end if;
-end $$;
-
--- ---------------------------------------------------------------------------
--- 3) ربط سند الدفع المتولّد تلقائياً بمصروف النقلة (لمنع الاحتساب مرتين)
--- ---------------------------------------------------------------------------
-alter table public.payment_vouchers
-  add column if not exists source_expense_id bigint
-    references public.trip_expenses(id) on delete cascade;
-
-create index if not exists idx_payments_source_expense
-  on public.payment_vouchers(source_expense_id);
-
--- ---------------------------------------------------------------------------
--- 4) الحفظ الذرّي للفاتورة: كميات + مصادر تمويل + سندات تلقائية
--- ---------------------------------------------------------------------------
 create or replace function public.save_invoice(
   p_invoice_id  bigint, p_date date, p_customer_id bigint, p_vat_rate double precision,
   p_notes text default '', p_attachments jsonb default '[]'::jsonb, p_trips jsonb default '[]'::jsonb,
@@ -84,8 +33,8 @@ begin
       raise exception 'لا يمكن تسجيل حركة بهذا التاريخ: خارج نطاق أي سنة مالية مفتوحة.';
     end if;
     select coalesce(max(number), 0) + 1 into v_number from public.invoices where company_id = v_cid;
-    insert into public.invoices (company_id, number, date, customer_id, vat_rate, notes, attachments)
-    values (v_cid, v_number, p_date, p_customer_id, p_vat_rate, p_notes, p_attachments)
+    insert into public.invoices (company_id, number, date, customer_id, vat_rate, notes, attachments, container_number)
+    values (v_cid, v_number, p_date, p_customer_id, p_vat_rate, p_notes, p_attachments, coalesce(p_container_number, ''))
     returning id into v_invoice_id;
   else
     select date into v_old_date from public.invoices where id = p_invoice_id and company_id = v_cid for update;
@@ -96,7 +45,8 @@ begin
     if not exists (select 1 from public.financial_years where company_id = v_cid and status = 'open' and date_from <= p_date and date_to >= p_date) then
       raise exception 'لا يمكن تسجيل حركة بهذا التاريخ: خارج نطاق أي سنة مالية مفتوحة.';
     end if;
-    update public.invoices set date = p_date, customer_id = p_customer_id, vat_rate = p_vat_rate, notes = p_notes, attachments = p_attachments
+    update public.invoices set date = p_date, customer_id = p_customer_id, vat_rate = p_vat_rate, notes = p_notes, attachments = p_attachments,
+      container_number = coalesce(p_container_number, '')
     where id = v_invoice_id;
   end if;
 
@@ -133,7 +83,6 @@ begin
         notes      = coalesce(v_trip->>'notes', '')
       where id = v_trip_id and invoice_id = v_invoice_id;
       if not found then raise exception 'النقلة غير موجودة ضمن هذه الفاتورة.'; end if;
-      -- حذف المصروفات القديمة؛ سنداتها التلقائية تُحذف تتابعياً (on delete cascade)
       delete from public.trip_expenses where trip_id = v_trip_id;
     else
       insert into public.invoice_trips (company_id, invoice_id, vehicle_id, driver_id, from_loc, to_loc, qty, unit_price, price, notes)
@@ -185,7 +134,6 @@ begin
          coalesce(v_exp->>'supplier_name', ''), coalesce(v_exp->>'notes', ''))
       returning id into v_exp_id;
 
-      -- المصروف النقدي يخرج فعلياً من الخزينة عبر سند دفع متولّد ومرتبط
       if v_source = 'cash' then
         select coalesce(max(number), 0) + 1 into v_pnum from public.payment_vouchers where company_id = v_cid;
         insert into public.payment_vouchers
@@ -205,6 +153,5 @@ begin
   return v_invoice_id;
 end $$;
 
--- حذف الفاتورة: تنظيف السندات التلقائية أولاً (إن وُجدت دالة حذف مخصّصة فهي تعتمد الحذف التتابعي)
-comment on column public.payment_vouchers.source_expense_id is
-  'إن كان غير فارغ فالسند متولّد تلقائياً من مصروف نقلة نقدي — لا يُحتسب مرتين في التقارير';
+revoke execute on function public.save_invoice(bigint, date, bigint, double precision, text, jsonb, jsonb, text) from public, anon;
+grant execute on function public.save_invoice(bigint, date, bigint, double precision, text, jsonb, jsonb, text) to authenticated, service_role;

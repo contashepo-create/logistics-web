@@ -109,6 +109,8 @@ export interface Invoice {
   vat_rate: number;
   notes: string;
   attachments: string[];
+  /** رقم الحاوية (اختياري — يُدخل عند إصدار الفاتورة ويظهر في العروض والطباعة) */
+  container_number?: string;
   created_at?: string;
 }
 
@@ -127,6 +129,8 @@ export interface InvoiceTrip {
   price: number;
   notes: string;
   expenses: TripExpense[];
+  vehicle_name?: string | null;
+  driver_name?: string | null;
 }
 
 /** مصدر تمويل مصروف النقلة. */
@@ -152,6 +156,28 @@ export interface TripExpense {
   notes: string;
 }
 
+export type CreditDebitNoteType = "credit" | "debit";
+
+export interface CreditDebitNote {
+  id: number;
+  company_id?: string;
+  number: number;
+  note_type: CreditDebitNoteType;
+  invoice_id: number;
+  customer_id: number;
+  date: string;
+  amount: number;
+  vat_rate: number;
+  reason: string;
+  created_at?: string;
+  // انضمامات للعرض
+  invoice_number?: number | null;
+  customer_name?: string | null;
+  customer_code?: string | null;
+  /** إجمالي الإشعار شامل الضريبة */
+  total?: number;
+}
+
 export interface ReceiptVoucher {
   id: number;
   number: number;
@@ -174,7 +200,7 @@ export interface PaymentVoucher {
   date: string;
   account_kind: "cashbox" | "bank";
   account_id: number;
-  voucher_type: "trip" | "advance" | "vehicle" | "general" | "supplier";
+  voucher_type: "trip" | "advance" | "vehicle" | "general" | "supplier" | "owner";
   supplier_id?: number | null;
   supplier_name?: string | null;
   purchase_invoice_id?: number | null;

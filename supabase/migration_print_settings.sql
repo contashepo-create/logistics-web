@@ -8,3 +8,7 @@ alter table public.companies
 
 comment on column public.companies.print_settings is
   'إعدادات الطباعة الخاصة بالشركة — تُدار من شاشة الإعدادات > تبويب الطباعة';
+
+-- منح حفظ إعدادات الطباعة: بدون هذا المنح يظهر
+-- «permission denied for table companies» عند حفظ تبويب الطباعة
+grant update (print_settings) on public.companies to authenticated;

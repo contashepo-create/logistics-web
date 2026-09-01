@@ -2,7 +2,7 @@
 
 import { useEffect, useMemo, useState } from "react";
 import { PageFrame, Field, Input, Select, Button } from "@/components/ui";
-import { getSetting, setSetting, companyInfo } from "@/lib/repo";
+import { companyInfo, saveCompanySettings } from "@/lib/repo";
 import { notify } from "@/components/toast";
 import { ThemeToggle } from "@/components/ThemeToggle";
 import {
@@ -77,28 +77,29 @@ export default function SettingsPage() {
   }, []);
 
   const saveCompany = async () => {
+    const problems = validateTaxProfile({
+      tax_number: org.company_tax_number,
+      commercial_reg: org.company_commercial_reg,
+      postal_code: org.company_postal_code,
+      building_no: org.company_building_no,
+      additional_no: org.company_additional_no,
+      tax_status: org.company_tax_status,
+    });
+    if (problems.length) {
+      notify(problems[0], "error");
+      return;
+    }
     try {
-      await setSetting("company_name", name);
-      await setSetting("company_phone", phone);
-      await setSetting("company_address", address);
-      await setSetting("currency", currency);
-      await setSetting("company_vat_note", vatNote);
-      await setSetting("vat_rate", vatRate || "15");
-
-      const problems = validateTaxProfile({
-        tax_number: org.company_tax_number,
-        commercial_reg: org.company_commercial_reg,
-        postal_code: org.company_postal_code,
-        building_no: org.company_building_no,
-        additional_no: org.company_additional_no,
-        tax_status: org.company_tax_status,
+      // طلب تحديث واحد لجميع الأعمدة بدل ~19 طلباً متتالياً (سبب بطء الحفظ)
+      await saveCompanySettings({
+        company_name: name,
+        company_phone: phone,
+        company_address: address,
+        currency: currency,
+        company_vat_note: vatNote,
+        vat_rate: vatRate || "15",
+        ...org,
       });
-      if (problems.length) {
-        notify(problems[0], "error");
-        return;
-      }
-      for (const [k, v] of Object.entries(org)) await setSetting(k, v);
-
       notify("تم حفظ الإعدادات بنجاح.", "success");
     } catch (e) {
       notify(e instanceof Error ? e.message : String(e), "error");
@@ -290,7 +291,7 @@ export default function SettingsPage() {
           <div className="group-box" style={{ marginTop: 0 }}>
             <div className="group-title">🎨 قالب الطباعة</div>
             <p className="page-sub" style={{ marginBottom: 10 }}>
-              اختر شكل المستندات المطبوعة — يُطبَّق على الفواتير والتقارير وكشوف الحسابات كلها.
+              اختر قالب فاتورة العميل هنا — التقارير والسندات تستخدم قالباً احترافياً موحّداً تلقائياً.
             </p>
             <div className="tpl-grid">
               {PRINT_TEMPLATES.map((t) => (
@@ -385,6 +386,37 @@ export default function SettingsPage() {
               <Check label="تظليل الصفوف بالتناوب" checked={ps.zebra} onChange={(v) => set("zebra", v)} />
               <Check label="إظهار تاريخ ووقت الطباعة" checked={ps.show_date} onChange={(v) => set("show_date", v)} />
               <Check label="إظهار عدد السجلات أسفل الجدول" checked={ps.show_count} onChange={(v) => set("show_count", v)} />
+            </div>
+          </div>
+
+          <div className="group-box">
+            <div className="group-title">📝 بيانات فاتورة العميل (تحكّم بكل بند على حدة)</div>
+            <div style={{ display: "grid", gap: 10, marginBottom: 12 }}>
+              <Field label="لغة تسميات الحقول في الفاتورة">
+                <Select value={ps.label_language} onChange={(e) => set("label_language", e.target.value as PrintSettings["label_language"])}>
+                  <option value="ar">العربية فقط</option>
+                  <option value="en">English only</option>
+                </Select>
+              </Field>
+              <span className="field-hint" style={{ marginTop: -4 }}>تُعرض التسمية بلغة واحدة فقط — لن تظهر «هاتف / Tel» معاً.</span>
+            </div>
+            <div className="tpl-grid">
+              <Check label="اسم المنشأة" checked={ps.invoice_show_company_name} onChange={(v) => set("invoice_show_company_name", v)} />
+              <Check label="الرقم الضريبي للمنشأة" checked={ps.invoice_show_company_tax_number} onChange={(v) => set("invoice_show_company_tax_number", v)} />
+              <Check label="السجل التجاري للمنشأة" checked={ps.invoice_show_company_cr} onChange={(v) => set("invoice_show_company_cr", v)} />
+              <Check label="عنوان المنشأة" checked={ps.invoice_show_company_address} onChange={(v) => set("invoice_show_company_address", v)} />
+              <Check label="هاتف المنشأة" checked={ps.invoice_show_company_phone} onChange={(v) => set("invoice_show_company_phone", v)} />
+              <Check label="بريد المنشأة" checked={ps.invoice_show_company_email} onChange={(v) => set("invoice_show_company_email", v)} />
+              <Check label="موقع المنشأة" checked={ps.invoice_show_company_website} onChange={(v) => set("invoice_show_company_website", v)} />
+              <Check label="الرقم الموحّد للمنشأة" checked={ps.invoice_show_company_unified} onChange={(v) => set("invoice_show_company_unified", v)} />
+              <Check label="اسم العميل" checked={ps.invoice_show_customer_name} onChange={(v) => set("invoice_show_customer_name", v)} />
+              <Check label="كود العميل" checked={ps.invoice_show_customer_code} onChange={(v) => set("invoice_show_customer_code", v)} />
+              <Check label="الرقم الضريبي للعميل" checked={ps.invoice_show_customer_tax_number} onChange={(v) => set("invoice_show_customer_tax_number", v)} />
+              <Check label="السجل التجاري للعميل" checked={ps.invoice_show_customer_cr} onChange={(v) => set("invoice_show_customer_cr", v)} />
+              <Check label="عنوان العميل" checked={ps.invoice_show_customer_address} onChange={(v) => set("invoice_show_customer_address", v)} />
+              <Check label="هاتف العميل" checked={ps.invoice_show_customer_phone} onChange={(v) => set("invoice_show_customer_phone", v)} />
+              <Check label="رمز العملة" checked={ps.invoice_show_currency} onChange={(v) => set("invoice_show_currency", v)} />
+              <Check label="الباركود (يُطبع فقط عند اكتمال بيانات الشركة والعميل)" checked={ps.invoice_show_barcode} onChange={(v) => set("invoice_show_barcode", v)} />
             </div>
           </div>
 

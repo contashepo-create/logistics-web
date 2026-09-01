@@ -5,6 +5,7 @@ import { supabase } from "./supabase";
 import type { User, Session } from "@supabase/supabase-js";
 import type { Company, Profile } from "./types";
 import { checkSignupEmail, checkPassword, sanitizeText } from "./security";
+import { translateDbError } from "./db";
 
 /**
  * البريد الإلكتروني للمطوّر — يمنح صاحبه لوحة تحكم خاصة.
@@ -124,18 +125,7 @@ export async function registerCurrentCompany(input: {
   return (data as string) ?? null;
 }
 
-/** ترجمة أخطاء قاعدة البيانات الشائعة إلى رسائل عربية مفهومة. */
-export function translateDbError(msg: string): string {
-  const m = (msg || "").toLowerCase();
-  if (m.includes("uq_profiles_one_user_per_company")) return "لا يُسمح بأكثر من مستخدم واحد لكل شركة.";
-  if (m.includes("permission denied") || m.includes("row-level security")) {
-    return "صلاحيات قاعدة البيانات غير مكتملة — نفّذ ملفات الترحيل في Supabase ثم أعد المحاولة.";
-  }
-  if (m.includes("function") && m.includes("does not exist")) {
-    return "قاعدة البيانات غير محدّثة — نفّذ ملفات الترحيل في Supabase SQL Editor.";
-  }
-  return msg;
-}
+export { translateDbError } from "./db";
 
 // ---------------------------------------------------------------------------
 // كاش الهوية (الملف الشخصي + الشركة)

@@ -2,7 +2,7 @@
 
 import { useEffect, useState } from "react";
 
-export type ToastType = "info" | "error" | "success";
+export type ToastType = "info" | "error" | "success" | "warning";
 type Toast = { id: number; text: string; type: ToastType };
 
 let listeners: ((t: Toast) => void)[] = [];
@@ -31,6 +31,7 @@ export function ToastHost() {
     info: "#1f4e79",
     error: "#b02a37",
     success: "#1e7d43",
+    warning: "#b45309",
   };
 
   return (

@@ -1,411 +1,14 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { Modal, Field, Input, Select, Textarea, AmountInput, DateInput, Button, AccountSelect } from "@/components/ui";
 import { notify } from "@/components/toast";
 import { listSuppliers, supplierBalance } from "@/lib/suppliers";
-import { listCustomers, listEmployees, listVehicles, saveInvoice, saveReceipt, savePayment, getReceipt, getPayment, companyInfo, currentVatRate } from "@/lib/repo";
-import { getInvoiceFull, allAccounts, tripsOptions, tripProfit } from "@/lib/calc";
+import { listCustomers, listEmployees, listVehicles, saveReceipt, savePayment, getReceipt, getPayment, companyInfo } from "@/lib/repo";
+import { getInvoiceFull, allAccounts, invoiceOptions, tripOptionsByInvoice, tripInvoiceId, tripProfit } from "@/lib/calc";
 import type { Customer } from "@/lib/types";
-import { money, todayIso, amountToArabicWords, EXPENSE_TYPES, EXPENSE_SOURCES, EXPENSE_SOURCE_HINTS, PAYMENT_TYPES, RECEIPT_TYPES, VEHICLE_EXPENSES } from "@/lib/format";
+import { money, todayIso, amountToArabicWords, EXPENSE_TYPES, PAYMENT_TYPES, RECEIPT_TYPES, VEHICLE_EXPENSES } from "@/lib/format";
 
-type ExpRow = {
-  id?: number;
-  expense_type: string;
-  qty: string;
-  unit_amount: string;
-  source: string;
-  account_kind: string;
-  account_id: string;
-  supplier_name: string;
-  notes: string;
-};
-type TripRow = {
-  id?: number; vehicle_id: string; driver_id: string; from_loc: string; to_loc: string;
-  qty: string; unit_price: string; notes: string; expenses: ExpRow[];
-};
-
-const n = (v: string) => parseFloat(String(v).replace(/,/g, "")) || 0;
-/** إجمالي سطر النقلة = العدد × سعر الوحدة */
-export const tripLineTotal = (t: { qty: string; unit_price: string }) => Math.round(Math.max(1, n(t.qty) || 1) * n(t.unit_price) * 100) / 100;
-/** إجمالي سطر المصروف = العدد × قيمة الوحدة */
-export const expLineTotal = (e: { qty: string; unit_amount: string }) => Math.round((n(e.qty) || 1) * n(e.unit_amount) * 100) / 100;
-
-/* ============================ فاتورة نقل ============================ */
-export function InvoiceDialog({ id, readOnly, onClose }: { id?: number | null; readOnly?: boolean; onClose: (changed?: boolean) => void }) {
-  const [customers, setCustomers] = useState<{ id: number; name: string; balance?: number }[]>([]);
-  const [vehicles, setVehicles] = useState<{ id: number; plate_number: string }[]>([]);
-  const [drivers, setDrivers] = useState<{ id: number; name: string }[]>([]);
-  const [accounts, setAccounts] = useState<{ kind: string; id: number; label: string }[]>([]);
-  const [f, setF] = useState({ customer_id: "", date: todayIso(), vat_rate: "15", notes: "" });
-  const [trips, setTrips] = useState<TripRow[]>([]);
-  const [attachments, setAttachments] = useState<string[]>([]);
-  const [saving, setSaving] = useState(false);
-
-  useEffect(() => {
-    (async () => {
-      const [cs, vs, ds, vatRate, accs] = await Promise.all([listCustomers(), listVehicles(), listEmployees("driver"), currentVatRate(), allAccounts()]);
-      setCustomers(cs); setVehicles(vs); setDrivers(ds); setAccounts(accs);
-      setF((old) => ({ ...old, vat_rate: String(vatRate) }));
-      if (id) {
-        const inv = await getInvoiceFull(id);
-        if (inv) {
-          setF({ customer_id: String(inv.customer_id), date: inv.date, vat_rate: String(inv.vat_rate ?? 15), notes: inv.notes });
-          setAttachments(inv.attachments ?? []);
-          setTrips(inv.trips.map((t) => ({
-            id: t.id, vehicle_id: t.vehicle_id ? String(t.vehicle_id) : "", driver_id: t.driver_id ? String(t.driver_id) : "",
-            from_loc: t.from_loc, to_loc: t.to_loc,
-            qty: String(t.qty ?? 1),
-            unit_price: String(t.unit_price || (t.qty ? t.price / t.qty : t.price)),
-            notes: t.notes,
-            expenses: (t.expenses ?? []).map((e) => ({
-              id: e.id, expense_type: e.expense_type,
-              qty: String(e.qty ?? 1),
-              unit_amount: String(e.unit_amount || e.amount),
-              source: e.source ?? "cash",
-              account_kind: e.account_kind ?? "",
-              account_id: e.account_id ? String(e.account_id) : "",
-              supplier_name: e.supplier_name ?? "",
-              notes: e.notes,
-            })),
-          })));
-        }
-      }
-    })();
-  }, [id]);
-
-  const totals = useMemo(() => {
-    const tripsTotal = trips.reduce((a, t) => a + tripLineTotal(t), 0);
-    let cost = 0;
-    let billable = 0;
-    for (const t of trips) {
-      for (const e of t.expenses) {
-        if (e.source === "customer") billable += expLineTotal(e);
-        else cost += expLineTotal(e);
-      }
-    }
-    const subtotal = Math.round((tripsTotal + billable) * 100) / 100;
-    const vatRate = parseFloat(f.vat_rate || "0") || 0;
-    const vat = Math.round(subtotal * vatRate) / 100;
-    return { tripsTotal, billable, cost, subtotal, vat, total: subtotal + vat, profit: Math.round((subtotal - cost) * 100) / 100 };
-  }, [trips, f.vat_rate]);
-
-  const addTrip = () => setTrips((p) => [...p, { vehicle_id: "", driver_id: "", from_loc: "", to_loc: "", qty: "1", unit_price: "", notes: "", expenses: [] }]);
-  const updTrip = (i: number, patch: Partial<TripRow>) => setTrips((p) => p.map((t, x) => (x === i ? { ...t, ...patch } : t)));
-  const delTrip = (i: number) => setTrips((p) => p.filter((_, x) => x !== i));
-  const defaultAccount = () => (accounts.length ? { kind: accounts[0].kind, id: String(accounts[0].id) } : { kind: "cashbox", id: "" });
-  const addExp = (i: number) => setTrips((p) => p.map((t, x) => {
-    if (x !== i) return t;
-    const acc = defaultAccount();
-    return { ...t, expenses: [...t.expenses, { expense_type: "trip", qty: "1", unit_amount: "", source: "cash", account_kind: acc.kind, account_id: acc.id, supplier_name: "", notes: "" }] };
-  }));
-  const updExp = (i: number, j: number, patch: Partial<TripRow["expenses"][number]>) =>
-    setTrips((p) => p.map((t, x) => (x === i ? { ...t, expenses: t.expenses.map((e, y) => (y === j ? { ...e, ...patch } : e)) } : t)));
-  const delExp = (i: number, j: number) => setTrips((p) => p.map((t, x) => (x === i ? { ...t, expenses: t.expenses.filter((_, y) => y !== j) } : t)));
-
-  const save = async () => {
-    if (!f.customer_id) return notify("اختر العميل.", "error");
-    if (!trips.length) return notify("أضف نقلة واحدة على الأقل.", "error");
-    for (const t of trips) {
-      if (!t.from_loc.trim() || !t.to_loc.trim()) return notify("أكمل أماكن الانطلاق والوصول لكل نقلة.", "error");
-      if (!(n(t.qty) >= 1)) return notify("عدد النقلات يجب أن يكون 1 على الأقل.", "error");
-      if (!(tripLineTotal(t) > 0)) return notify("سعر النقلة يجب أن يكون أكبر من صفر.", "error");
-      for (const e of t.expenses) {
-        if (!(expLineTotal(e) > 0)) return notify("أكمل عدد وقيمة كل مصروف.", "error");
-        if (e.source === "cash" && !e.account_id) return notify("اختر الخزينة أو البنك لكل مصروف نقدي.", "error");
-        if (e.source === "driver" && !t.driver_id) return notify("حدّد السائق في النقلة قبل تسجيل مصروف من عهدته.", "error");
-        if (e.source === "supplier" && !e.supplier_name.trim()) return notify("اكتب اسم المورد/المحطة للمصروف الآجل.", "error");
-      }
-    }
-    setSaving(true);
-    try {
-      await saveInvoice({
-        customer_id: Number(f.customer_id), date: f.date, notes: f.notes,
-        vat_rate: parseFloat(f.vat_rate || "15") || 15,
-        attachments,
-        trips: trips.map((t) => ({
-          id: t.id, vehicle_id: t.vehicle_id ? Number(t.vehicle_id) : null, driver_id: t.driver_id ? Number(t.driver_id) : null,
-          from_loc: t.from_loc, to_loc: t.to_loc,
-          qty: Math.max(1, Math.trunc(n(t.qty) || 1)),
-          unit_price: n(t.unit_price),
-          price: tripLineTotal(t),
-          notes: t.notes,
-          expenses: t.expenses.map((e) => ({
-            id: e.id, expense_type: e.expense_type,
-            qty: n(e.qty) || 1, unit_amount: n(e.unit_amount), amount: expLineTotal(e),
-            source: e.source,
-            account_kind: e.source === "cash" ? e.account_kind : null,
-            account_id: e.source === "cash" && e.account_id ? Number(e.account_id) : null,
-            supplier_name: e.source === "supplier" ? e.supplier_name : "",
-            notes: e.notes,
-          })),
-        })),
-      }, id);
-      notify("تم حفظ الفاتورة بنجاح.", "success");
-      onClose(true);
-    } catch (e) {
-      notify(e instanceof Error ? e.message : String(e), "error");
-    } finally {
-      setSaving(false);
-    }
-  };
-
-  const perTrip = (t: TripRow) => {
-    let cost = 0, billable = 0;
-    for (const e of t.expenses) (e.source === "customer" ? (billable += expLineTotal(e)) : (cost += expLineTotal(e)));
-    const revenue = tripLineTotal(t) + billable;
-    return { cost, billable, revenue, net: Math.round((revenue - cost) * 100) / 100 };
-  };
-
-  const srcClass = (src: string) => `src-${src}`;
-  const currency = "";
-
-  return (
-    <Modal title={id ? `تعديل فاتورة نقل` : "فاتورة نقل جديدة"} onClose={() => onClose()} width={980}>
-      <div className="inv-form">
-        {/* ------------------------- بيانات الفاتورة ------------------------- */}
-        <div className="inv-head-card">
-          <Field label="العميل" required>
-            <Select value={f.customer_id} onChange={(e) => setF({ ...f, customer_id: e.target.value })} disabled={readOnly}>
-              <option value="">— اختر العميل —</option>
-              {customers.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
-            </Select>
-          </Field>
-          <Field label="تاريخ الفاتورة" required>
-            <DateInput value={f.date} onChange={(v) => setF({ ...f, date: v })} />
-          </Field>
-          <Field label="عدد النقلات في الفاتورة">
-            <Input value={`${trips.length} سطر — ${trips.reduce((a, t) => a + Math.max(1, n(t.qty) || 1), 0)} نقلة`} readOnly />
-          </Field>
-        </div>
-
-        {/* ------------------------- النقلات ------------------------- */}
-        <div>
-          <div className="inv-sec-title">
-            <span>بنود النقل</span>
-            {!readOnly && <button className="btn btn-primary" onClick={addTrip}>＋ إضافة نقلة</button>}
-          </div>
-
-          {trips.length === 0 && (
-            <div className="exp-empty">لا توجد نقلات بعد — اضغط «إضافة نقلة» لبدء تسجيل بنود الفاتورة.</div>
-          )}
-
-          {trips.map((t, i) => {
-            const st = perTrip(t);
-            return (
-              <div key={i} className="trip-card">
-                <div className="trip-card-head">
-                  <span className="trip-badge">{i + 1}</span>
-                  <span className="trip-route">
-                    {t.from_loc || <span className="muted">من …</span>}
-                    <span className="muted"> ← </span>
-                    {t.to_loc || <span className="muted">إلى …</span>}
-                    {Math.max(1, n(t.qty) || 1) > 1 && <span className="muted">{`  ×${Math.max(1, n(t.qty) || 1)} نقلة`}</span>}
-                  </span>
-                  <span className="trip-head-spacer" />
-                  <span className="trip-head-amount">{money(st.revenue)}</span>
-                  {!readOnly && <button className="btn-row-danger" onClick={() => delTrip(i)}>حذف النقلة</button>}
-                </div>
-
-                <div className="trip-card-body">
-                  <div className="trip-grid-4">
-                    <Field label="من" required><Input value={t.from_loc} onChange={(e) => updTrip(i, { from_loc: e.target.value })} readOnly={readOnly} /></Field>
-                    <Field label="إلى" required><Input value={t.to_loc} onChange={(e) => updTrip(i, { to_loc: e.target.value })} readOnly={readOnly} /></Field>
-                    <Field label="السيارة">
-                      <Select value={t.vehicle_id} onChange={(e) => updTrip(i, { vehicle_id: e.target.value })} disabled={readOnly}>
-                        <option value="">—</option>
-                        {vehicles.map((v) => <option key={v.id} value={v.id}>{v.plate_number}</option>)}
-                      </Select>
-                    </Field>
-                    <Field label="السائق">
-                      <Select value={t.driver_id} onChange={(e) => updTrip(i, { driver_id: e.target.value })} disabled={readOnly}>
-                        <option value="">—</option>
-                        {drivers.map((d) => <option key={d.id} value={d.id}>{d.name}</option>)}
-                      </Select>
-                    </Field>
-                  </div>
-
-                  <div className="trip-price-box">
-                    <Field label="عدد النقلات" required>
-                      <Input type="number" min={1} step={1} dir="ltr" style={{ textAlign: "center" }}
-                        value={t.qty} onChange={(e) => updTrip(i, { qty: e.target.value })} readOnly={readOnly} />
-                    </Field>
-                    <Field label="سعر النقلة الواحدة" required>
-                      <AmountInput value={t.unit_price} onChange={(v) => updTrip(i, { unit_price: v })} />
-                    </Field>
-                    <Field label="إجمالي بند النقل">
-                      <Input value={money(tripLineTotal(t))} readOnly />
-                    </Field>
-                  </div>
-
-                  <Field label="ملاحظات النقلة"><Input value={t.notes} onChange={(e) => updTrip(i, { notes: e.target.value })} readOnly={readOnly} /></Field>
-
-                  {/* ------------------ مصروفات هذه النقلة ------------------ */}
-                  <div className="exp-block">
-                    <div className="inv-sec-title">
-                      <span>{`مصروفات النقلة ${i + 1}`}</span>
-                      {!readOnly && <button className="btn" onClick={() => addExp(i)}>＋ مصروف</button>}
-                    </div>
-
-                    {t.expenses.length === 0 && (
-                      <div className="exp-empty">لا مصروفات على هذه النقلة.</div>
-                    )}
-
-                    {t.expenses.map((e, j) => (
-                      <div key={j} className={`exp-card ${srcClass(e.source)}`}>
-                        <div className="exp-card-head">
-                          <span className={`exp-chip ${srcClass(e.source)}`}>{EXPENSE_SOURCES[e.source] ?? e.source}</span>
-                          <span style={{ color: "var(--muted)", fontSize: 12.5 }}>
-                            {EXPENSE_TYPES[e.expense_type] ?? e.expense_type}
-                            {n(e.qty) > 1 ? ` × ${n(e.qty)}` : ""}
-                          </span>
-                          <span className={`exp-head-total ${e.source === "customer" ? "is-billable" : ""}`}>
-                            {money(expLineTotal(e))}{e.source === "customer" ? " (على العميل)" : ""}
-                          </span>
-                        </div>
-
-                        <div className="exp-grid">
-                          <Field label="نوع المصروف">
-                            <Select value={e.expense_type} onChange={(ev) => updExp(i, j, { expense_type: ev.target.value })} disabled={readOnly}>
-                              {Object.entries(EXPENSE_TYPES).map(([k, v]) => <option key={k} value={k}>{v}</option>)}
-                            </Select>
-                          </Field>
-                          <Field label="العدد">
-                            <Input type="number" min={1} step={1} dir="ltr" style={{ textAlign: "center" }}
-                              value={e.qty} onChange={(ev) => updExp(i, j, { qty: ev.target.value })} readOnly={readOnly} />
-                          </Field>
-                          <Field label="قيمة الوحدة">
-                            <AmountInput value={e.unit_amount} onChange={(v) => updExp(i, j, { unit_amount: v })} />
-                          </Field>
-                          <Field label="إجمالي المصروف">
-                            <Input value={money(expLineTotal(e))} readOnly />
-                          </Field>
-                          {!readOnly && (
-                            <button className="btn btn-danger" title="حذف المصروف" onClick={() => delExp(i, j)}>✕</button>
-                          )}
-                        </div>
-
-                        <div className="exp-grid-2">
-                          <Field label="مصدر التمويل" required>
-                            <Select value={e.source} onChange={(ev) => {
-                              const src = ev.target.value;
-                              const acc = defaultAccount();
-                              updExp(i, j, {
-                                source: src,
-                                account_kind: src === "cash" ? (e.account_kind || acc.kind) : "",
-                                account_id: src === "cash" ? (e.account_id || acc.id) : "",
-                              });
-                            }} disabled={readOnly}>
-                              {Object.entries(EXPENSE_SOURCES).map(([k, v]) => <option key={k} value={k}>{v}</option>)}
-                            </Select>
-                          </Field>
-
-                          {e.source === "cash" && (
-                            <Field label="من الخزينة / البنك" required>
-                              <Select value={e.account_kind && e.account_id ? `${e.account_kind}:${e.account_id}` : ""}
-                                onChange={(ev) => {
-                                  const [kind, aid] = ev.target.value.split(":");
-                                  updExp(i, j, { account_kind: kind ?? "", account_id: aid ?? "" });
-                                }} disabled={readOnly}>
-                                <option value="">— اختر —</option>
-                                {accounts.map((a) => (
-                                  <option key={`${a.kind}:${a.id}`} value={`${a.kind}:${a.id}`}>{a.label}</option>
-                                ))}
-                              </Select>
-                            </Field>
-                          )}
-                          {e.source === "supplier" && (
-                            <Field label="المورد / المحطة" required>
-                              <Input value={e.supplier_name} onChange={(ev) => updExp(i, j, { supplier_name: ev.target.value })} readOnly={readOnly} />
-                            </Field>
-                          )}
-                          {e.source === "driver" && (
-                            <Field label="السائق (عهدة)">
-                              <Input value={drivers.find((d) => String(d.id) === t.driver_id)?.name ?? "— حدّد السائق أعلاه —"} readOnly />
-                            </Field>
-                          )}
-                          {e.source === "customer" && (
-                            <Field label="الأثر على الفاتورة">
-                              <Input value="بند إضافي على العميل (إيراد وليس تكلفة)" readOnly />
-                            </Field>
-                          )}
-
-                          <Field label="بيان المصروف"><Input value={e.notes} onChange={(ev) => updExp(i, j, { notes: ev.target.value })} readOnly={readOnly} /></Field>
-                        </div>
-
-                        <div className="exp-hint">{EXPENSE_SOURCE_HINTS[e.source]}</div>
-                      </div>
-                    ))}
-                  </div>
-
-                  {/* ------------------ ملخص النقلة ------------------ */}
-                  <div className="trip-summary">
-                    <div className="trip-sum-item is-rev"><span className="k">إيراد النقلة</span><span className="v">{money(st.revenue)}</span></div>
-                    <div className="trip-sum-item is-cost"><span className="k">تكلفة المصروفات</span><span className="v">{money(st.cost)}</span></div>
-                    <div className="trip-sum-item is-net"><span className="k">صافي النقلة</span><span className="v">{money(st.net)}</span></div>
-                  </div>
-                </div>
-              </div>
-            );
-          })}
-        </div>
-
-        {/* ------------------------- الإجماليات ------------------------- */}
-        <div className="inv-totals">
-          <div className="tot-card client">
-            <div className="tot-card-head"><span>ما يُطالَب به العميل</span><span>فاتورة رقم {id ? id : "جديدة"}</span></div>
-            <div className="tot-card-body">
-              <div className="tot-line"><span className="k">إجمالي بنود النقل</span><span className="v">{money(totals.tripsTotal)}{currency}</span></div>
-              <div className="tot-line"><span className="k">بنود يتحمّلها العميل</span><span className="v">{money(totals.billable)}</span></div>
-              <div className="tot-line"><span className="k">الإجمالي قبل الضريبة</span><span className="v">{money(totals.subtotal)}</span></div>
-              <div className="tot-line">
-                <span className="k">
-                  <span className="tot-vat-row">
-                    <label>ضريبة القيمة المضافة %</label>
-                    <AmountInput value={f.vat_rate} onChange={(v) => setF({ ...f, vat_rate: v })} />
-                  </span>
-                </span>
-                <span className="v">{money(totals.vat)}</span>
-              </div>
-              <div className="tot-line grand"><span className="k">الإجمالي المستحق</span><span className="v">{money(totals.total)}</span></div>
-            </div>
-          </div>
-
-          <div className="tot-card internal">
-            <div className="tot-card-head"><span>ملخص داخلي (لا يظهر للعميل)</span><span>🔒</span></div>
-            <div className="tot-card-body">
-              <div className="tot-line is-cost"><span className="k">تكلفة المصروفات على الشركة</span><span className="v">{money(totals.cost)}</span></div>
-              <div className="tot-line is-profit"><span className="k">الربح المتوقع</span><span className="v">{money(totals.profit)}</span></div>
-              <div className="tot-line">
-                <span className="k">هامش الربح</span>
-                <span className="v">{totals.subtotal > 0 ? `${Math.round((totals.profit / totals.subtotal) * 1000) / 10}%` : "—"}</span>
-              </div>
-            </div>
-            <div className="tot-note">التكاليف والأرباح لأغراض الإدارة فقط، ولا تُطبع ضمن فاتورة العميل.</div>
-          </div>
-        </div>
-
-        <Field label="ملاحظات الفاتورة (تظهر للعميل)">
-          <Textarea value={f.notes} onChange={(e) => setF({ ...f, notes: e.target.value })} readOnly={readOnly} />
-        </Field>
-        <Field label="المرفقات">
-          <Input type="file" multiple onChange={async (e) => {
-            const files = Array.from(e.target.files ?? []);
-            setAttachments((p) => [...p, ...files.map((x) => x.name)]);
-          }} />
-          {attachments.length > 0 && <div style={{ marginTop: 6, color: "var(--muted)" }}>{attachments.join("، ")}</div>}
-        </Field>
-
-        {!readOnly && (
-          <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
-            <Button variant="primary" onClick={save} disabled={saving}>💾 حفظ الفاتورة</Button>
-            {id ? <Button onClick={() => printCustomerInvoice(id)}>🖨️ طباعة فاتورة العميل</Button> : null}
-          </div>
-        )}
-      </div>
-    </Modal>
-  );
-}
 
 /* ============================ سند قبض ============================ */
 export function ReceiptDialog({ id, readOnly, onClose }: { id?: number | null; readOnly?: boolean; onClose: (changed?: boolean) => void }) {
@@ -485,26 +88,36 @@ export function ReceiptDialog({ id, readOnly, onClose }: { id?: number | null; r
 /* ============================ سند دفع ============================ */
 export function PaymentDialog({ id, readOnly, onClose }: { id?: number | null; readOnly?: boolean; onClose: (changed?: boolean) => void }) {
   const [accounts, setAccounts] = useState<{ kind: string; id: number; label: string }[]>([]);
-  const [tripOpts, setTripOpts] = useState<{ id: number; label: string }[]>([]);
+  const [invoiceOpts, setInvoiceOpts] = useState<Awaited<ReturnType<typeof invoiceOptions>>>([]);
+  const [tripOpts, setTripOpts] = useState<Awaited<ReturnType<typeof tripOptionsByInvoice>>>([]);
   const [employees, setEmployees] = useState<{ id: number; name: string }[]>([]);
   const [vehicles, setVehicles] = useState<{ id: number; plate_number: string }[]>([]);
   const [suppliers, setSuppliers] = useState<{ id: number; code: string; name: string }[]>([]);
   const [supplierDue, setSupplierDue] = useState<number | null>(null);
-  const [f, setF] = useState({ account_kind: "cashbox", account_id: "", voucher_type: "trip", trip_id: "", employee_id: "", vehicle_id: "", vehicle_expense: "maintenance", supplier_id: "", amount: "", description: "", date: todayIso() });
+  const [f, setF] = useState({ account_kind: "cashbox", account_id: "", voucher_type: "trip", invoice_id: "", trip_id: "", employee_id: "", vehicle_id: "", vehicle_expense: "maintenance", supplier_id: "", amount: "", description: "", date: todayIso() });
+  const [invoiceInfo, setInvoiceInfo] = useState<{ number: number; date: string; customer_name: string; total: number; paid: number; remaining: number } | null>(null);
   const [tripInfo, setTripInfo] = useState<{ price: number; direct: number; later: number; net: number } | null>(null);
   const [saving, setSaving] = useState(false);
+  const lastInvoiceRef = useRef<number | null>(null);
 
   useEffect(() => {
     (async () => {
       const accs = await allAccounts();
       setAccounts(accs);
-      setTripOpts(await tripsOptions());
+      setInvoiceOpts(await invoiceOptions());
       setEmployees(await listEmployees());
       setVehicles(await listVehicles());
       setSuppliers((await listSuppliers()).map((x) => ({ id: x.id, code: x.code, name: x.name })));
       if (id) {
         const v = await getPayment(id);
-        if (v) setF({ account_kind: v.account_kind, account_id: String(v.account_id), voucher_type: v.voucher_type, trip_id: v.trip_id ? String(v.trip_id) : "", employee_id: v.employee_id ? String(v.employee_id) : "", vehicle_id: v.vehicle_id ? String(v.vehicle_id) : "", vehicle_expense: v.vehicle_expense || "maintenance", supplier_id: (v as { supplier_id?: number | null }).supplier_id ? String((v as { supplier_id?: number | null }).supplier_id) : "", amount: String(v.amount), description: v.description, date: v.date });
+        if (v) {
+          const invoiceId = await tripInvoiceId(v.trip_id);
+          setF({ account_kind: v.account_kind, account_id: String(v.account_id), voucher_type: v.voucher_type, invoice_id: invoiceId ? String(invoiceId) : "", trip_id: v.trip_id ? String(v.trip_id) : "", employee_id: v.employee_id ? String(v.employee_id) : "", vehicle_id: v.vehicle_id ? String(v.vehicle_id) : "", vehicle_expense: v.vehicle_expense || "maintenance", supplier_id: (v as { supplier_id?: number | null }).supplier_id ? String((v as { supplier_id?: number | null }).supplier_id) : "", amount: String(v.amount), description: v.description, date: v.date });
+          if (invoiceId) {
+            lastInvoiceRef.current = invoiceId;
+            setTripOpts(await tripOptionsByInvoice(invoiceId));
+          }
+        }
       } else if (accs.length) setF((old) => ({ ...old, account_kind: accs[0].kind, account_id: String(accs[0].id) }));
     })();
   }, [id]);
@@ -522,6 +135,31 @@ export function PaymentDialog({ id, readOnly, onClose }: { id?: number | null; r
     } else setSupplierDue(null);
   }, [f.voucher_type, f.supplier_id]);
 
+  // اختيار الفاتورة ← عرض بياناتها + سحب نقلاتها فقط
+  useEffect(() => {
+    if (f.voucher_type !== "trip") {
+      setInvoiceInfo(null);
+      setTripOpts([]);
+      setTripInfo(null);
+      return;
+    }
+    const id = Number(f.invoice_id);
+    if (!id) {
+      setInvoiceInfo(null);
+      setTripOpts([]);
+      setTripInfo(null);
+      return;
+    }
+    const inv = invoiceOpts.find((i) => i.id === id);
+    setInvoiceInfo(inv ? { number: inv.number, date: inv.date, customer_name: inv.customer_name, total: inv.total, paid: inv.paid, remaining: inv.remaining } : null);
+    if (lastInvoiceRef.current !== id) {
+      lastInvoiceRef.current = id;
+      setF((p) => ({ ...p, trip_id: "" }));
+      setTripOpts([]);
+    }
+    tripOptionsByInvoice(id).then(setTripOpts);
+  }, [f.voucher_type, f.invoice_id, invoiceOpts]);
+
   const save = async () => {
     if (!f.account_id) return notify("اختر الحساب.", "error");
     const amt = parseFloat(f.amount);
@@ -531,6 +169,7 @@ export function PaymentDialog({ id, readOnly, onClose }: { id?: number | null; r
       await savePayment({
         date: f.date, account_kind: f.account_kind, account_id: Number(f.account_id),
         voucher_type: f.voucher_type,
+        invoice_id: f.voucher_type === "trip" && f.invoice_id ? Number(f.invoice_id) : null,
         trip_id: f.voucher_type === "trip" && f.trip_id ? Number(f.trip_id) : null,
         employee_id: f.voucher_type === "advance" && f.employee_id ? Number(f.employee_id) : null,
         vehicle_id: f.voucher_type === "vehicle" && f.vehicle_id ? Number(f.vehicle_id) : null,
@@ -573,7 +212,32 @@ export function PaymentDialog({ id, readOnly, onClose }: { id?: number | null; r
 
       {f.voucher_type === "trip" && (
         <>
-          <Field label="النقلة" required>
+          <Field label="الفاتورة" required>
+            <Select value={f.invoice_id} onChange={(e) => setF({ ...f, invoice_id: e.target.value })} disabled={readOnly}>
+              <option value="">— اختر الفاتورة —</option>
+              {invoiceOpts.map((t) => (
+                <option key={t.id} value={t.id}>
+                  INV-{String(t.number).padStart(5, "0")} | {t.date} | {t.customer_name} | {money(t.total)}
+                </option>
+              ))}
+            </Select>
+          </Field>
+          {invoiceInfo && (
+            <div className="group-box" style={{ marginTop: 0 }}>
+              <div className="group-title">بيانات الفاتورة</div>
+              <table className="data-table">
+                <tbody>
+                  <tr><td>رقم الفاتورة</td><td>INV-{String(invoiceInfo.number).padStart(5, "0")}</td></tr>
+                  <tr><td>التاريخ</td><td>{invoiceInfo.date}</td></tr>
+                  <tr><td>العميل</td><td>{invoiceInfo.customer_name}</td></tr>
+                  <tr><td>إجمالي الفاتورة</td><td>{money(invoiceInfo.total)}</td></tr>
+                  <tr><td>المسدَّد من الفاتورة</td><td>{money(invoiceInfo.paid)}</td></tr>
+                  <tr className="total-row"><td>المتبقي على الفاتورة</td><td>{money(invoiceInfo.remaining)}</td></tr>
+                </tbody>
+              </table>
+            </div>
+          )}
+          <Field label="النقلة (الرحلة)" required>
             <Select value={f.trip_id} onChange={(e) => setF({ ...f, trip_id: e.target.value })} disabled={readOnly}>
               <option value="">— اختر النقلة —</option>
               {tripOpts.map((t) => <option key={t.id} value={t.id}>{t.label}</option>)}
@@ -584,10 +248,10 @@ export function PaymentDialog({ id, readOnly, onClose }: { id?: number | null; r
               <div className="group-title">ملخص النقلة</div>
               <table className="data-table">
                 <tbody>
-                  <tr><td>السعر</td><td>{money(tripInfo.price)}</td></tr>
-                  <tr><td>المصروفات المباشرة</td><td>{money(tripInfo.direct)}</td></tr>
-                  <tr><td>سندات دفع سابقة</td><td>{money(tripInfo.later)}</td></tr>
-                  <tr className="total-row"><td>المتبقي</td><td>{money(tripInfo.net)}</td></tr>
+                  <tr><td>سعر النقلة</td><td>{money(tripInfo.price)}</td></tr>
+                  <tr><td>مصاريف مباشرة مسجلة سابقاً</td><td>{money(tripInfo.direct)}</td></tr>
+                  <tr><td>سندات دفع سابقة على النقلة</td><td>{money(tripInfo.later)}</td></tr>
+                  <tr className="total-row"><td>صافي الربح/الخسارة حتى الآن</td><td>{money(tripInfo.net)}</td></tr>
                 </tbody>
               </table>
             </div>
@@ -630,6 +294,9 @@ export function PaymentDialog({ id, readOnly, onClose }: { id?: number | null; r
         <Field label="التاريخ" required><DateInput value={f.date} onChange={(v) => setF({ ...f, date: v })} disabled={readOnly} /></Field>
       </div>
       <Field label="البيان"><Textarea value={f.description} onChange={(e) => setF({ ...f, description: e.target.value })} readOnly={readOnly} /></Field>
+      {f.voucher_type === "owner" && (
+        <span className="field-hint">سحب نقدي خاص بصاحب المنشأة — يخرج من الخزينة/البنك ويُخصم من الأرباح، ويظهر في تقرير الأرباح والخسائر وكشف الحساب.</span>
+      )}
       {!readOnly && <div style={{ marginTop: 14 }}><Button variant="primary" onClick={save} disabled={saving}>💾 حفظ السند</Button></div>}
     </Modal>
   );
@@ -643,12 +310,15 @@ export function PaymentDialog({ id, readOnly, onClose }: { id?: number | null; r
 export async function customerInvoiceHtml(invoiceId: number): Promise<{ html: string; number: number } | null> {
   const inv = await getInvoiceFull(invoiceId);
   if (!inv) return null;
-  const info = await companyInfo();
+  const [info, ps, meta] = await Promise.all([
+    companyInfo(),
+    import("@/lib/print").then((m) => m.getPrintSettings()),
+    import("@/lib/exportHelper").then((m) => m.printMeta()),
+  ]);
   const { buildZatcaQr, zatcaQrDataUrl, zatcaInvoiceType, zatcaMissingFields, ZATCA_TYPE_LABEL } = await import("@/lib/zatca");
   const { formatNationalAddress } = await import("@/lib/tax");
 
   const cur = info.currency || "ر.س";
-  const curEn = "SAR";
   const billable = inv.billable_total ?? 0;
   const subtotal = Math.round((inv.trips_total + billable) * 100) / 100;
   const vatRate = inv.vat_rate ?? 0;
@@ -694,9 +364,25 @@ export async function customerInvoiceHtml(invoiceId: number): Promise<{ html: st
     buyerName: buyer?.name, buyerVat, type: invType, date: inv.date,
   });
 
-  /** سطر ثنائي اللغة: العربية أعلى والإنجليزية أسفل بخط أصغر. */
+  // لغة التسميات: عربي أو إنجليزي فقط (لا يُعرض الاثنان معاً أبداً)
+  const enLabels = ps.label_language === "en";
   const bi = (ar: string, en: string) =>
-    `<div style="font-weight:700;">${esc(ar)}</div><div style="font-size:10.5px;color:#64748b;font-weight:600;direction:ltr;">${esc(en)}</div>`;
+    esc(enLabels ? en : ar);
+  const accent = ps.accent_color || "#1d4ed8";
+  const soft = ps.template === "minimal" ? "#111827" : accent;
+  const headBg = ps.template === "classic" || ps.template === "compact" ? accent
+    : ps.template === "minimal" ? "#111827"
+    : ps.template === "elegant" ? "#ffffff"
+    : accent;
+  const headColor = ps.template === "minimal" || ps.template === "elegant" ? (ps.template === "minimal" ? "#111827" : accent) : "#ffffff";
+  const borderStyle = ps.template === "minimal" ? "1px solid #cbd5e1" : "1px solid #e2e8f0";
+  const titleStyle = ps.template === "modern" ? `background:${accent};color:#fff;border-radius:10px;padding:10px 14px;`
+    : ps.template === "classic" ? `border:1.5pt solid ${accent};color:${accent};padding:8px 14px;`
+    : ps.template === "elegant" ? `border-bottom:1pt solid ${accent};color:${accent};padding-bottom:8px;`
+    : ps.template === "compact" ? `background:${accent};color:#fff;padding:7px 14px;`
+    : `color:#111827;border-bottom:1pt solid #111827;padding-bottom:6px;`;
+  const showField = (enabled: boolean, value?: unknown) => enabled && String(value ?? "").trim() !== "";
+  const labelOr = (v: unknown, alt = "") => String(v ?? "").trim() ? String(v) : alt;
 
   const cell = (v: string, align = "center", extra = "") =>
     `<td style="padding:9px 10px;border-bottom:1px solid #e6ebf2;text-align:${align};${extra}">${v}</td>`;
@@ -737,21 +423,21 @@ export async function customerInvoiceHtml(invoiceId: number): Promise<{ html: st
   const totalLine = (ar: string, en: string, v: string, strong = false) =>
     `<tr>
       <td style="padding:7px 12px;color:${strong ? "#0f172a" : "#475569"};font-weight:${strong ? 800 : 500};font-size:${strong ? "14px" : "12.5px"};">
-        ${esc(ar)}<div style="font-size:10px;color:#64748b;direction:ltr;">${esc(en)}</div>
+        ${bi(ar, en)}
       </td>
-      <td style="padding:7px 12px;text-align:left;font-weight:${strong ? 800 : 700};color:${strong ? "#1d4ed8" : "#0f172a"};font-size:${strong ? "15px" : "13px"};white-space:nowrap;">${v}</td>
+      <td style="padding:7px 12px;text-align:left;font-weight:${strong ? 800 : 700};color:${strong ? accent : "#0f172a"};font-size:${strong ? "15px" : "13px"};white-space:nowrap;">${v}</td>
     </tr>`;
 
   const infoBox = (titleAr: string, titleEn: string, body: string) => `
-    <div style="flex:1;border:1px solid #e2e8f0;border-radius:10px;overflow:hidden;">
-      <div style="background:#f1f5f9;padding:6px 12px;font-size:11.5px;font-weight:700;color:#475569;display:flex;justify-content:space-between;">
-        <span>${esc(titleAr)}</span><span style="direction:ltr;color:#94a3b8;">${esc(titleEn)}</span>
+    <div style="flex:1;border:${borderStyle};border-radius:10px;overflow:hidden;">
+      <div style="background:${headBg};padding:6px 12px;font-size:11.5px;font-weight:700;color:${headColor};">
+        ${bi(titleAr, titleEn)}
       </div>
       <div style="padding:10px 12px;font-size:12.5px;line-height:1.85;">${body}</div>
     </div>`;
 
   const kv = (ar: string, en: string, v: string) =>
-    v ? `<div><span style="color:#64748b;">${esc(ar)} <span style="direction:ltr;font-size:10.5px;">/ ${esc(en)}</span>:</span> <b>${esc(v)}</b></div>` : "";
+    v ? `<div><span style="color:#64748b;">${bi(ar, en)}:</span> <b>${esc(v)}</b></div>` : "";
 
   const html = `
   <div style="font-family:'IBM Plex Sans Arabic','Segoe UI',Tahoma,sans-serif;color:#0f172a;direction:rtl;">
@@ -760,48 +446,54 @@ export async function customerInvoiceHtml(invoiceId: number): Promise<{ html: st
     <table width="100%" style="border-collapse:collapse;margin-bottom:12px;">
       <tr>
         <td style="vertical-align:top;">
-          <div style="font-size:20px;font-weight:800;color:#1d4ed8;line-height:1.35;">${esc(info.company_name || "شركة النقل")}</div>
-          ${info.company_name_en ? `<div style="font-size:12.5px;font-weight:700;color:#475569;direction:ltr;">${esc(info.company_name_en)}</div>` : ""}
+          ${showField(ps.invoice_show_company_name, info.company_name) ? `<div style="font-size:20px;font-weight:800;color:${accent};line-height:1.35;">${esc(info.company_name || "شركة النقل")}</div>` : ""}
+          ${showField(ps.invoice_show_company_name, info.company_name_en) ? `<div style="font-size:12.5px;font-weight:700;color:#475569;direction:ltr;">${esc(info.company_name_en)}</div>` : ""}
           <div style="font-size:11.5px;color:#64748b;line-height:1.85;margin-top:4px;">
-            ${sellerAddress ? esc(sellerAddress) + "<br/>" : ""}
-            ${info.company_phone ? "هاتف / Tel: " + esc(info.company_phone) + "&nbsp;&nbsp;" : ""}
-            ${info.company_email ? esc(info.company_email) : ""}
+            ${showField(ps.invoice_show_company_address, sellerAddress) ? esc(sellerAddress) + "<br/>" : ""}
+            ${showField(ps.invoice_show_company_phone, info.company_phone) ? bi("هاتف", "Tel") + ": " + esc(info.company_phone) + "&nbsp;&nbsp;" : ""}
+            ${showField(ps.invoice_show_company_email, info.company_email) ? esc(info.company_email) + "&nbsp;&nbsp;" : ""}
+            ${showField(ps.invoice_show_company_website, info.company_website) ? esc(info.company_website) : ""}
           </div>
           <div style="font-size:11.5px;color:#0f172a;line-height:1.85;margin-top:4px;">
-            ${kv("الرقم الضريبي", "VAT No.", sellerVat)}
-            ${kv("السجل التجاري", "CR No.", info.company_commercial_reg)}
+            ${showField(ps.invoice_show_company_tax_number, sellerVat) ? kv("الرقم الضريبي", "VAT No.", sellerVat) : ""}
+            ${showField(ps.invoice_show_company_cr, info.company_commercial_reg) ? kv("السجل التجاري", "CR No.", labelOr(info.company_commercial_reg)) : ""}
+            ${showField(ps.invoice_show_company_unified, info.company_unified_number) ? kv("الرقم الموحّد", "Unified No.", labelOr(info.company_unified_number)) : ""}
           </div>
         </td>
         <td style="vertical-align:top;text-align:left;width:250px;">
-          <div style="background:#1d4ed8;color:#fff;border-radius:10px;padding:10px 14px;text-align:center;">
-            <div style="font-size:16px;font-weight:800;letter-spacing:.4px;">${esc(typeLabel.ar)}</div>
-            <div style="font-size:12px;opacity:.92;margin-top:2px;direction:ltr;">${esc(typeLabel.en)}</div>
+          <div style="${titleStyle};text-align:center;${ps.template === "minimal" ? "border:1pt solid #111827;" : ""}${ps.template === "elegant" ? "border-bottom:1pt solid " + accent + ";" : ""}">
+            <div style="font-size:16px;font-weight:800;letter-spacing:.4px;">${bi(typeLabel.ar, typeLabel.en)}</div>
           </div>
           <table width="100%" style="margin-top:8px;border-collapse:collapse;font-size:12px;">
-            <tr><td style="padding:3px 0;color:#64748b;">رقم الفاتورة <span style="direction:ltr;font-size:10px;">/ Invoice No.</span></td><td style="padding:3px 0;text-align:left;font-weight:800;">INV-${num}</td></tr>
-            <tr><td style="padding:3px 0;color:#64748b;">تاريخ الإصدار <span style="direction:ltr;font-size:10px;">/ Issue date</span></td><td style="padding:3px 0;text-align:left;font-weight:700;">${esc(inv.date)}</td></tr>
-            <tr><td style="padding:3px 0;color:#64748b;">العملة <span style="direction:ltr;font-size:10px;">/ Currency</span></td><td style="padding:3px 0;text-align:left;font-weight:700;">${esc(cur)} (${curEn})</td></tr>
+            <tr><td style="padding:3px 0;color:#64748b;">${bi("رقم الفاتورة", "Invoice No.")}</td><td style="padding:3px 0;text-align:left;font-weight:800;">INV-${num}</td></tr>
+            <tr><td style="padding:3px 0;color:#64748b;">${bi("تاريخ الإصدار", "Issue date")}</td><td style="padding:3px 0;text-align:left;font-weight:700;">${esc(inv.date)}</td></tr>
+            ${showField(ps.invoice_show_currency, cur) ? `<tr><td style="padding:3px 0;color:#64748b;">${bi("العملة", "Currency")}</td><td style="padding:3px 0;text-align:left;font-weight:700;">${esc(cur)}${enLabels ? " (SAR)" : ""}</td></tr>` : ""}
+            <tr><td style="padding:3px 0;color:#64748b;">${bi("طُبع بواسطة", "Printed by")}</td><td style="padding:3px 0;text-align:left;font-weight:700;">${esc(meta.printedBy || "—")}</td></tr>
+            <tr><td style="padding:3px 0;color:#64748b;">${bi("وقت الطباعة", "Printed at")}</td><td style="padding:3px 0;text-align:left;font-weight:700;">${esc(meta.printedAt)}</td></tr>
           </table>
         </td>
       </tr>
     </table>
 
-    <div style="height:3px;background:linear-gradient(90deg,#1d4ed8,#60a5fa 60%,transparent);border-radius:3px;margin-bottom:12px;"></div>
+    <div style="height:3px;background:linear-gradient(90deg,${soft},${accent} 60%,transparent);border-radius:3px;margin-bottom:12px;"></div>
 
     <!-- بيانات البائع والمشتري -->
     <div style="display:flex;gap:12px;margin-bottom:12px;">
       ${infoBox("فاتورة إلى (المشتري)", "Bill to (Buyer)", `
-        <div style="font-weight:800;font-size:13.5px;">${esc(buyer?.name ?? "—")}</div>
-        ${buyer?.name_en ? `<div style="direction:ltr;color:#475569;font-size:11.5px;">${esc(buyer.name_en)}</div>` : ""}
-        ${kv("الرقم الضريبي", "VAT No.", buyerVat)}
-        ${kv("السجل التجاري", "CR No.", String(buyer?.commercial_reg ?? ""))}
-        ${buyerAddress ? `<div style="color:#475569;">${esc(buyerAddress)}</div>` : ""}
-        ${buyer?.phone ? `<div style="color:#475569;">هاتف / Tel: ${esc(buyer.phone)}</div>` : ""}
+        ${showField(ps.invoice_show_customer_name, buyer?.name) ? `<div style="font-weight:800;font-size:13.5px;">${esc(buyer?.name ?? "—")}</div>` : ""}
+        ${showField(ps.invoice_show_customer_code, inv.customer_code) ? `<div style="color:#475569;">${bi("كود العميل", "Customer code")}: ${esc(inv.customer_code)}</div>` : ""}
+        ${showField(ps.invoice_show_customer_name, buyer?.name_en) && buyer?.name_en ? `<div style="direction:ltr;color:#475569;font-size:11.5px;">${esc(buyer.name_en)}</div>` : ""}
+        ${showField(ps.invoice_show_customer_tax_number, buyerVat) ? kv("الرقم الضريبي", "VAT No.", buyerVat) : ""}
+        ${showField(ps.invoice_show_customer_cr, buyer?.commercial_reg) ? kv("السجل التجاري", "CR No.", labelOr(buyer?.commercial_reg)) : ""}
+        ${showField(ps.invoice_show_customer_address, buyerAddress) ? `<div style="color:#475569;">${esc(buyerAddress)}</div>` : ""}
+        ${showField(ps.invoice_show_customer_phone, buyer?.phone) ? `<div style="color:#475569;">${bi("هاتف", "Tel")}: ${esc(buyer!.phone)}</div>` : ""}
+        ${!showField(ps.invoice_show_customer_name, buyer?.name) && !showField(ps.invoice_show_customer_code, inv.customer_code) ? `<div style="color:#64748b;">${bi("—", "—")}</div>` : ""}
       `)}
       ${infoBox("ملخص الفاتورة", "Invoice summary", `
-        <div>عدد البنود <span style="direction:ltr;font-size:10.5px;">/ Line items</span>: <b>${idx}</b></div>
-        <div>نسبة الضريبة <span style="direction:ltr;font-size:10.5px;">/ VAT rate</span>: <b>${vatRate}%</b></div>
-        <div>الإجمالي المستحق <span style="direction:ltr;font-size:10.5px;">/ Total due</span>: <b style="color:#1d4ed8;">${money(total)} ${esc(cur)}</b></div>
+        ${inv.container_number ? `<div>${bi("رقم الحاوية", "Container No.")}: <b dir="ltr">${esc(inv.container_number)}</b></div>` : ""}
+        <div>${bi("عدد البنود", "Line items")}: <b>${idx}</b></div>
+        <div>${bi("نسبة الضريبة", "VAT rate")}: <b>${vatRate}%</b></div>
+        <div>${bi("الإجمالي المستحق", "Total due")}: <b style="color:${accent};">${money(total)} ${esc(cur)}</b></div>
       `)}
     </div>
 
@@ -826,25 +518,22 @@ export async function customerInvoiceHtml(invoiceId: number): Promise<{ html: st
     <table width="100%" style="margin-top:12px;border-collapse:collapse;">
       <tr>
         <td style="vertical-align:top;width:150px;text-align:center;">
-          ${qrImg ? `<img src="${qrImg}" alt="ZATCA QR" style="width:120px;height:120px;border:1px solid #e2e8f0;border-radius:8px;padding:4px;background:#fff;"/>
-          <div style="font-size:10px;color:#64748b;margin-top:4px;line-height:1.6;">رمز الفاتورة الإلكترونية<br/><span style="direction:ltr;">ZATCA e-invoice QR</span></div>` : ""}
+          ${ps.invoice_show_barcode && qrImg && missing.length === 0 ? `<img src="${qrImg}" alt="QR" style="width:120px;height:120px;border:1px solid #e2e8f0;border-radius:8px;padding:4px;background:#fff;"/>` : ""}
         </td>
         <td style="vertical-align:top;padding-inline:12px;">
           <div style="border:1px solid #e2e8f0;border-radius:10px;padding:9px 12px;font-size:12px;background:#f8fafc;">
-            <div style="color:#64748b;font-weight:700;margin-bottom:4px;">المبلغ كتابةً <span style="direction:ltr;font-size:10px;">/ Amount in words</span></div>
+            <div style="color:#64748b;font-weight:700;margin-bottom:4px;">${bi("المبلغ كتابةً", "Amount in words")}</div>
             <div style="font-weight:700;line-height:1.85;">${esc(amountToArabicWords(total, cur))}</div>
           </div>
           ${inv.notes ? `<div style="margin-top:8px;border:1px solid #e2e8f0;border-radius:10px;padding:9px 12px;font-size:12px;">
-            <div style="color:#64748b;font-weight:700;margin-bottom:4px;">ملاحظات <span style="direction:ltr;font-size:10px;">/ Notes</span></div>
+            <div style="color:#64748b;font-weight:700;margin-bottom:4px;">${bi("ملاحظات", "Notes")}</div>
             <div style="line-height:1.85;">${esc(inv.notes)}</div></div>` : ""}
-          ${missing.length ? `<div style="margin-top:8px;border:1px solid #fecaca;background:#fef2f2;color:#b91c1c;border-radius:10px;padding:8px 12px;font-size:11.5px;">
-            بيانات ناقصة لاستيفاء متطلبات زاتكا: ${esc(missing.join("، "))}</div>` : ""}
         </td>
         <td style="width:290px;vertical-align:top;">
-          <table width="100%" style="border-collapse:collapse;border:1px solid #e2e8f0;border-radius:10px;overflow:hidden;">
+          <table width="100%" style="border-collapse:collapse;border:${borderStyle};border-radius:10px;overflow:hidden;">
             ${totalLine("الإجمالي الخاضع للضريبة", "Total taxable amount", `${money(subtotal)} ${esc(cur)}`)}
             ${totalLine(`ضريبة القيمة المضافة (${vatRate}%)`, "VAT", `${money(vat)} ${esc(cur)}`)}
-            <tr><td colspan="2" style="padding:0;"><div style="height:2px;background:#1d4ed8;"></div></td></tr>
+            <tr><td colspan="2" style="padding:0;"><div style="height:2px;background:${accent};"></div></td></tr>
             ${totalLine("الإجمالي شامل الضريبة", "Total amount due", `${money(total)} ${esc(cur)}`, true)}
           </table>
         </td>
@@ -855,18 +544,15 @@ export async function customerInvoiceHtml(invoiceId: number): Promise<{ html: st
     <table width="100%" style="margin-top:22px;border-collapse:collapse;font-size:12px;color:#475569;">
       <tr>
         <td style="text-align:center;padding-top:6px;">
-          <div style="border-top:1px dashed #94a3b8;padding-top:6px;width:190px;margin:0 auto;">توقيع المستلم <span style="direction:ltr;font-size:10px;">/ Receiver</span></div>
+          <div style="border-top:1px dashed #94a3b8;padding-top:6px;width:190px;margin:0 auto;">${bi("توقيع المستلم", "Receiver")}</div>
         </td>
         <td style="text-align:center;padding-top:6px;">
-          <div style="border-top:1px dashed #94a3b8;padding-top:6px;width:190px;margin:0 auto;">عن الشركة <span style="direction:ltr;font-size:10px;">/ For the company</span></div>
+          <div style="border-top:1px dashed #94a3b8;padding-top:6px;width:190px;margin:0 auto;">${bi("عن الشركة", "For the company")}</div>
         </td>
       </tr>
     </table>
 
-    <div style="margin-top:14px;border-top:1px solid #e2e8f0;padding-top:8px;font-size:11px;color:#64748b;text-align:center;line-height:1.7;">
-      ${esc(info.company_vat_note || "شكراً لتعاملكم معنا")}<br/>
-      <span style="direction:ltr;">This invoice complies with ZATCA e-invoicing requirements (KSA).</span>
-    </div>
+    ${ps.footer_text ? `<div style="margin-top:14px;border-top:1px solid #e2e8f0;padding-top:8px;font-size:11px;color:#64748b;text-align:center;line-height:1.7;">${esc(ps.footer_text)}</div>` : ""}
   </div>`;
 
   return { html, number: inv.number };

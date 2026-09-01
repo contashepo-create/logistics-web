@@ -13,8 +13,8 @@ describe("قواميس التسميات", () => {
   it("EXPENSE_TYPES يغطي أنواع المصروفات الأربعة", () => {
     expect(Object.keys(EXPENSE_TYPES).sort()).toEqual(["card", "fuel", "other", "trip"]);
   });
-  it("PAYMENT_TYPES يغطي أنواع سندات الدفع الخمسة", () => {
-    expect(Object.keys(PAYMENT_TYPES).sort()).toEqual(["advance", "general", "supplier", "trip", "vehicle"]);
+  it("PAYMENT_TYPES يغطي أنواع سندات الدفع", () => {
+    expect(Object.keys(PAYMENT_TYPES).sort()).toEqual(["advance", "general", "owner", "supplier", "trip", "vehicle"]);
   });
   it("VEHICLE_EXPENSES / RECEIPT_TYPES / EMP_TYPES", () => {
     expect(Object.keys(VEHICLE_EXPENSES).sort()).toEqual(["maintenance", "other", "tires"]);

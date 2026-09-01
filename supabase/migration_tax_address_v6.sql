@@ -105,6 +105,18 @@ drop trigger if exists trg_check_tax_customers on public.customers;
 create trigger trg_check_tax_customers before insert or update on public.customers
   for each row execute function public.check_tax_identifiers();
 
+-- ---------------------------------------------------------------------------
+-- صلاحية التحديث: أعمدة الشركة التشغيلية (بدونها يعطي Supabase
+-- «permission denied for table companies» عند حفظ بيانات الشركة)
+-- ---------------------------------------------------------------------------
+revoke update on public.companies from authenticated;
+grant update (
+  name, name_en, phone, email, website, address, currency, vat_rate, vat_note,
+  tax_number, commercial_reg, unified_number, entity_type, tax_status,
+  country, region, city, district, street, building_no, postal_code,
+  additional_no, address_note
+) on public.companies to authenticated;
+
 -- ============================================================================
 -- بعد التنفيذ: أكمل بيانات منشأتك من «الإعدادات ← بيانات الشركة»،
 -- وبيانات كل عميل من شاشة العملاء. الفاتورة الضريبية تعتمد عليها.

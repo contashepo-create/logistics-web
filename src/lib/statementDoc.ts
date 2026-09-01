@@ -13,10 +13,12 @@ export interface StatementDocOptions {
   info: Record<string, string>;
   ps: PrintSettings;
   st: CustomerStatementFull;
+  printedBy?: string;
+  printedAt?: string;
 }
 
 /** يبني HTML كشف حساب احترافي (ترويسة + ملخص + حركات + تركيبة الرصيد + توقيع). */
-export function customerStatementHtml({ info, ps, st }: StatementDocOptions): string {
+export function customerStatementHtml({ info, ps, st, printedBy, printedAt }: StatementDocOptions): string {
   const accent = ps.accent_color || "#1d4ed8";
   const soft = ps.template === "minimal" ? "#111827" : accent;
   const cur = info.currency || "";
@@ -86,12 +88,12 @@ export function customerStatementHtml({ info, ps, st }: StatementDocOptions): st
         <td style="vertical-align:top;text-align:left;width:250px;">
           <div style="background:${ps.template === "minimal" ? "#f1f5f9" : soft};color:${ps.template === "minimal" ? "#111827" : "#fff"};border-radius:8px;padding:9px 14px;text-align:center;">
             <div style="font-size:15px;font-weight:800;">كشف حساب عميل</div>
-            <div style="font-size:11.5px;opacity:.9;">ACCOUNT STATEMENT</div>
           </div>
           <table width="100%" style="margin-top:6px;border-collapse:collapse;">
             ${headerRow("من تاريخ", esc(st.from))}
             ${headerRow("إلى تاريخ", esc(st.to))}
-            ${ps.show_date ? headerRow("تاريخ الإصدار", new Date().toISOString().slice(0, 10)) : ""}
+            ${printedBy ? headerRow("طُبع بواسطة", esc(printedBy)) : ""}
+            ${printedAt ? headerRow("وقت الطباعة", esc(printedAt)) : ""}
           </table>
         </td>
       </tr>
@@ -119,6 +121,8 @@ export function customerStatementHtml({ info, ps, st }: StatementDocOptions): st
               ${headerRow("الرصيد الافتتاحي", `${money(st.opening)} ${esc(cur)}`)}
               ${headerRow("إجمالي الفواتير (مدين)", `${money(st.invoiced)} ${esc(cur)}`)}
               ${headerRow("إجمالي التحصيل (دائن)", `${money(st.collected)} ${esc(cur)}`)}
+              ${headerRow("إشعارات مدين", `${money(st.notes_debit)} ${esc(cur)}`)}
+              ${headerRow("إشعارات دائن", `${money(st.notes_credit)} ${esc(cur)}`)}
               <tr><td colspan="2" style="padding:0;"><div style="height:1.5px;background:${soft};"></div></td></tr>
               <tr>
                 <td style="padding:7px 10px;font-weight:800;font-size:13px;">الرصيد الختامي</td>
@@ -155,8 +159,8 @@ export function customerStatementHtml({ info, ps, st }: StatementDocOptions): st
         ${rowsHtml || `<tr><td colspan="6" style="padding:14px;text-align:center;color:#64748b;">لا توجد حركات خلال هذه الفترة</td></tr>`}
         <tr style="background:${ps.template === "minimal" ? "#f1f5f9" : "#eaf0fb"};font-weight:800;">
           <td colspan="3" style="padding:8px;text-align:center;">الإجماليات</td>
-          <td style="padding:8px;text-align:center;">${money(st.invoiced)}</td>
-          <td style="padding:8px;text-align:center;">${money(st.collected)}</td>
+          <td style="padding:8px;text-align:center;">${money(st.invoiced + st.notes_debit)}</td>
+          <td style="padding:8px;text-align:center;">${money(st.collected + st.notes_credit)}</td>
           <td style="padding:8px;text-align:center;color:${sideColor};">${money(st.closing)}</td>
         </tr>
       </tbody>

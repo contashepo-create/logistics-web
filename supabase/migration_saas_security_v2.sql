@@ -111,7 +111,7 @@ end $$;
 create unique index if not exists uq_companies_client_code on public.companies(client_code);
 -- العميل لا يستطيع تعديل رقمه
 revoke update on public.companies from authenticated;
-grant update (name, phone, address, currency, vat_rate, vat_note) on public.companies to authenticated;
+grant update (name, phone, email, address, currency, vat_rate, vat_note) on public.companies to authenticated;
 
 -- ---------------------------------------------------------------------------
 -- 2) مستخدم واحد فقط لكل شركة
