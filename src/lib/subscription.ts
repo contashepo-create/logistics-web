@@ -1,31 +1,50 @@
 // نظام الاشتراك: تجربة مجانية 7 أيام + شهري/سنوي (يظهران للعميل) + مفتوح (للمطوّر فقط)
-// الأسعار بدون ضريبة القيمة المضافة (تُضاف لاحقاً عند الدفع/العرض).
+// الأسعار بالجنيه المصري وغير شاملة ضريبة القيمة المضافة.
 
 import { supabase } from "./supabase";
 import type { Company } from "./types";
 
-/** الأسعار بالريال (غير شامل الضريبة). */
+/** عملة العرض. */
+export const CURRENCY = "ج.م";
+
+/** الأسعار بالجنيه المصري (غير شاملة الضريبة). */
 export const PRICING = {
   monthly: 100,
-  yearly: 900,
-  vatRate: 15, // نسبة الضريبة الافتراضية للعرض
+  /** السنوي 1000 بدلاً من 1200 (خصم 200 جنيه). */
+  yearly: 1000,
+  yearlyBefore: 1200,
+  yearlyDiscount: 200,
+  /** ضريبة القيمة المضافة في مصر. */
+  vatRate: 14,
 } as const;
+
+/** قيمة الضريبة على سعر معيّن. */
+export function vatOf(amount: number): number {
+  return Math.round(amount * PRICING.vatRate) / 100;
+}
+
+/** الإجمالي شامل الضريبة. */
+export function totalWithVat(amount: number): number {
+  return Math.round((amount + vatOf(amount)) * 100) / 100;
+}
 
 /** مدة التجربة المجانية بالأيام. */
 export const TRIAL_DAYS = 7;
 
-export type PlanType = "monthly" | "yearly" | "open";
+export type PlanType = "trial" | "monthly" | "yearly" | "open";
 
 /** الأنواع التي يراها العميل (المفتوح حصري للمطوّر). */
 export const CUSTOMER_PLAN_TYPES: ("monthly" | "yearly")[] = ["monthly", "yearly"];
 
 export function planLabel(p: PlanType): string {
+  if (p === "trial") return "الباقة التجريبية";
   if (p === "monthly") return "اشتراك شهري";
   if (p === "yearly") return "اشتراك سنوي";
   return "اشتراك مفتوح";
 }
 
 export function planPrice(p: PlanType): number {
+  if (p === "trial") return 0;
   if (p === "monthly") return PRICING.monthly;
   if (p === "yearly") return PRICING.yearly;
   return 0;
@@ -53,7 +72,7 @@ function addDays(d: Date, days: number): Date {
 /** تاريخ انتهاء الاشتراك الناتج عن الموافقة على نوع معيّن. */
 export function endDateForPlan(plan: PlanType, from: Date = new Date()): string | null {
   if (plan === "open") return null;
-  const days = plan === "monthly" ? 30 : 365;
+  const days = plan === "trial" ? TRIAL_DAYS : plan === "monthly" ? 30 : 365;
   return addDays(from, days).toISOString().slice(0, 10);
 }
 
@@ -102,10 +121,23 @@ export function isRequestablePlan(p: string): p is "monthly" | "yearly" {
   return p === "monthly" || p === "yearly";
 }
 
+export type RequestKind = "new" | "upgrade" | "renew";
+
+export function requestKindLabel(k: RequestKind): string {
+  return k === "upgrade" ? "ترقية الباقة" : k === "renew" ? "تجديد الاشتراك" : "اشتراك جديد";
+}
+
 export interface ActivationRequest {
   id: string;
   company_id: string;
   plan_type: "monthly" | "yearly";
+  request_kind: RequestKind;
+  amount: number;
+  payer_name: string;
+  payer_phone: string;
+  pay_method: string;
+  transfer_ref: string;
+  receipt_sent: boolean;
   status: "pending" | "approved" | "rejected";
   receipt_url: string | null;
   notes: string;
@@ -115,26 +147,46 @@ export interface ActivationRequest {
   company_name?: string;
 }
 
-/** تقديم طلب اشتراك (إدراج مباشر — RLS + حارس company_id يضمن العزل). */
-export async function submitActivationRequest(input: {
+export interface SubscriptionRequestInput {
   plan_type: "monthly" | "yearly";
-  receipt_url?: string | null;
+  request_kind: RequestKind;
+  amount: number;
+  payer_name: string;
+  payer_phone: string;
+  pay_method: string;
+  transfer_ref: string;
   notes?: string;
-}): Promise<ActivationRequest> {
-  const { data, error } = await supabase
-    .from("activation_requests")
-    .insert({
-      plan_type: input.plan_type,
-      receipt_url: input.receipt_url ?? null,
-      notes: input.notes ?? "",
-    })
-    .select()
-    .single();
-  if (error) {
-    if (error.code === "23505") throw new Error("لديك طلب معلق بالفعل. انتظر مراجعته أو ألغه أولاً.");
-    throw new Error(error.message);
-  }
-  return data as ActivationRequest;
+  /** صورة الوصل — تُمرَّر إلى تليجرام المطوّر ولا تُخزَّن على الموقع إطلاقاً. */
+  receipt?: File | null;
+}
+
+/**
+ * تقديم طلب اشتراك/ترقية/تجديد عبر مسار خادمي محمي:
+ * يتحقق من الجلسة، ويعقّم المدخلات، ويقيّد المعدل،
+ * ويمرّر صورة الوصل مباشرة إلى تليجرام المطوّر دون تخزينها.
+ */
+export async function submitSubscriptionRequest(input: SubscriptionRequestInput): Promise<ActivationRequest> {
+  const { data: sess } = await supabase.auth.getSession();
+  const token = sess.session?.access_token ?? "";
+  const fd = new FormData();
+  fd.set("plan_type", input.plan_type);
+  fd.set("request_kind", input.request_kind);
+  fd.set("amount", String(input.amount));
+  fd.set("payer_name", input.payer_name);
+  fd.set("payer_phone", input.payer_phone);
+  fd.set("pay_method", input.pay_method);
+  fd.set("transfer_ref", input.transfer_ref);
+  fd.set("notes", input.notes ?? "");
+  if (input.receipt) fd.set("receipt", input.receipt);
+
+  const res = await fetch("/api/subscription/request", {
+    method: "POST",
+    headers: token ? { Authorization: `Bearer ${token}` } : undefined,
+    body: fd,
+  });
+  const out = await res.json().catch(() => ({}));
+  if (!res.ok || !out?.success) throw new Error(out?.message || "تعذّر إرسال الطلب.");
+  return out.request as ActivationRequest;
 }
 
 /** طلبات الشركة الحالية. */
@@ -154,18 +206,9 @@ export async function cancelMyActivationRequest(id: string): Promise<void> {
   if (error) throw new Error(error.message);
 }
 
-/** رفع وصل إلى Storage وإرجاع رابط عام. */
-export async function uploadReceipt(file: File): Promise<string> {
-  const ext = file.name.split(".").pop() || "png";
-  const path = `receipts/${Date.now()}-${Math.random().toString(36).slice(2)}.${ext}`;
-  const { data, error } = await supabase.storage.from("receipts").upload(path, file, {
-    contentType: file.type || "image/png",
-    upsert: false,
-  });
-  if (error) throw new Error(error.message);
-  const { data: pub } = supabase.storage.from("receipts").getPublicUrl(data.path);
-  return pub.publicUrl;
-}
+// ملاحظة أمنية: لا يوجد رفع صور على الموقع إطلاقاً (لا للعميل ولا للزائر).
+// صورة الوصل تُرسل مباشرة إلى تليجرام المطوّر عبر /api/subscription/request
+// دون تخزينها في الموقع أو في Storage.
 
 /** بيانات الشركة للتصدير (متاحة حتى بعد انتهاء الاشتراك). */
 export async function exportCompanyData(): Promise<Record<string, unknown>> {

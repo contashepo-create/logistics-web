@@ -100,16 +100,27 @@ describe("auth.ts — الجلسة والمصادقة", () => {
 
   it("signUp بلا جلسة يطلب التحقق", async () => {
     supabaseMock.auth.signUp = vi.fn(async () => ({ data: { session: null }, error: null }));
-    const r = await authLib.signUp({ email: "a@b.c", password: "p", name: "n", companyName: "c" });
+    const r = await authLib.signUp({ email: "user@gmail.com", password: "Pass1234", name: "n", companyName: "c" });
     expect(r).toEqual({ ok: true, session: null, needsVerification: true });
   });
 
   it("signUp بجلسة ينشئ الشركة فوراً", async () => {
     supabaseMock.auth.signUp = vi.fn(async () => ({ data: { session: { user: {} } }, error: null }));
     supabaseMock.rpc.mockResolvedValue({ data: "c1", error: null });
-    const r = await authLib.signUp({ email: "a@b.c", password: "p", name: "n", companyName: "c", phone: "1" });
+    const r = await authLib.signUp({ email: "user@gmail.com", password: "Pass1234", name: "n", companyName: "c", phone: "1" });
     expect(r).toEqual({ ok: true, session: { user: {} } });
     expect(supabaseMock.rpc).toHaveBeenCalledWith("register_company", expect.objectContaining({ p_company_name: "c" }));
+  });
+
+  it("signUp يرفض البريد الوهمي/غير المسموح", async () => {
+    supabaseMock.auth.signUp = vi.fn();
+    const r1 = await authLib.signUp({ email: "x@mailinator.com", password: "Pass1234", name: "n", companyName: "c" });
+    expect(r1.ok).toBe(false);
+    const r2 = await authLib.signUp({ email: "x@my-company.io", password: "Pass1234", name: "n", companyName: "c" });
+    expect(r2.ok).toBe(false);
+    const r3 = await authLib.signUp({ email: "x@gmail.com", password: "12345678", name: "n", companyName: "c" });
+    expect(r3.ok).toBe(false);
+    expect(supabaseMock.auth.signUp).not.toHaveBeenCalled();
   });
 
   it("registerCurrentCompany يعيد معرّف الشركة", async () => {

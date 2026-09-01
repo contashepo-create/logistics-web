@@ -15,8 +15,8 @@ import {
   PRICING, TRIAL_DAYS, CUSTOMER_PLAN_TYPES,
   planLabel, planPrice, endDateForPlan, subscriptionState, isExpired,
   daysLeft, stateLabel, isRequestablePlan,
-  submitActivationRequest, listMyActivationRequests, cancelMyActivationRequest,
-  uploadReceipt, exportCompanyData,
+  listMyActivationRequests, cancelMyActivationRequest,
+  vatOf, totalWithVat, exportCompanyData,
 } from "@/lib/subscription";
 import type { Company } from "@/lib/types";
 
@@ -40,7 +40,9 @@ function daysFromNow(n: number) {
 describe("ثوابت وأسعار", () => {
   it("يعرض شهري/سنوي فقط للعميل", () => {
     expect(PRICING.monthly).toBe(100);
-    expect(PRICING.yearly).toBe(900);
+    expect(PRICING.yearly).toBe(1000);
+    expect(PRICING.yearlyBefore - PRICING.yearly).toBe(PRICING.yearlyDiscount);
+    expect(PRICING.vatRate).toBe(14);
     expect(TRIAL_DAYS).toBe(7);
     expect(CUSTOMER_PLAN_TYPES).toEqual(["monthly", "yearly"]);
   });
@@ -49,8 +51,16 @@ describe("ثوابت وأسعار", () => {
     expect(planLabel("yearly")).toBe("اشتراك سنوي");
     expect(planLabel("open")).toBe("اشتراك مفتوح");
     expect(planPrice("monthly")).toBe(100);
-    expect(planPrice("yearly")).toBe(900);
+    expect(planPrice("yearly")).toBe(1000);
+    expect(planLabel("trial")).toBe("الباقة التجريبية");
+    expect(planPrice("trial")).toBe(0);
     expect(planPrice("open")).toBe(0);
+  });
+  it("الضريبة تُحسب على السعر الصافي", () => {
+    expect(vatOf(100)).toBe(14);
+    expect(totalWithVat(100)).toBe(114);
+    expect(vatOf(1000)).toBe(140);
+    expect(totalWithVat(1000)).toBe(1140);
   });
   it("isRequestablePlan يرفض المفتوح", () => {
     expect(isRequestablePlan("monthly")).toBe(true);
@@ -127,28 +137,6 @@ function chain(over: Record<string, any> = {}) {
   return c;
 }
 
-describe("submitActivationRequest", () => {
-  beforeEach(() => vi.clearAllMocks());
-
-  it("يُدرج الطلب ويعيده", async () => {
-    const q = chain({ single: vi.fn(async () => ({ data: { id: "r1", plan_type: "monthly" }, error: null })) });
-    supabaseMock.from.mockReturnValue(q);
-    const r = await submitActivationRequest({ plan_type: "monthly", notes: "n" });
-    expect(r.id).toBe("r1");
-    expect(q.insert).toHaveBeenCalledWith(expect.objectContaining({ plan_type: "monthly", notes: "n", receipt_url: null }));
-  });
-  it("يحوّل 23505 إلى رسالة ودّية", async () => {
-    const q = chain({ single: vi.fn(async () => ({ data: null, error: { code: "23505", message: "dup" } })) });
-    supabaseMock.from.mockReturnValue(q);
-    await expect(submitActivationRequest({ plan_type: "yearly" })).rejects.toThrow("لديك طلب معلق");
-  });
-  it("يمرر أخطاء أخرى كما هي", async () => {
-    const q = chain({ single: vi.fn(async () => ({ data: null, error: { code: "X", message: "boom" } })) });
-    supabaseMock.from.mockReturnValue(q);
-    await expect(submitActivationRequest({ plan_type: "yearly" })).rejects.toThrow("boom");
-  });
-});
-
 describe("listMyActivationRequests / cancelMyActivationRequest", () => {
   beforeEach(() => vi.clearAllMocks());
 
@@ -176,27 +164,9 @@ describe("listMyActivationRequests / cancelMyActivationRequest", () => {
   });
 });
 
-describe("uploadReceipt / exportCompanyData", () => {
+describe("exportCompanyData", () => {
   beforeEach(() => vi.clearAllMocks());
 
-  it("uploadReceipt يرفع ويعيد رابطاً عاماً", async () => {
-    const file = { name: "وصل.png", type: "image/png" } as unknown as File;
-    const upload = vi.fn(async () => ({ data: { path: "receipts/x.png" }, error: null }));
-    const getPublicUrl = vi.fn(() => ({ data: { publicUrl: "https://supa/storage/v1/receipts/x.png" } }));
-    const bucket = { upload, getPublicUrl };
-    supabaseMock.storage.from.mockReturnValue(bucket);
-    const url = await uploadReceipt(file);
-    expect(url).toContain("receipts/x.png");
-    expect(upload).toHaveBeenCalledWith(expect.stringMatching(/^receipts\//), file, expect.any(Object));
-  });
-  it("uploadReceipt يمرر الخطأ", async () => {
-    const file = { name: "a.png", type: "image/png" } as unknown as File;
-    supabaseMock.storage.from.mockReturnValue({
-      upload: vi.fn(async () => ({ data: null, error: { message: "full" } })),
-      getPublicUrl: vi.fn(),
-    });
-    await expect(uploadReceipt(file)).rejects.toThrow("full");
-  });
   it("exportCompanyData يستدعي RPC ويعيد الناتج", async () => {
     supabaseMock.rpc.mockResolvedValue({ data: { company: { name: "x" } }, error: null });
     expect(await exportCompanyData()).toEqual({ company: { name: "x" } });

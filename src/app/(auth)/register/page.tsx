@@ -4,6 +4,7 @@ import { useState } from "react";
 import { useRouter } from "next/navigation";
 import Link from "next/link";
 import { signUp } from "@/lib/auth";
+import { checkSignupEmail, checkPassword, ALLOWED_EMAIL_HINT } from "@/lib/security";
 import { notify } from "@/components/toast";
 
 export default function RegisterPage() {
@@ -23,14 +24,16 @@ export default function RegisterPage() {
     setError("");
     if (!companyName.trim()) return setError("أدخل اسم الشركة.");
     if (!name.trim()) return setError("أدخل اسم المسؤول.");
-    if (!email.trim()) return setError("أدخل البريد الإلكتروني.");
-    if (password.length < 8) return setError("كلمة المرور يجب ألا تقل عن 8 أحرف.");
+    const em = checkSignupEmail(email);
+    if (!em.ok) return setError(em.message);
+    const pw = checkPassword(password);
+    if (!pw.ok) return setError(pw.message);
     if (password !== confirm) return setError("كلمتا المرور غير متطابقتين.");
 
     setLoading(true);
     try {
       const res = await signUp({
-        email: email.trim(),
+        email: em.email,
         password,
         name: name.trim(),
         companyName: companyName.trim(),
@@ -73,7 +76,7 @@ export default function RegisterPage() {
     <div className="auth-card">
       <div className="auth-brand">🚛</div>
       <h1 className="auth-title">إنشاء حساب جديد</h1>
-      <p className="auth-sub">سجّل شركتك وابدأ فوراً — بياناتك معزولة تماماً</p>
+      <p className="auth-sub">سجّل شركتك وابدأ فوراً بتجربة مجانية ٧ أيام — بياناتك معزولة تماماً</p>
 
       <form onSubmit={submit} style={{ display: "grid", gap: 14 }}>
         <div>
@@ -92,7 +95,8 @@ export default function RegisterPage() {
         </div>
         <div>
           <label className="field-label">البريد الإلكتروني</label>
-          <input className="input-base" type="email" dir="ltr" value={email} onChange={(e) => setEmail(e.target.value)} placeholder="you@example.com" />
+          <input className="input-base" type="email" dir="ltr" value={email} onChange={(e) => setEmail(e.target.value)} placeholder="you@gmail.com" autoComplete="email" />
+          <div className="field-hint">يُقبل التسجيل ببريد حقيقي من: {ALLOWED_EMAIL_HINT} — البريد المؤقت/الوهمي مرفوض.</div>
         </div>
         <div className="two-col">
           <div>
@@ -126,6 +130,9 @@ function translateAuthError(msg: string): string {
   const m = msg.toLowerCase();
   if (m.includes("already registered") || m.includes("already exists"))
     return "هذا البريد الإلكتروني مسجّل بالفعل.";
-  if (m.includes("password")) return "كلمة المرور ضعيفة. استخدم 8 أحرف على الأقل.";
+  if (m.includes("password")) return "كلمة المرور ضعيفة. استخدم 8 أحرف على الأقل مع أرقام.";
+  if (m.includes("gmail") || m.includes("outlook") || m.includes("مسموح") || m.includes("يُقبل"))
+    return "يُقبل التسجيل ببريد Gmail أو Yahoo أو Hotmail أو Outlook أو iCloud فقط.";
+  if (m.includes("invalid") && m.includes("email")) return "البريد الإلكتروني غير صالح.";
   return msg;
 }

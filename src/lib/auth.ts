@@ -4,6 +4,7 @@
 import { supabase } from "./supabase";
 import type { User, Session } from "@supabase/supabase-js";
 import type { Company, Profile } from "./types";
+import { checkSignupEmail, checkPassword, sanitizeText } from "./security";
 
 /**
  * البريد الإلكتروني للمطوّر — يمنح صاحبه لوحة تحكم خاصة.
@@ -49,10 +50,20 @@ export async function signUp(input: {
   companyName: string;
   phone?: string;
 }): Promise<AuthResult & { needsVerification?: boolean }> {
+  // منع أي بريد وهمي/مؤقت قبل مغادرة المتصفح (والتحقق مكرر في قاعدة البيانات)
+  const em = checkSignupEmail(input.email);
+  if (!em.ok) return { ok: false, message: em.message };
+  const pw = checkPassword(input.password);
+  if (!pw.ok) return { ok: false, message: pw.message };
+
+  const name = sanitizeText(input.name, 120);
+  const companyName = sanitizeText(input.companyName, 120);
+  if (!companyName) return { ok: false, message: "اسم الشركة مطلوب." };
+
   const { data, error } = await supabase.auth.signUp({
-    email: input.email,
+    email: em.email,
     password: input.password,
-    options: { data: { name: input.name, company_name: input.companyName } },
+    options: { data: { name, company_name: companyName } },
   });
   if (error) return { ok: false, message: error.message };
 
@@ -61,11 +72,7 @@ export async function signUp(input: {
     return { ok: true, session: null, needsVerification: true };
   }
 
-  await registerCurrentCompany({
-    companyName: input.companyName,
-    name: input.name,
-    phone: input.phone,
-  });
+  await registerCurrentCompany({ companyName, name, phone: input.phone });
   return { ok: true, session: data.session };
 }
 
@@ -118,6 +125,7 @@ export function subscriptionLabel(c: Company | null): string {
   const st = subscriptionStatus(c);
   if (st === "suspended") return "الشركة موقوفة";
   if (st === "expired") return "الاشتراك منتهي";
+  if (c?.plan_type === "trial") return "الباقة التجريبية";
   if (c?.plan_type === "open") return "اشتراك مفتوح";
   if (c?.plan_type === "yearly") return "اشتراك سنوي";
   return "اشتراك شهري";

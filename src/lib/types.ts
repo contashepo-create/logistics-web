@@ -16,7 +16,9 @@ export interface Company {
   currency: string;
   vat_rate: number;
   vat_note: string;
-  plan_type: "monthly" | "yearly" | "open";
+  plan_type: "trial" | "monthly" | "yearly" | "open";
+  /** رقم العميل الفريد (8 خانات عشوائية غير متتابعة). */
+  client_code?: string;
   trial_end: string | null;
   subscription_start: string | null;
   subscription_end: string | null; // null = مفتوح بلا تحديد

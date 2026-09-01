@@ -32,9 +32,9 @@ const STEPS = [
 ];
 
 const PLANS = [
-  { name: "تجربة مجانية", price: "0", unit: "لمدة 14 يوماً", features: ["كل المزايا بلا استثناء", "بلا بطاقة بنكية", "دعم عبر واتساب", "بياناتك تبقى بعد الترقية"], cta: "ابدأ التجربة", highlight: false },
-  { name: "الاشتراك الشهري", price: "٧٥٠", unit: "جنيه / شهرياً", features: ["مستخدمون غير محدودين", "فواتير وسندات بلا حد", "كل التقارير والتصدير", "دعم فني أولوية"], cta: "اشترك شهرياً", highlight: true },
-  { name: "الاشتراك السنوي", price: "٧٬٥٠٠", unit: "جنيه / سنوياً — شهران مجاناً", features: ["كل مزايا الباقة الشهرية", "خصم شهرين", "تدريب فريقك عن بُعد", "أولوية في طلبات التطوير"], cta: "اشترك سنوياً", highlight: false },
+  { name: "الباقة التجريبية", price: "0", unit: "لمدة ٧ أيام", features: ["كل المزايا بلا استثناء", "بلا بطاقة بنكية", "تبدأ تلقائياً عند التسجيل", "بياناتك تبقى بعد الترقية"], cta: "ابدأ التجربة", highlight: false },
+  { name: "الاشتراك الشهري", price: "١٠٠", unit: "جنيه / شهرياً — غير شامل الضريبة", features: ["فواتير وسندات بلا حد", "كل التقارير والتصدير", "قناة دعم مباشرة مع المطوّر", "نسخ احتياطي تلقائي"], cta: "اشترك شهرياً", highlight: true },
+  { name: "الاشتراك السنوي", price: "١٠٠٠", unit: "جنيه / سنوياً — بخصم ٢٠٠ جنيه", features: ["كل مزايا الباقة الشهرية", "توفير ٢٠٠ جنيه سنوياً", "أولوية في الدعم", "أولوية في طلبات التطوير"], cta: "اشترك سنوياً", highlight: false },
 ];
 
 const FAQ = [
@@ -56,6 +56,7 @@ export default function LandingPage() {
             <a href="#how">كيف يعمل</a>
             <a href="#pricing">الأسعار</a>
             <a href="#faq">الأسئلة الشائعة</a>
+            <Link href="/complaints">الشكاوى</Link>
           </nav>
           <div className="lp-nav-cta">
             <ThemeToggle compact />
@@ -67,7 +68,7 @@ export default function LandingPage() {
 
       <section className="lp-hero">
         <div className="lp-container lp-hero-inner">
-          <span className="lp-badge">✨ نسخة سحابية — تجربة مجانية ١٤ يوماً</span>
+          <span className="lp-badge">✨ نسخة سحابية — تجربة مجانية ٧ أيام</span>
           <h1>
             أدر حسابات شركة النقل بالكامل
             <br />
@@ -82,7 +83,7 @@ export default function LandingPage() {
             <a href="#features" className="btn lp-btn-lg">شاهد المميزات</a>
           </div>
           <div className="lp-stats">
-            <div><strong>١٤ يوم</strong><span>تجربة مجانية</span></div>
+            <div><strong>٧ أيام</strong><span>تجربة مجانية</span></div>
             <div><strong>٥ دقائق</strong><span>حتى أول فاتورة</span></div>
             <div><strong>١٢+</strong><span>شاشة وتقرير</span></div>
             <div><strong>١٠٠٪</strong><span>عربي RTL</span></div>
@@ -161,7 +162,7 @@ export default function LandingPage() {
       <section className="lp-cta">
         <div className="lp-container">
           <h2>جاهز تعرف ربح كل رحلة بالضبط؟</h2>
-          <p>أنشئ حساب شركتك الآن وجرّب النظام كاملاً ١٤ يوماً بلا أي التزام.</p>
+          <p>أنشئ حساب شركتك الآن وجرّب النظام كاملاً ٧ أيام بلا أي التزام.</p>
           <div className="lp-hero-cta">
             <Link href="/register" className="btn lp-btn-lg lp-btn-white">إنشاء حساب شركتي</Link>
             <Link href="/login" className="btn lp-btn-lg lp-btn-ghost">لدي حساب بالفعل</Link>
@@ -182,6 +183,7 @@ export default function LandingPage() {
             <Link href="/login">تسجيل الدخول</Link>
             <Link href="/register">إنشاء حساب</Link>
             <Link href="/about">حول التطبيق</Link>
+            <Link href="/complaints">الشكاوى والاقتراحات</Link>
           </div>
           <LandingDeveloperFooter />
         </div>

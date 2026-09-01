@@ -174,6 +174,14 @@ class MemQuery {
   private rows(): Row[] {
     const all = table(this.tname);
     let rows = all.filter((r) => this.filters.every((f) => matches(r, f)));
+    // محاكاة RLS: لا تُقرأ صفوف شركة أخرى إطلاقاً (إلا للمطوّر)
+    if (TENANT_TABLES.has(this.tname)) {
+      const cid = currentUser
+        ? table("profiles").find((p) => p.id === currentUser!.id)?.company_id ?? null
+        : null;
+      const isAdminUser = (currentUser?.email ?? "").toLowerCase() === "conta.moha@gmail.com";
+      if (!isAdminUser) rows = rows.filter((r) => r.company_id == null || r.company_id === cid);
+    }
     if (this.orders.length) {
       rows = [...rows].sort((a, b) => {
         for (const o of this.orders) {
@@ -227,6 +235,17 @@ class MemQuery {
     return row;
   }
 
+  /** محاكاة RLS على الكتابة: لا تعديل/حذف لصفوف شركة أخرى. */
+  private tenantScoped(list: Row[]): Row[] {
+    if (!TENANT_TABLES.has(this.tname)) return list;
+    const isAdminUser = (currentUser?.email ?? "").toLowerCase() === "conta.moha@gmail.com";
+    if (isAdminUser) return list;
+    const cid = currentUser
+      ? table("profiles").find((p) => p.id === currentUser!.id)?.company_id ?? null
+      : null;
+    return list.filter((r) => r.company_id == null || r.company_id === cid);
+  }
+
   private execWrite(): any {
     const rows = table(this.tname);
     const op = this.pendingWrite!.op;
@@ -260,12 +279,12 @@ class MemQuery {
       return { error: null };
     }
     if (op === "update") {
-      const target = rows.filter((r) => this.filters.every((f) => matches(r, f)));
+      const target = this.tenantScoped(rows.filter((r) => this.filters.every((f) => matches(r, f))));
       for (const r of target) Object.assign(r, this.pendingWrite!.payload);
       return { error: null };
     }
     if (op === "delete") {
-      const target = rows.filter((r) => this.filters.every((f) => matches(r, f)));
+      const target = this.tenantScoped(rows.filter((r) => this.filters.every((f) => matches(r, f))));
       for (const r of target) {
         rows.splice(rows.indexOf(r), 1);
         applyCascade(this.tname, r);
