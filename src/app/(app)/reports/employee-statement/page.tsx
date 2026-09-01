@@ -1,7 +1,7 @@
 "use client";
 
 import { useState } from "react";
-import { useQuery, useQueryClient } from "@tanstack/react-query";
+import { useQuery, useQueryClient, keepPreviousData } from "@tanstack/react-query";
 import { PageFrame, Spinner, ExportBar, TotalsBar, FilterRow, DictSelect } from "@/components/ui";
 import { employeeStatement, voucherNumberLabel, invoiceNumberLabel } from "@/lib/calc";
 import { listEmployees } from "@/lib/repo";
@@ -21,6 +21,7 @@ export default function EmployeeStatementReportPage() {
   const { data: st, isLoading } = useQuery({
     queryKey: ["report-emp-stmt", employeeId, dFrom, dTo],
     queryFn: () => employeeId ? employeeStatement(employeeId, dFrom, dTo) : null,
+    placeholderData: keepPreviousData,
     enabled: !!employeeId,
   });
 

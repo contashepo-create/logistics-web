@@ -1,7 +1,7 @@
 "use client";
 
 import { useState } from "react";
-import { useQuery, useQueryClient } from "@tanstack/react-query";
+import { useQuery, useQueryClient, keepPreviousData } from "@tanstack/react-query";
 import { PageFrame, Spinner, ExportBar, TotalsBar, FilterRow, DictSelect } from "@/components/ui";
 import { tripProfitsReport } from "@/lib/calc";
 import { listCustomers } from "@/lib/repo";
@@ -20,6 +20,7 @@ export default function TripsReportPage() {
   const { data, isLoading } = useQuery({
     queryKey: ["report-trips", dFrom, dTo, customerId],
     queryFn: () => tripProfitsReport(dFrom, dTo, customerId),
+    placeholderData: keepPreviousData,
   });
 
   const headers = ["رقم الفاتورة", "التاريخ", "العميل", "الرحلة (من ← إلى)", "السيارة", "السائق", "الإيراد", "مصاريف مباشرة", "مصاريف لاحقة (سندات)", "صافي الربح الفعلي"];

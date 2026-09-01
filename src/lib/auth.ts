@@ -43,7 +43,10 @@ export async function getCurrentUser(): Promise<User | null> {
 
 /** الاستماع لتغيّرات الجلسة. */
 export function onAuthChange(cb: (session: Session | null) => void) {
-  const { data } = supabase.auth.onAuthStateChange((_event, session) => cb(session));
+  const { data } = supabase.auth.onAuthStateChange((_event, session) => {
+    clearIdentityCache();
+    cb(session);
+  });
   return data.subscription;
 }
 
@@ -134,20 +137,71 @@ export function translateDbError(msg: string): string {
   return msg;
 }
 
-/** جلب الملف الشخصي للمستخدم الحالي. */
-export async function getProfile(): Promise<Profile | null> {
-  const user = await getCurrentUser();
-  if (!user) return null;
-  const { data } = await supabase.from("profiles").select("*").eq("id", user.id).maybeSingle();
-  return (data as Profile) ?? null;
+// ---------------------------------------------------------------------------
+// كاش الهوية (الملف الشخصي + الشركة)
+// ---------------------------------------------------------------------------
+// الملف الشخصي وبيانات الشركة تُطلب عشرات المرات في كل شاشة (الإعدادات، ترويسة
+// الفواتير، حالة الاشتراك…). بلا كاش كان كل انتقال بين الأقسام يُنفّذ رحلات شبكة
+// متكرّرة فيظهر «جاري تحميل البيانات» في كل مرة. الكاش صالح لمدة قصيرة ويُبطَل
+// عند تغيّر الجلسة أو تعديل بيانات الشركة.
+// يُعطَّل الكاش في بيئة الاختبار حتى تُقرأ البيانات المزروعة حديثاً دائماً.
+const CACHE_ENABLED = process.env.NODE_ENV !== "test";
+const IDENTITY_TTL_MS = 60_000;
+let profileCache: { at: number; value: Profile | null; promise?: Promise<Profile | null> } | null = null;
+let companyCache: { at: number; value: Company | null; promise?: Promise<Company | null> } | null = null;
+
+/** إبطال كاش الهوية (بعد تسجيل الدخول/الخروج أو تعديل بيانات الشركة). */
+export function clearIdentityCache(): void {
+  profileCache = null;
+  companyCache = null;
 }
 
-/** جلب شركة المستخدم الحالي (أو null للمطوّر). */
-export async function getCompany(): Promise<Company | null> {
-  const profile = await getProfile();
-  if (!profile?.company_id) return null;
-  const { data } = await supabase.from("companies").select("*").eq("id", profile.company_id).maybeSingle();
-  return (data as Company) ?? null;
+const fresh = (c: { at: number } | null) => CACHE_ENABLED && !!c && Date.now() - c.at < IDENTITY_TTL_MS;
+
+/** جلب الملف الشخصي للمستخدم الحالي (مع كاش قصير المدى). */
+export async function getProfile(force = false): Promise<Profile | null> {
+  if (!force && fresh(profileCache)) return profileCache!.value;
+  if (!force && profileCache?.promise) return profileCache.promise;
+
+  const promise = (async () => {
+    const user = await getCurrentUser();
+    if (!user) return null;
+    const { data } = await supabase.from("profiles").select("*").eq("id", user.id).maybeSingle();
+    return (data as Profile) ?? null;
+  })();
+
+  profileCache = { at: Date.now(), value: null, promise };
+  try {
+    const value = await promise;
+    profileCache = { at: Date.now(), value };
+    return value;
+  } catch (e) {
+    profileCache = null;
+    throw e;
+  }
+}
+
+/** جلب شركة المستخدم الحالي (أو null للمطوّر) — مع كاش قصير المدى. */
+export async function getCompany(force = false): Promise<Company | null> {
+  if (!force && fresh(companyCache)) return companyCache!.value;
+  if (!force && companyCache?.promise) return companyCache.promise;
+
+  const promise = (async () => {
+    const profile = await getProfile(force);
+    if (!profile?.company_id) return null;
+    const { data } = await supabase.from("companies").select("*").eq("id", profile.company_id).maybeSingle();
+    return (data as Company) ?? null;
+  })();
+
+  companyCache = { at: Date.now(), value: null, promise };
+  try {
+    const value = await promise;
+    companyCache = { at: Date.now(), value };
+    return value;
+  } catch (e) {
+    companyCache = null;
+    throw e;
+  }
 }
 
 export type SubscriptionStatus = "active" | "expired" | "suspended";
@@ -175,6 +229,7 @@ export function subscriptionLabel(c: Company | null): string {
 }
 
 export async function signOut(): Promise<void> {
+  clearIdentityCache();
   await supabase.auth.signOut();
 }
 

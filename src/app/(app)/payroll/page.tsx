@@ -1,7 +1,7 @@
 "use client";
 
 import { useMemo, useState } from "react";
-import { useQuery, useQueryClient } from "@tanstack/react-query";
+import { useQuery, useQueryClient, keepPreviousData } from "@tanstack/react-query";
 import { DataTable } from "@/components/DataTable";
 import { PageFrame, Spinner, ExportBar, TotalsBar, FilterRow, DictSelect } from "@/components/ui";
 import { PayrollDialog } from "@/components/dialogs/payroll";
@@ -24,6 +24,7 @@ export default function PayrollPage() {
   const { data, isLoading } = useQuery({
     queryKey: ["payrolls", dFrom, dTo, employeeId],
     queryFn: () => listPayrolls(dFrom, dTo, employeeId),
+    placeholderData: keepPreviousData,
   });
 
   const headers = ["رقم الراتب", "تاريخ الصرف", "الموظف", "النوع", "عن شهر", "طريقة الصرف", "الأساسي", "الإضافات", "خصم السلف", "خصومات أخرى", "الصافي المنصرف"];

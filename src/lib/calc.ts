@@ -99,14 +99,65 @@ export async function customerBalance(
   return round2(opening + inv - rec);
 }
 
+/**
+ * أرصدة كل العملاء دفعة واحدة.
+ * تُنفَّذ بأربعة استعلامات مجمّعة بدل استعلام لكل عميل (كان N+1 يُبطئ الصفحة كثيراً).
+ */
 export async function customersWithBalance(): Promise<(Customer & { balance: number })[]> {
-  const { data } = await supabase.from("customers").select("*").order("code");
-  const rows = (data ?? []) as Customer[];
-  const out = [];
-  for (const r of rows) {
-    out.push({ ...r, balance: await customerBalance(r.id) });
+  const [custRes, invRes, recRes] = await Promise.all([
+    supabase.from("customers").select("*").order("code"),
+    supabase.from("invoices").select("id, customer_id, vat_rate"),
+    supabase.from("receipt_vouchers").select("customer_id, amount").eq("voucher_type", "customer"),
+  ]);
+
+  const rows = (custRes.data ?? []) as Customer[];
+  const invs = (invRes.data ?? []) as { id: number; customer_id: number; vat_rate: number }[];
+  const invIds = invs.map((i) => i.id);
+
+  let trips: { id: number; invoice_id: number; price: number }[] = [];
+  if (invIds.length) {
+    const { data } = await supabase.from("invoice_trips").select("id, invoice_id, price").in("invoice_id", invIds);
+    trips = (data ?? []) as typeof trips;
   }
-  return out;
+
+  // إجمالي كل فاتورة قبل الضريبة = النقلات + المصروفات التي يتحمّلها العميل
+  const subByInv = new Map<number, number>();
+  const invOfTrip = new Map<number, number>();
+  for (const t of trips) {
+    invOfTrip.set(t.id, t.invoice_id);
+    subByInv.set(t.invoice_id, (subByInv.get(t.invoice_id) ?? 0) + num(t.price));
+  }
+
+  const tripIds = [...invOfTrip.keys()];
+  if (tripIds.length) {
+    const { data: exps } = await supabase
+      .from("trip_expenses")
+      .select("trip_id, amount, source")
+      .eq("source", "customer")
+      .in("trip_id", tripIds);
+    for (const e of exps ?? []) {
+      const iid = invOfTrip.get((e as { trip_id: number }).trip_id);
+      if (iid != null) subByInv.set(iid, (subByInv.get(iid) ?? 0) + num((e as { amount: number }).amount));
+    }
+  }
+
+  const invTotalByCustomer = new Map<number, number>();
+  for (const inv of invs) {
+    const sub = subByInv.get(inv.id) ?? 0;
+    const withVat = sub + round2((sub * num(inv.vat_rate)) / 100);
+    invTotalByCustomer.set(inv.customer_id, (invTotalByCustomer.get(inv.customer_id) ?? 0) + withVat);
+  }
+
+  const paidByCustomer = new Map<number, number>();
+  for (const r of recRes.data ?? []) {
+    const cid = (r as { customer_id: number }).customer_id;
+    paidByCustomer.set(cid, (paidByCustomer.get(cid) ?? 0) + num((r as { amount: number }).amount));
+  }
+
+  return rows.map((r) => ({
+    ...r,
+    balance: round2(num(r.opening_balance) + (invTotalByCustomer.get(r.id) ?? 0) - (paidByCustomer.get(r.id) ?? 0)),
+  }));
 }
 
 // ---------------------------------------------------------------------------
@@ -165,17 +216,36 @@ export async function accountName(kind: string, accountId: number): Promise<stri
   return data ? data.name : "—";
 }
 
+/** أرصدة كل الخزائن (أو البنوك) بأربعة استعلامات مجمّعة بدل استعلام لكل حساب. */
 export async function accountsWithBalance(
   kind: string
 ): Promise<((Cashbox | Bank) & { balance: number })[]> {
   const tbl = accountTable(kind);
-  const { data } = await supabase.from(tbl).select("*").order("code");
-  const rows = (data ?? []) as (Cashbox | Bank)[];
-  const out = [];
-  for (const r of rows) {
-    out.push({ ...r, balance: await accountBalance(kind, r.id) });
-  }
-  return out;
+  const [accRes, recRes, payRes, salRes] = await Promise.all([
+    supabase.from(tbl).select("*").order("code"),
+    supabase.from("receipt_vouchers").select("account_id, amount").eq("account_kind", kind),
+    supabase.from("payment_vouchers").select("account_id, amount").eq("account_kind", kind),
+    supabase.from("payrolls").select("account_id, net_salary").eq("account_kind", kind),
+  ]);
+
+  const rows = (accRes.data ?? []) as (Cashbox | Bank)[];
+  const acc = (list: unknown[], field: string) => {
+    const m = new Map<number, number>();
+    for (const r of list ?? []) {
+      const row = r as Record<string, unknown>;
+      const id = Number(row.account_id);
+      m.set(id, (m.get(id) ?? 0) + num(row[field]));
+    }
+    return m;
+  };
+  const recMap = acc(recRes.data ?? [], "amount");
+  const payMap = acc(payRes.data ?? [], "amount");
+  const salMap = acc(salRes.data ?? [], "net_salary");
+
+  return rows.map((r) => ({
+    ...r,
+    balance: round2(num(r.opening_balance) + (recMap.get(r.id) ?? 0) - (payMap.get(r.id) ?? 0) - (salMap.get(r.id) ?? 0)),
+  }));
 }
 
 export async function allAccounts(): Promise<
@@ -192,6 +262,24 @@ export async function allAccounts(): Promise<
 // ---------------------------------------------------------------------------
 // حسابات الفواتير والرحلات
 // ---------------------------------------------------------------------------
+/** تجميع إجماليات فاتورة من أرقام مُحمّلة مسبقاً (يُستخدم في الحسابات المجمّعة). */
+function totalsFrom(vatRate: number, tripsTotal: number, billableTotal: number, expensesTotal: number, later: number) {
+  const revenue = tripsTotal + billableTotal;
+  const expected = round2(revenue - expensesTotal);
+  const vatAmount = round2((revenue * vatRate) / 100);
+  return {
+    trips_total: round2(tripsTotal),
+    billable_total: round2(billableTotal),
+    expenses_total: round2(expensesTotal),
+    expected_profit: expected,
+    later_payments: round2(later),
+    actual_profit: round2(expected - later),
+    vat_rate: round2(vatRate),
+    vat_amount: vatAmount,
+    customer_total: round2(revenue + vatAmount),
+  };
+}
+
 export async function invoiceTotals(invoiceId: number): Promise<{
   trips_total: number;
   billable_total: number;
@@ -243,20 +331,7 @@ export async function invoiceTotals(invoiceId: number): Promise<{
     later = sum((pays ?? []).map((p) => num(p.amount)));
   }
 
-  const revenue = tripsTotal + billableTotal;
-  const expected = round2(revenue - expensesTotal);
-  const vatAmount = round2((revenue * vatRate) / 100);
-  return {
-    trips_total: round2(tripsTotal),
-    billable_total: round2(billableTotal),
-    expenses_total: round2(expensesTotal),
-    expected_profit: expected,
-    later_payments: round2(later),
-    actual_profit: round2(expected - later),
-    vat_rate: round2(vatRate),
-    vat_amount: vatAmount,
-    customer_total: round2(revenue + vatAmount),
-  };
+  return totalsFrom(vatRate, tripsTotal, billableTotal, expensesTotal, later);
 }
 
 export async function tripProfit(
@@ -305,6 +380,11 @@ export interface InvoiceListItem extends Invoice {
   trips_count: number;
 }
 
+/**
+ * قائمة الفواتير مع إجمالياتها.
+ * تُجلب كل البيانات بخمسة استعلامات مجمّعة ثم تُحسب الإجماليات محلياً،
+ * بدل تنفيذ 4 استعلامات لكل فاتورة (كان يُبطئ الشاشة بشدة عند كثرة الفواتير).
+ */
 export async function invoiceList(
   dFrom?: string | null,
   dTo?: string | null,
@@ -314,26 +394,58 @@ export async function invoiceList(
   if (dFrom) q = q.gte("date", dFrom);
   if (dTo) q = q.lte("date", dTo);
   if (customerId) q = q.eq("customer_id", customerId);
-  const { data } = await q;
-  const invs = (data ?? []) as Invoice[];
 
-  const { data: custs } = await supabase.from("customers").select("id, code, name");
-  const custMap = new Map((custs ?? []).map((c) => [c.id, c]));
+  const [invRes, custRes] = await Promise.all([q, supabase.from("customers").select("id, code, name")]);
+  const invs = (invRes.data ?? []) as Invoice[];
+  const custMap = new Map(((custRes.data ?? []) as { id: number; code: string; name: string }[]).map((c) => [c.id, c]));
+  if (!invs.length) return [];
 
-  const out: InvoiceListItem[] = [];
-  for (const inv of invs) {
-    const totals = await invoiceTotals(inv.id);
-    const { data: trips } = await supabase.from("invoice_trips").select("id").eq("invoice_id", inv.id);
+  const invIds = invs.map((i) => i.id);
+  const { data: tripRows } = await supabase.from("invoice_trips").select("id, invoice_id, price").in("invoice_id", invIds);
+  const trips = (tripRows ?? []) as { id: number; invoice_id: number; price: number }[];
+  const tripIds = trips.map((t) => t.id);
+  const invOfTrip = new Map(trips.map((t) => [t.id, t.invoice_id]));
+
+  let exps: { trip_id: number; amount: number; source?: string }[] = [];
+  let pays: { trip_id: number; amount: number }[] = [];
+  if (tripIds.length) {
+    const [expRes, payRes] = await Promise.all([
+      supabase.from("trip_expenses").select("trip_id, amount, source").in("trip_id", tripIds),
+      supabase.from("payment_vouchers").select("trip_id, amount").eq("voucher_type", "trip").is("source_expense_id", null).in("trip_id", tripIds),
+    ]);
+    exps = (expRes.data ?? []) as typeof exps;
+    pays = (payRes.data ?? []) as typeof pays;
+  }
+
+  const agg = new Map<number, { trips: number; billable: number; cost: number; later: number; count: number }>();
+  const bucket = (id: number) => {
+    let b = agg.get(id);
+    if (!b) { b = { trips: 0, billable: 0, cost: 0, later: 0, count: 0 }; agg.set(id, b); }
+    return b;
+  };
+  for (const t of trips) { const b = bucket(t.invoice_id); b.trips += num(t.price); b.count += 1; }
+  for (const e of exps) {
+    const iid = invOfTrip.get(e.trip_id);
+    if (iid == null) continue;
+    const b = bucket(iid);
+    if (e.source === "customer") b.billable += num(e.amount); else b.cost += num(e.amount);
+  }
+  for (const pmt of pays) {
+    const iid = invOfTrip.get(pmt.trip_id);
+    if (iid != null) bucket(iid).later += num(pmt.amount);
+  }
+
+  return invs.map((inv) => {
+    const b = agg.get(inv.id) ?? { trips: 0, billable: 0, cost: 0, later: 0, count: 0 };
     const cust = custMap.get(inv.customer_id);
-    out.push({
+    return {
       ...inv,
       customer_name: cust?.name ?? "—",
       customer_code: cust?.code ?? "—",
-      trips_count: (trips ?? []).length,
-      ...totals,
-    });
-  }
-  return out;
+      trips_count: b.count,
+      ...totalsFrom(num(inv.vat_rate), b.trips, b.billable, b.cost, b.later),
+    };
+  });
 }
 
 export function invoiceNumberLabel(n: number): string {
@@ -361,18 +473,19 @@ export async function getInvoiceFull(invoiceId: number): Promise<InvoiceFull | n
     .eq("invoice_id", invoiceId)
     .order("id");
 
-  const tripList: InvoiceTrip[] = [];
-  for (const t of trips ?? []) {
-    const { data: exps } = await supabase
-      .from("trip_expenses")
-      .select("*")
-      .eq("trip_id", t.id)
-      .order("id");
-    tripList.push({
-      ...t,
-      expenses: (exps ?? []) as TripExpense[],
-    });
+  // كل مصروفات نقلات الفاتورة باستعلام واحد بدل استعلام لكل نقلة
+  const tripIds = (trips ?? []).map((t) => t.id);
+  const expByTrip = new Map<number, TripExpense[]>();
+  if (tripIds.length) {
+    const { data: exps } = await supabase.from("trip_expenses").select("*").in("trip_id", tripIds).order("id");
+    for (const e of (exps ?? []) as TripExpense[]) {
+      const tid = Number(e.trip_id);
+      const list = expByTrip.get(tid) ?? [];
+      list.push(e);
+      expByTrip.set(tid, list);
+    }
   }
+  const tripList: InvoiceTrip[] = (trips ?? []).map((t) => ({ ...t, expenses: expByTrip.get(t.id) ?? [] }));
 
   const totals = await invoiceTotals(invoiceId);
   return {

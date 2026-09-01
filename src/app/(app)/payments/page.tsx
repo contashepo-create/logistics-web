@@ -1,7 +1,7 @@
 "use client";
 
 import { useMemo, useState } from "react";
-import { useQuery, useQueryClient } from "@tanstack/react-query";
+import { useQuery, useQueryClient, keepPreviousData } from "@tanstack/react-query";
 import { DataTable } from "@/components/DataTable";
 import { PageFrame, Spinner, ExportBar, TotalsBar, FilterRow, Select } from "@/components/ui";
 import { PaymentDialog } from "@/components/dialogs/operations";
@@ -23,6 +23,7 @@ export default function PaymentsPage() {
   const { data, isLoading } = useQuery({
     queryKey: ["payments", dFrom, dTo, type],
     queryFn: () => listPayments(dFrom, dTo, type || null),
+    placeholderData: keepPreviousData,
   });
 
   const headers = ["رقم السند", "التاريخ", "النوع", "التوجيه", "صرف من", "المبلغ", "البيان"];

@@ -2,9 +2,11 @@
 
 import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
-import { useEffect, useState } from "react";
-import { useQuery } from "@tanstack/react-query";
-import { listYears } from "@/lib/repo";
+import { useEffect, useMemo, useState } from "react";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
+import { listYears, listEmployees, listVehicles } from "@/lib/repo";
+import { customersWithBalance, accountsWithBalance } from "@/lib/calc";
+import { suppliersWithBalance, listPurchaseInvoices } from "@/lib/suppliers";
 import { getCompany, isAdmin, signOut } from "@/lib/auth";
 import { ThemeToggle } from "@/components/ThemeToggle";
 import { stateLabel, subscriptionState } from "@/lib/subscription";
@@ -138,6 +140,26 @@ export function Sidebar({ open = false, onClose }: { open?: boolean; onClose?: (
 
   const state = company ? subscriptionState(company) : null;
 
+  // ——— جلب مسبق عند مرور المؤشر على الرابط ———
+  // يبدأ تحميل بيانات القسم قبل الضغط، فتُفتح الشاشة ببيانات جاهزة غالباً.
+  const qc = useQueryClient();
+  const PREFETCH: Record<string, { key: unknown[]; fn: () => Promise<unknown> }> = useMemo(() => ({
+    "/customers": { key: ["customers"], fn: customersWithBalance },
+    "/suppliers": { key: ["suppliers"], fn: suppliersWithBalance },
+    "/employees": { key: ["employees"], fn: () => listEmployees() },
+    "/vehicles": { key: ["vehicles"], fn: listVehicles },
+    "/years": { key: ["years"], fn: listYears },
+    "/cashboxes": { key: ["cashbox"], fn: () => accountsWithBalance("cashbox") },
+    "/banks": { key: ["bank"], fn: () => accountsWithBalance("bank") },
+    "/purchases": { key: ["purchases"], fn: listPurchaseInvoices },
+  }), []);
+
+  const prefetch = (href: string) => {
+    const entry = PREFETCH[href];
+    if (!entry) return;
+    qc.prefetchQuery({ queryKey: entry.key, queryFn: entry.fn, staleTime: 120_000 });
+  };
+
   return (
     <aside className={`sidebar ${open ? "open" : ""}`}>
       <div className="sidebar-brand">
@@ -176,6 +198,8 @@ export function Sidebar({ open = false, onClose }: { open?: boolean; onClose?: (
                       key={item.href}
                       href={item.href}
                       onClick={onClose}
+                      onMouseEnter={() => prefetch(item.href)}
+                      onFocus={() => prefetch(item.href)}
                       className={`nav-item ${pathname === item.href ? "active" : ""}`}
                     >
                       <span className="nav-item-icon">{item.icon}</span>

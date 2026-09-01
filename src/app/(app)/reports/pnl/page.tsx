@@ -1,7 +1,7 @@
 "use client";
 
 import { useState } from "react";
-import { useQuery, useQueryClient } from "@tanstack/react-query";
+import { useQuery, useQueryClient, keepPreviousData } from "@tanstack/react-query";
 import { PageFrame, Spinner, ExportBar, TotalsBar, FilterRow } from "@/components/ui";
 import { pnlReport } from "@/lib/calc";
 import { money, todayIso } from "@/lib/format";
@@ -17,6 +17,7 @@ export default function PnlReportPage() {
   const { data, isLoading } = useQuery({
     queryKey: ["report-pnl", dFrom, dTo],
     queryFn: () => pnlReport(dFrom, dTo),
+    placeholderData: keepPreviousData,
   });
 
   const d = data ?? {};

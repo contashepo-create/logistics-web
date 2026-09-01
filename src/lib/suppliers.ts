@@ -295,11 +295,32 @@ export async function supplierBalance(supplierId: number, before?: string | null
   return roundMoney((Number(sup.opening_balance) || 0) + purchases - paid);
 }
 
+/** أرصدة كل الموردين بثلاثة استعلامات مجمّعة بدل استعلامين لكل مورّد. */
 export async function suppliersWithBalance(): Promise<(Supplier & { balance: number })[]> {
-  const rows = await listSuppliers();
-  const out: (Supplier & { balance: number })[] = [];
-  for (const r of rows) out.push({ ...r, balance: await supplierBalance(r.id) });
-  return out;
+  const [rows, invRes, payRes] = await Promise.all([
+    listSuppliers(),
+    supabase.from("purchase_invoices").select("supplier_id, vat_included, purchase_items(qty, unit_price, vat_rate)"),
+    supabase.from("payment_vouchers").select("supplier_id, amount"),
+  ]);
+
+  const purchasesBySupplier = new Map<number, number>();
+  for (const row of (invRes.data ?? []) as Record<string, unknown>[]) {
+    const sid = Number(row.supplier_id);
+    const t = purchaseTotals((row.purchase_items ?? []) as PurchaseItem[], Boolean(row.vat_included));
+    purchasesBySupplier.set(sid, (purchasesBySupplier.get(sid) ?? 0) + t.total);
+  }
+
+  const paidBySupplier = new Map<number, number>();
+  for (const row of (payRes.data ?? []) as Record<string, unknown>[]) {
+    const sid = Number(row.supplier_id);
+    if (!sid) continue;
+    paidBySupplier.set(sid, (paidBySupplier.get(sid) ?? 0) + (Number(row.amount) || 0));
+  }
+
+  return rows.map((r) => ({
+    ...r,
+    balance: roundMoney((Number(r.opening_balance) || 0) + (purchasesBySupplier.get(r.id) ?? 0) - (paidBySupplier.get(r.id) ?? 0)),
+  }));
 }
 
 export interface SupplierStatementRow {
@@ -450,31 +471,38 @@ export function buildAging(
 }
 
 /** تقرير أعمار ديون الموردين (ما علينا لهم). */
+/** أعمار ديون كل الموردين بثلاثة استعلامات مجمّعة. */
 export async function suppliersAging(asOf: Date = new Date()): Promise<AgingBucketRow[]> {
-  const sups = await listSuppliers();
-  const out: AgingBucketRow[] = [];
+  const [sups, invRes, payRes] = await Promise.all([
+    listSuppliers(),
+    supabase.from("purchase_invoices").select("supplier_id, date, vat_included, purchase_items(qty, unit_price, vat_rate)"),
+    supabase.from("payment_vouchers").select("supplier_id, amount"),
+  ]);
 
-  for (const s of sups) {
-    const { data: invs } = await supabase
-      .from("purchase_invoices")
-      .select("date, vat_included, purchase_items(qty, unit_price, vat_rate)")
-      .eq("supplier_id", s.id);
-
-    const invoices = ((invs ?? []) as Record<string, unknown>[]).map((row) => ({
+  const invBySupplier = new Map<number, { date: string; total: number }[]>();
+  for (const row of (invRes.data ?? []) as Record<string, unknown>[]) {
+    const sid = Number(row.supplier_id);
+    const list = invBySupplier.get(sid) ?? [];
+    list.push({
       date: String(row.date),
       total: purchaseTotals((row.purchase_items ?? []) as PurchaseItem[], Boolean(row.vat_included)).total,
-    }));
+    });
+    invBySupplier.set(sid, list);
+  }
 
-    const { data: pays } = await supabase
-      .from("payment_vouchers")
-      .select("amount")
-      .eq("supplier_id", s.id);
-    const paid = (pays ?? []).reduce((a, r) => a + (Number((r as { amount: number }).amount) || 0), 0);
+  const paidBySupplier = new Map<number, number>();
+  for (const row of (payRes.data ?? []) as Record<string, unknown>[]) {
+    const sid = Number(row.supplier_id);
+    if (!sid) continue;
+    paidBySupplier.set(sid, (paidBySupplier.get(sid) ?? 0) + (Number(row.amount) || 0));
+  }
 
+  const out: AgingBucketRow[] = [];
+  for (const s of sups) {
+    const invoices = [...(invBySupplier.get(s.id) ?? [])];
     const opening = Number(s.opening_balance) || 0;
     if (opening > 0) invoices.unshift({ date: s.created_at?.slice(0, 10) ?? "2000-01-01", total: opening });
-
-    const b = buildAging(invoices, paid, asOf);
+    const b = buildAging(invoices, paidBySupplier.get(s.id) ?? 0, asOf);
     if (b.total !== 0) out.push({ id: s.id, name: s.name, ...b });
   }
 

@@ -326,7 +326,19 @@ function applyCascade(parentTable: string, deleted: Record<string, any>): void {
   }
 }
 
+// عدّاد الاستعلامات — يُستخدم في اختبارات الأداء لمنع عودة نمط N+1
+let queryCount = 0;
+
+export function resetQueryCount(): void {
+  queryCount = 0;
+}
+
+export function getQueryCount(): number {
+  return queryCount;
+}
+
 function from(name: string): MemQuery {
+  queryCount += 1;
   return new MemQuery(name);
 }
 

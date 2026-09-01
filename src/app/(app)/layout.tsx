@@ -29,10 +29,16 @@ const TITLES: Record<string, string> = {
   "/reports/pnl": "الأرباح والخسائر",
 };
 
+/**
+ * نتيجة فحص الجلسة والاشتراك تُحفظ على مستوى الوحدة: بعد نجاحها مرة واحدة لا
+ * يُحجب الانتقال بين الأقسام بشاشة تحميل مجدّداً — يُعاد الفحص في الخلفية فقط.
+ */
+let gatePassed = false;
+
 export default function AppLayout({ children }: { children: React.ReactNode }) {
   const router = useRouter();
   const pathname = usePathname();
-  const [state, setState] = useState<"loading" | "ready">("loading");
+  const [state, setState] = useState<"loading" | "ready">(gatePassed ? "ready" : "loading");
   const [navOpen, setNavOpen] = useState(false);
 
   useEffect(() => {
@@ -64,11 +70,13 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
         return;
       }
 
+      gatePassed = true;
       if (!cancelled) setState("ready");
     })();
 
     return () => { cancelled = true; };
-  }, [router, pathname]);
+  // الفحص مرة واحدة لكل تحميل للتطبيق — لا يُعاد عند كل انتقال بين الأقسام
+  }, [router]);
 
   // إغلاق القائمة المنزلقة عند تغيير الصفحة أو تكبير الشاشة
   useEffect(() => { setNavOpen(false); }, [pathname]);

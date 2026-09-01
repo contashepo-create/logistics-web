@@ -1,7 +1,7 @@
 "use client";
 
 import { useState } from "react";
-import { useQuery, useQueryClient } from "@tanstack/react-query";
+import { useQuery, useQueryClient, keepPreviousData } from "@tanstack/react-query";
 import { PageFrame, Spinner, ExportBar, TotalsBar, FilterRow, DictSelect } from "@/components/ui";
 import { customerStatement } from "@/lib/calc";
 import { listCustomers } from "@/lib/repo";
@@ -20,6 +20,7 @@ export default function CustomerStatementReportPage() {
   const { data: st, isLoading } = useQuery({
     queryKey: ["report-cust-stmt", customerId, dFrom, dTo],
     queryFn: () => customerId ? customerStatement(customerId, dFrom, dTo) : null,
+    placeholderData: keepPreviousData,
     enabled: !!customerId,
   });
 

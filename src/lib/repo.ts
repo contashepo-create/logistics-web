@@ -88,29 +88,58 @@ const COMPANY_FIELDS: Record<string, string> = {
 // ---------------------------------------------------------------------------
 // الشركة والإعدادات (تُحفظ في جدول companies — عزل عبر company_id)
 // ---------------------------------------------------------------------------
-export async function getCompany(): Promise<Company | null> {
-  const { data: me } = await supabase.auth.getUser();
-  if (!me.user) return null;
-  const { data: p } = await supabase.from("profiles").select("company_id").eq("id", me.user.id).maybeSingle();
-  if (!p?.company_id) return null;
-  const { data } = await supabase.from("companies").select("*").eq("id", p.company_id).maybeSingle();
-  return (data as Company) ?? null;
+// كاش قصير لبيانات الشركة: كانت كل قراءة إعداد تُنفّذ ثلاث رحلات شبكة،
+// و`companyInfo()` تقرأ ~29 إعداداً ⇒ عشرات الرحلات في كل شاشة.
+// يُعطَّل الكاش في بيئة الاختبار حتى تُقرأ البيانات المزروعة حديثاً دائماً.
+const CACHE_ENABLED = process.env.NODE_ENV !== "test";
+const COMPANY_TTL_MS = 20_000;
+let companyCache: { at: number; value: Company | null } | null = null;
+let companyInFlight: Promise<Company | null> | null = null;
+
+/** إبطال كاش الشركة (يُستدعى بعد أي تعديل على بياناتها). */
+export function invalidateCompanyCache(): void {
+  companyCache = null;
+  companyInFlight = null;
+}
+
+export async function getCompany(force = false): Promise<Company | null> {
+  if (!force && CACHE_ENABLED && companyCache && Date.now() - companyCache.at < COMPANY_TTL_MS) return companyCache.value;
+  if (!force && companyInFlight) return companyInFlight;
+
+  companyInFlight = (async () => {
+    const { data: me } = await supabase.auth.getUser();
+    if (!me.user) return null;
+    const { data: p } = await supabase.from("profiles").select("company_id").eq("id", me.user.id).maybeSingle();
+    if (!p?.company_id) return null;
+    const { data } = await supabase.from("companies").select("*").eq("id", p.company_id).maybeSingle();
+    return (data as Company) ?? null;
+  })();
+
+  try {
+    const value = await companyInFlight;
+    companyCache = { at: Date.now(), value };
+    return value;
+  } finally {
+    companyInFlight = null;
+  }
 }
 
 export async function updateCompany(fields: Record<string, unknown>): Promise<void> {
   const c = await getCompany();
   if (!c) throw new RuleError("لا توجد شركة مرتبطة بحسابك.");
   const { error } = await supabase.from("companies").update(fields).eq("id", c.id);
+  invalidateCompanyCache();
   if (error) throw new RuleError(error.message);
 }
 
-export async function getSetting(key: string, def = ""): Promise<string> {
+function settingFrom(c: Company | null, key: string, def: string): string {
   const col = COMPANY_FIELDS[key];
-  const c = await getCompany();
-  if (col && c && (c as unknown as Record<string, unknown>)[col] != null) {
-    return String((c as unknown as Record<string, unknown>)[col]);
-  }
-  return def;
+  const raw = col && c ? (c as unknown as Record<string, unknown>)[col] : null;
+  return raw != null ? String(raw) : def;
+}
+
+export async function getSetting(key: string, def = ""): Promise<string> {
+  return settingFrom(await getCompany(), key, def);
 }
 
 export async function setSetting(key: string, value: string): Promise<void> {
@@ -120,11 +149,11 @@ export async function setSetting(key: string, value: string): Promise<void> {
   await updateCompany({ [col]: v });
 }
 
+/** كل بيانات الشركة باستعلام واحد (كانت تُنفَّذ رحلة شبكة لكل إعداد). */
 export async function companyInfo(): Promise<Record<string, string>> {
+  const c = await getCompany();
   const out: Record<string, string> = {};
-  for (const [k, v] of Object.entries(DEFAULT_SETTINGS)) {
-    out[k] = await getSetting(k, v);
-  }
+  for (const [k, v] of Object.entries(DEFAULT_SETTINGS)) out[k] = settingFrom(c, k, v);
   return out;
 }
 
@@ -767,9 +796,12 @@ export async function listReceipts(
   const { data, error } = await q;
   if (error) throw new RuleError(error.message);
 
-  const { data: custs } = await supabase.from("customers").select("id, name");
-  const { data: cbs } = await supabase.from("cashboxes").select("id, name");
-  const { data: bks } = await supabase.from("banks").select("id, name");
+  // جداول المسمّيات تُجلب على التوازي بدل التسلسل
+  const [{ data: custs }, { data: cbs }, { data: bks }] = await Promise.all([
+    supabase.from("customers").select("id, name"),
+    supabase.from("cashboxes").select("id, name"),
+    supabase.from("banks").select("id, name"),
+  ]);
   const custMap = new Map((custs ?? []).map((c) => [c.id, c.name]));
   const cbMap = new Map((cbs ?? []).map((c) => [c.id, c.name]));
   const bkMap = new Map((bks ?? []).map((b) => [b.id, b.name]));
@@ -856,14 +888,20 @@ export async function listPayments(
   const { data, error } = await q;
   if (error) throw new RuleError(error.message);
 
-  const { data: emps } = await supabase.from("employees").select("id, name");
-  const { data: vehs } = await supabase.from("vehicles").select("id, plate_number");
-  const { data: trips } = await supabase.from("invoice_trips").select("id, invoice_id");
-  const { data: invs } = await supabase.from("invoices").select("id, number, customer_id");
-  const { data: custs } = await supabase.from("customers").select("id, name");
-  const { data: cbs } = await supabase.from("cashboxes").select("id, name");
-  const { data: bks } = await supabase.from("banks").select("id, name");
-  const { data: sups } = await supabase.from("suppliers").select("id, name");
+  // كل جداول المسمّيات على التوازي (كانت ثمانية استعلامات متتابعة)
+  const [
+    { data: emps }, { data: vehs }, { data: trips }, { data: invs },
+    { data: custs }, { data: cbs }, { data: bks }, { data: sups },
+  ] = await Promise.all([
+    supabase.from("employees").select("id, name"),
+    supabase.from("vehicles").select("id, plate_number"),
+    supabase.from("invoice_trips").select("id, invoice_id"),
+    supabase.from("invoices").select("id, number, customer_id"),
+    supabase.from("customers").select("id, name"),
+    supabase.from("cashboxes").select("id, name"),
+    supabase.from("banks").select("id, name"),
+    supabase.from("suppliers").select("id, name"),
+  ]);
 
   const supMap = new Map((sups ?? []).map((x) => [x.id, x.name]));
   const empMap = new Map((emps ?? []).map((e) => [e.id, e.name]));
