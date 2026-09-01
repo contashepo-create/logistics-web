@@ -87,9 +87,32 @@ export async function POST(req: NextRequest) {
 
   const { data: company } = await sb
     .from("companies")
-    .select("id, name, client_code, plan_type, subscription_end, trial_end")
+    .select("id, name, client_code, plan_type, subscription_end, trial_end, vat_rate")
     .eq("id", profile.company_id)
     .maybeSingle();
+
+  if (!company) return bad("بيانات الشركة غير موجودة.", 403);
+  const today = new Date();
+  today.setHours(0, 0, 0, 0);
+  const end = company.subscription_end ? new Date(`${company.subscription_end}T00:00:00`) : null;
+  const remaining = end ? Math.max(0, Math.ceil((end.getTime() - today.getTime()) / 86400000)) : 0;
+  const activePaid = Boolean(company.plan_type === "monthly" || company.plan_type === "yearly") && !!end && remaining > 0;
+
+  // حماية خادمية: لا نعتمد على نوع الطلب/المبلغ المرسل من المتصفح.
+  if (activePaid) {
+    if (company.plan_type === "yearly" && plan === "monthly") {
+      return bad("لا يمكن الانتقال إلى باقة أقل أثناء سريان الاشتراك السنوي.");
+    }
+    if (plan === company.plan_type && remaining > 4) {
+      return bad("لا يمكن تجديد أو تغيير الباقة قبل آخر 4 أيام من انتهائها.");
+    }
+  }
+  const netPrice = plan === "yearly" ? 1000 : 100;
+  const vatRate = Number(company.vat_rate) >= 0 ? Number(company.vat_rate) : 15;
+  const expectedAmount = Math.round(netPrice * (1 + vatRate / 100) * 100) / 100;
+  if (Math.abs(amount - expectedAmount) > 0.01) {
+    return bad(`المبلغ الصحيح لهذه الباقة هو ${expectedAmount.toFixed(2)} ريال سعودي شامل الضريبة.`);
+  }
 
   const { data: inserted, error } = await sb
     .from("activation_requests")
@@ -120,7 +143,7 @@ export async function POST(req: NextRequest) {
     `🏢 الشركة: <b>${escapeTelegramHtml(company?.name ?? "—")}</b>`,
     `🆔 رقم العميل: <code>${escapeTelegramHtml(company?.client_code ?? "—")}</code>`,
     `📦 الباقة المطلوبة: <b>${plan === "yearly" ? "سنوي" : "شهري"}</b>`,
-    `💰 المبلغ المحوَّل: <b>${amount.toLocaleString("en-US")} ج.م</b>`,
+    `💰 المبلغ المحوَّل: <b>${amount.toLocaleString("en-US")} ر.س</b>`,
     `👤 المُحوِّل: ${escapeTelegramHtml(payerName)} — ${escapeTelegramHtml(payerPhone)}`,
     `🏦 الطريقة: ${escapeTelegramHtml(method || "—")}`,
     `🔖 مرجع العملية: ${escapeTelegramHtml(transferRef || "—")}`,

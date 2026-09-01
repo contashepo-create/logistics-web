@@ -41,6 +41,14 @@ export default function SubscriptionPage() {
   const state = useMemo(() => subscriptionState(company), [company]);
   const expired = state === "expired" || state === "suspended";
   const hasPending = requests.some((r) => r.status === "pending");
+  const currentPlan = company?.plan_type;
+  const canRequest = (p: "monthly" | "yearly") => {
+    if (expired || state === "trial" || currentPlan === "open") return expired || state === "trial";
+    if (p === currentPlan) return daysLeft(company) <= 4;
+    // لا يمكن النزول من سنوي إلى شهري، والترقية من شهري إلى سنوي مسموحة.
+    return currentPlan === "monthly" && p === "yearly";
+  };
+  const vatRate = Number(company?.vat_rate) >= 0 ? Number(company?.vat_rate) : PRICING.vatRate;
 
   const doExport = async (kind: "excel" | "csv" | "pdf") => {
     setExporting(kind);
@@ -146,12 +154,18 @@ export default function SubscriptionPage() {
               </div>
               {p === "yearly" && <div style={{ color: "var(--success)", fontSize: 13, fontWeight: 700 }}>وفّر {money(PRICING.yearlyDiscount)} {CURRENCY}</div>}
               <div style={{ color: "var(--muted)", fontSize: 13, marginTop: 4 }}>
-                غير شامل الضريبة — ض.ق.م {PRICING.vatRate}% ({money(vatOf(planPrice(p)))} {CURRENCY})
+                غير شامل الضريبة — ض.ق.م {vatRate}% ({money(planPrice(p) * vatRate / 100)} {CURRENCY})
               </div>
-              <div style={{ color: "var(--muted)", fontSize: 13 }}>الإجمالي: {money(totalWithVat(planPrice(p)))} {CURRENCY}</div>
-              <Link href={`/upgrade?plan=${p}`} className="btn btn-primary" style={{ marginTop: 12, width: "100%", display: "block", textAlign: "center" }}>
-                {expired ? "تجديد" : "طلب هذه الباقة"}
-              </Link>
+              <div style={{ color: "var(--muted)", fontSize: 13 }}>الإجمالي: {money(planPrice(p) * (1 + vatRate / 100))} {CURRENCY}</div>
+              {currentPlan === p && state === "active" && daysLeft(company) > 4 ? (
+                <div className="badge badge-on" style={{ marginTop: 12, display: "block" }}>باقتك الحالية — متبقي {daysLeft(company)} يوم</div>
+              ) : canRequest(p) ? (
+                <Link href={`/upgrade?plan=${p}`} className="btn btn-primary" style={{ marginTop: 12, width: "100%", display: "block", textAlign: "center" }}>
+                  {expired ? "تجديد" : currentPlan === p ? "تجديد مبكر (خلال 4 أيام)" : "ترقية إلى هذه الباقة"}
+                </Link>
+              ) : (
+                <div className="field-hint" style={{ marginTop: 12 }}>غير متاح حالياً — لا يمكن النزول أو تغيير الباقة قبل آخر 4 أيام.</div>
+              )}
             </div>
           ))}
         </div>

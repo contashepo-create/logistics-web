@@ -86,27 +86,11 @@ describe("منع الرصيد السالب", () => {
     })).rejects.toThrow(/الرصيد لا يكفي/);
   });
 
-  it("تعديل الفاتورة يحتسب استرجاع سنداتها القديمة قبل المنع", async () => {
-    const inv = await repo.saveInvoice({
-      date: "2026-02-01", customer_id: s.cust, attachments: [],
-      trips: [{ from_loc: "أ", to_loc: "ب", qty: 1, unit_price: 5000,
-        expenses: [{ expense_type: "fuel", qty: 1, unit_amount: 900, source: "cash", account_kind: "cashbox", account_id: s.cb }] }],
-    });
-    expect(await calc.accountBalance("cashbox", s.cb)).toBeCloseTo(100, 2);
-    const full = await calc.getInvoiceFull(inv);
-    const t = full!.trips[0];
-    // الرفع إلى 1000 مسموح (لأن الـ900 القديمة تُسترجع)، وإلى 1100 مرفوض
-    await expect(repo.saveInvoice({
-      date: "2026-02-01", customer_id: s.cust, attachments: [],
-      trips: [{ id: t.id, from_loc: "أ", to_loc: "ب", qty: 1, unit_price: 5000,
-        expenses: [{ expense_type: "fuel", qty: 1, unit_amount: 1100, source: "cash", account_kind: "cashbox", account_id: s.cb }] }],
-    }, inv)).rejects.toThrow(/الرصيد لا يكفي/);
-    await repo.saveInvoice({
-      date: "2026-02-01", customer_id: s.cust, attachments: [],
-      trips: [{ id: t.id, from_loc: "أ", to_loc: "ب", qty: 1, unit_price: 5000,
-        expenses: [{ expense_type: "fuel", qty: 1, unit_amount: 1000, source: "cash", account_kind: "cashbox", account_id: s.cb }] }],
-    }, inv);
-    expect(await calc.accountBalance("cashbox", s.cb)).toBeCloseTo(0, 2);
+  it("تعديل الفاتورة ممنوع بعد الإصدار", async () => {
+    const s = await seed();
+    await expect(repo.saveInvoice({ date: "2026-02-01", customer_id: s.cust, attachments: [],
+      trips: [{ from_loc: "أ", to_loc: "ب", qty: 1, unit_price: 5000, expenses: [] }] }, 1))
+      .rejects.toThrow(/لا تقبل التعديل/);
   });
 
   it("مسير الراتب أكبر من الرصيد مرفوض", async () => {

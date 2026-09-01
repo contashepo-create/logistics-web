@@ -409,57 +409,15 @@ describe("تدقيق محاسبي: كشوف الحسابات والتقارير"
 
 // ---------------------------------------------------------------------------
 describe("تدقيق محاسبي: عكس القيود عند التعديل والحذف", () => {
-  it("حذف الفاتورة يعيد كل الأرصدة إلى ما كانت عليه بالضبط", async () => {
-    const s = await seedFullScenario(14);
-    const before = {
-      cash: await calc.accountBalance("cashbox", s.cb),
-      bank: await calc.accountBalance("bank", s.bnk),
-      cust: await calc.customerBalance(s.custB),
-      pnl: (await calc.pnlReport("1900-01-01", "2999-12-31")).net,
-    };
-    const inv = await repo.saveInvoice({
-      date: "2026-04-01", customer_id: s.custB, attachments: [],
-      trips: [{
-        driver_id: s.drv2, from_loc: "أ", to_loc: "ب", qty: 2, unit_price: 1000,
-        expenses: [
-          { expense_type: "fuel", qty: 1, unit_amount: 400, source: "cash", account_kind: "cashbox", account_id: s.cb },
-          { expense_type: "trip", qty: 1, unit_amount: 250, source: "supplier", supplier_name: "محطة" },
-        ],
-      }],
-    });
-    expect(await calc.accountBalance("cashbox", s.cb)).toBeCloseTo(before.cash - 400, 2);
-
-    await repo.deleteInvoice(inv);
-    expect(await calc.accountBalance("cashbox", s.cb)).toBeCloseTo(before.cash, 2);
-    expect(await calc.accountBalance("bank", s.bnk)).toBeCloseTo(before.bank, 2);
-    expect(await calc.customerBalance(s.custB)).toBeCloseTo(before.cust, 2);
-    expect((await calc.pnlReport("1900-01-01", "2999-12-31")).net).toBeCloseTo(before.pnl, 2);
-    // لا سندات يتيمة
-    const orphan = table("payment_vouchers").filter((v) => v.source_expense_id != null && !table("trip_expenses").some((e) => e.id === v.source_expense_id));
-    expect(orphan).toHaveLength(0);
+  it("الفاتورة الضريبية غير قابلة للحذف", async () => {
+    const s = await seedFullScenario(0);
+    await expect(repo.deleteInvoice(s.inv1)).rejects.toThrow(/لا يمكن حذف فاتورة ضريبية/);
   });
 
-  it("تعديل الفاتورة يعدّل النقدية بفرق المبلغ فقط (بلا تكرار سندات)", async () => {
+  it("الفاتورة الضريبية غير قابلة للتعديل", async () => {
     const s = await seedFullScenario(0);
-    const cashBefore = await calc.accountBalance("cashbox", s.cb);
-    const full = await calc.getInvoiceFull(s.inv1);
-    const trips = full!.trips.map((t) => ({
-      id: t.id, vehicle_id: t.vehicle_id, driver_id: t.driver_id,
-      from_loc: t.from_loc, to_loc: t.to_loc, qty: t.qty, unit_price: t.unit_price, notes: t.notes,
-      expenses: t.expenses.map((e) => ({
-        id: e.id, expense_type: e.expense_type, qty: e.qty,
-        unit_amount: e.expense_type === "card" ? 200 : e.unit_amount, // 3×120 → 3×200 (+240)
-        source: e.source, account_kind: e.account_kind, account_id: e.account_id,
-        supplier_name: e.supplier_name, notes: e.notes,
-      })),
-    }));
-    await repo.saveInvoice({ date: full!.date, customer_id: full!.customer_id, notes: full!.notes, attachments: [], trips }, s.inv1);
-
-    expect(await calc.accountBalance("cashbox", s.cb)).toBeCloseTo(cashBefore - 240, 2);
-    const autos = table("payment_vouchers").filter((v) => v.source_expense_id != null);
-    expect(autos).toHaveLength(2); // ما زالا اثنين فقط
-    const L = buildLedger();
-    expect(r2(L.reduce((a, e) => a + e.debit, 0))).toBeCloseTo(r2(L.reduce((a, e) => a + e.credit, 0)), 2);
+    await expect(repo.saveInvoice({ date: "2026-02-01", customer_id: s.custA, attachments: [], trips: [] }, s.inv1))
+      .rejects.toThrow(/لا تقبل التعديل/);
   });
 
   it("حذف سند الصرف اليدوي يعيد رصيد الخزينة وربحية النقلة", async () => {
@@ -598,7 +556,7 @@ describe("تدقيق محاسبي: الدورة المالية وحماية سل
 
   it("لا يمكن حذف فاتورة عليها سند صرف يدوي (حماية من فقد المصروف)", async () => {
     const s = await seedFullScenario(0);
-    await expect(repo.deleteInvoice(s.inv1)).rejects.toThrow(/سندات دفع/);
+    await expect(repo.deleteInvoice(s.inv1)).rejects.toThrow(/لا يمكن حذف فاتورة ضريبية/);
   });
 
   it("أرقام المستندات متسلسلة وفريدة داخل كل دفتر", async () => {

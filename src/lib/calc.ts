@@ -95,8 +95,15 @@ export async function customerBalance(
   if (before) recQuery = recQuery.lt("date", before);
   const { data: recs } = await recQuery;
   const rec = sum((recs ?? []).map((r) => num(r.amount)));
+  let notesQuery = supabase.from("credit_debit_notes").select("note_type, amount, vat_rate").eq("customer_id", customerId);
+  if (before) notesQuery = notesQuery.lt("date", before);
+  const { data: notes } = await notesQuery;
+  const noteEffect = sum((notes ?? []).map((n) => {
+    const total = num(n.amount) + round2(num(n.amount) * num(n.vat_rate) / 100);
+    return n.note_type === "debit" ? total : -total;
+  }));
 
-  return round2(opening + inv - rec);
+  return round2(opening + inv - rec + noteEffect);
 }
 
 /**

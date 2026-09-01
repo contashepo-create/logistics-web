@@ -42,7 +42,7 @@ describe("ثوابت وأسعار", () => {
     expect(PRICING.monthly).toBe(100);
     expect(PRICING.yearly).toBe(1000);
     expect(PRICING.yearlyBefore - PRICING.yearly).toBe(PRICING.yearlyDiscount);
-    expect(PRICING.vatRate).toBe(14);
+    expect(PRICING.vatRate).toBe(15);
     expect(TRIAL_DAYS).toBe(7);
     expect(CUSTOMER_PLAN_TYPES).toEqual(["monthly", "yearly"]);
   });
@@ -57,10 +57,10 @@ describe("ثوابت وأسعار", () => {
     expect(planPrice("open")).toBe(0);
   });
   it("الضريبة تُحسب على السعر الصافي", () => {
-    expect(vatOf(100)).toBe(14);
-    expect(totalWithVat(100)).toBe(114);
-    expect(vatOf(1000)).toBe(140);
-    expect(totalWithVat(1000)).toBe(1140);
+    expect(vatOf(100)).toBe(15);
+    expect(totalWithVat(100)).toBe(115);
+    expect(vatOf(1000)).toBe(150);
+    expect(totalWithVat(1000)).toBe(1150);
   });
   it("isRequestablePlan يرفض المفتوح", () => {
     expect(isRequestablePlan("monthly")).toBe(true);

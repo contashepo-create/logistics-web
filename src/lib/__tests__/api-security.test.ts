@@ -86,7 +86,7 @@ function sbStub(over: Record<string, any> = {}) {
 }
 
 const okFields = {
-  plan_type: "monthly", request_kind: "renew", amount: "114",
+  plan_type: "monthly", request_kind: "renew", amount: "115",
   payer_name: "أحمد محمد", payer_phone: "01000000000", pay_method: "instapay",
   transfer_ref: "TX-1", notes: "تم التحويل",
 };

@@ -56,7 +56,7 @@ export default function InvoicesPage() {
   const subtitle = `الفترة: من ${dFrom} إلى ${dTo}`;
 
   return (
-    <PageFrame title="فواتير النقل" subtitle="رأس الفاتورة + النقلات والمصروفات — الربح الفعلي يشمل مصاريف السندات اللاحقة"
+    <PageFrame title="فواتير النقل" subtitle="فاتورة ضريبية غير قابلة للتعديل أو الحذف بعد الإصدار — للتصحيح استخدم إشعاراً مديناً أو دائناً (قريباً)"
       onAdd={() => setDialog({ mode: "add" })}
       toolbar={
         <FilterRow dFrom={dFrom} dTo={dTo} onFrom={setDFrom} onTo={setDTo} onRefresh={() => qc.invalidateQueries({ queryKey: ["invoices"] })}>
@@ -71,7 +71,7 @@ export default function InvoicesPage() {
         onPrint={() => exportPage({ title: "فواتير النقل", subtitle, headers, rows, mode: "print" })} />}>
       {isLoading ? <Spinner /> : (
         <>
-          <DataTable headers={headers} rows={rows} ids={(data ?? []).map((i) => i.id)}
+          <DataTable actions={["view"]} headers={headers} rows={rows} ids={(data ?? []).map((i) => i.id)}
             extra={[
               { key: "print", label: "🖨️", title: "طباعة فاتورة العميل" },
               { key: "pdf", label: "📄", title: "حفظ فاتورة العميل PDF" },

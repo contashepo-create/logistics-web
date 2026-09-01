@@ -56,8 +56,9 @@ function UpgradeInner() {
     })();
   }, [router]);
 
+  const vatRate = Number(company?.vat_rate) >= 0 ? Number(company?.vat_rate) : PRICING.vatRate;
   const net = planPrice(f.plan);
-  const total = totalWithVat(net);
+  const total = Math.round(net * (1 + vatRate / 100) * 100) / 100;
   const hasPending = useMemo(() => requests.some((r) => r.status === "pending"), [requests]);
 
   const pickReceipt = (file: File | null) => {
@@ -145,7 +146,7 @@ function UpgradeInner() {
 
             <div className="upg-total">
               <div><span>سعر الباقة (غير شامل الضريبة)</span><b>{money(net)} {CURRENCY}</b></div>
-              <div><span>ضريبة القيمة المضافة {PRICING.vatRate}%</span><b>{money(vatOf(net))} {CURRENCY}</b></div>
+              <div><span>ضريبة القيمة المضافة {vatRate}%</span><b>{money(net * vatRate / 100)} {CURRENCY}</b></div>
               <div className="grand"><span>المبلغ المطلوب تحويله</span><b>{money(total)} {CURRENCY}</b></div>
             </div>
 
