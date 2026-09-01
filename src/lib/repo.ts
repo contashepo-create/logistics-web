@@ -631,6 +631,9 @@ export async function listInvoicesRaw(): Promise<(Invoice & { customer_name: str
 }
 
 export async function saveInvoice(data: Record<string, any>, invoiceId?: number | null): Promise<number> {
+  if (invoiceId) {
+    throw new RuleError("الفاتورة الضريبية لا تقبل التعديل بعد إصدارها. أنشئ إشعاراً دائناً أو مديناً للتصحيح.");
+  }
   const date = String(data.date ?? "");
   ensureNotBlank(date, "تاريخ الفاتورة");
   if (!data.customer_id) throw new RuleError("اختر العميل.");
@@ -747,31 +750,8 @@ export async function saveInvoice(data: Record<string, any>, invoiceId?: number 
   return savedId as number;
 }
 
-export async function deleteInvoice(invoiceId: number): Promise<void> {
-  const { data: inv } = await supabase.from("invoices").select("date").eq("id", invoiceId).single();
-  if (!inv) return;
-  await ensureMovementEditable(inv.date);
-
-  const { data: trips } = await supabase.from("invoice_trips").select("id").eq("invoice_id", invoiceId);
-  const tripIds = (trips ?? []).map((t) => t.id);
-  let linked = 0;
-  if (tripIds.length) {
-    const { count: c } = await supabase
-      .from("payment_vouchers")
-      .select("id", { count: "exact", head: true })
-      .eq("voucher_type", "trip")
-      // السندات المتولّدة تلقائياً من مصروفات الفاتورة تُحذف معها تتابعياً
-      .is("source_expense_id", null)
-      .in("trip_id", tripIds);
-    linked = c ?? 0;
-  }
-  if (linked) {
-    throw new RuleError(
-      "لا يمكن حذف الفاتورة: توجد سندات دفع (مصروفات رحلات) مرتبطة بنقلاتها.\nاحذف السندات المرتبطة أولاً."
-    );
-  }
-  const { error } = await supabase.from("invoices").delete().eq("id", invoiceId);
-  if (error) throw new RuleError(error.message);
+export async function deleteInvoice(_invoiceId: number): Promise<void> {
+  throw new RuleError("لا يمكن حذف فاتورة ضريبية بعد إصدارها. استخدم إشعاراً دائناً أو مديناً للتصحيح.");
 }
 
 async function ensureAccountExists(kind: string, accountId: number): Promise<void> {

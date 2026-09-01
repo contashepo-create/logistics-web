@@ -142,7 +142,7 @@ export default function SettingsPage() {
         company_name: name || "اسم الشركة",
         company_phone: phone,
         company_address: address,
-        currency: currency || "ج.م",
+        currency: currency || "ر.س",
         company_vat_note: vatNote,
         vat_rate: vatRate,
       },

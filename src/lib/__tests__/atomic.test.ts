@@ -70,7 +70,7 @@ describe("الحفظ الذري للفواتير عبر save_invoice", () => {
     // تعديل الفاتورة بحذف النقلة المرتبطة
     await expect(
       repo.saveInvoice({ date: "2026-03-01", customer_id: cust, attachments: [], trips: [] }, invId)
-    ).rejects.toThrow("أضف نقلة واحدة");
+    ).rejects.toThrow("لا تقبل التعديل");
     // محاولة أخرى: إبقاء نقلة أخرى لكن حذف المرتبطة
     await expect(
       repo.saveInvoice({ date: "2026-03-01", customer_id: cust, attachments: [], trips: [{ id: 999, from_loc: "س", to_loc: "ص", price: 100, expenses: [] }] }, invId)

@@ -128,21 +128,11 @@ describe("مصادر تمويل مصروف النقلة", () => {
     expect(await calc.customerBalance(s.cust)).toBeCloseTo(2400, 2);
   });
 
-  it("تعديل الفاتورة يعيد بناء السندات التلقائية بلا تكرار", async () => {
-    const id = await repo.saveInvoice({
-      date: "2026-03-01", customer_id: s.cust, attachments: [],
-      trips: [{ from_loc: "أ", to_loc: "ب", qty: 1, unit_price: 2000, driver_id: s.drv,
-        expenses: [{ expense_type: "fuel", qty: 1, unit_amount: 500, source: "cash", account_kind: "cashbox", account_id: s.cb }] }],
-    });
-    const tripId = table("invoice_trips")[0].id;
-    await repo.saveInvoice({
-      date: "2026-03-01", customer_id: s.cust, attachments: [],
-      trips: [{ id: tripId, from_loc: "أ", to_loc: "ب", qty: 1, unit_price: 2000, driver_id: s.drv,
-        expenses: [{ expense_type: "fuel", qty: 1, unit_amount: 700, source: "cash", account_kind: "cashbox", account_id: s.cb }] }],
-    }, id);
-    const auto = table("payment_vouchers").filter((v) => v.source_expense_id != null);
-    expect(auto).toHaveLength(1);
-    expect(auto[0].amount).toBeCloseTo(700, 2);
-    expect(await calc.accountBalance("cashbox", s.cb)).toBeCloseTo(9300, 2);
+  it("الفاتورة الضريبية لا تقبل التعديل", async () => {
+    const id = await repo.saveInvoice({ date: "2026-03-01", customer_id: s.cust, attachments: [],
+      trips: [{ from_loc: "أ", to_loc: "ب", qty: 1, unit_price: 2000, expenses: [] }] });
+    await expect(repo.saveInvoice({ date: "2026-03-01", customer_id: s.cust, attachments: [],
+      trips: [{ from_loc: "أ", to_loc: "ب", qty: 1, unit_price: 2500, expenses: [] }] }, id))
+      .rejects.toThrow(/لا تقبل التعديل/);
   });
 });
