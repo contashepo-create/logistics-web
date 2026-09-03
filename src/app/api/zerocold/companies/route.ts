@@ -56,8 +56,18 @@ export async function POST(req: NextRequest) {
     const token = extractAccessToken(req);
     if (!token) return bad("انتهت جلسة الدخول.", 401);
     const sb = userClient(token);
-    const { data: company, error: companyError } = await sb
+    // المسار الأساسي: قراءة مباشرة عبر RLS (يحق للمطوّر رؤية كل الشركات).
+    // المسار الاحتياطي: إن فشلت القراءة بصلاحية ناقصة (permission denied)
+    // نقرأ بمفتاح الخدمة على الخادم بعد تأكدنا من أن الجلسة للمطوّر + 2FA،
+    // فلا يتعطّل التصفير بسبب خلل صلاحيات على قاعدة بيانات قديمة.
+    let { data: company, error: companyError } = await sb
       .from("companies").select("id, name").eq("id", companyId).maybeSingle();
+    if (companyError && hasServiceKey()) {
+      const svc = serviceClient();
+      const fallback = await svc.from("companies").select("id, name").eq("id", companyId).maybeSingle();
+      company = fallback.data;
+      companyError = fallback.error;
+    }
     if (companyError) return bad(companyError.message, 500);
     if (!company) return bad("الشركة غير موجودة.", 404);
     if (confirmName !== company.name) return bad("اسم الشركة غير مطابق. اكتب الاسم كما يظهر تماماً.");

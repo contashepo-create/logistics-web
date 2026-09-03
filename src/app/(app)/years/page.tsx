@@ -5,7 +5,7 @@ import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { DataTable } from "@/components/DataTable";
 import { PageFrame, Spinner, ExportBar } from "@/components/ui";
 import { YearDialog, SnapshotDialog } from "@/components/dialogs/master";
-import { listYears, deleteYear, setYearStatus, createSnapshot, movementsCountInRange, getSnapshot, rolloverYear } from "@/lib/repo";
+import { listYears, deleteYear, setYearStatus, createSnapshot, movementsCountInRange, yearsWithSnapshots, rolloverYear } from "@/lib/repo";
 import { notify } from "@/components/toast";
 import { exportPage } from "@/lib/exportHelper";
 
@@ -20,12 +20,25 @@ export default function YearsPage() {
   const [snaps, setSnaps] = useState<Record<number, boolean>>({});
 
   useEffect(() => {
-    (data ?? []).forEach(async (y) => {
-      const n = await movementsCountInRange(y.date_from, y.date_to);
-      const has = await getSnapshot(y.id);
-      setCounts((p) => ({ ...p, [y.id]: n }));
-      setSnaps((p) => ({ ...p, [y.id]: has != null }));
-    });
+    const years = data ?? [];
+    if (!years.length) return;
+    let cancelled = false;
+    // طلب واحد مجمّع للقطات + عدّ الحركات عبر التاريخ، بدل طلب لكل سنة
+    // (كان يطلق طلب year_snapshots لكل سنة ويفشل بـ 406 عند غياب اللقطة).
+    void (async () => {
+      try {
+        const [snapIds, counts] = await Promise.all([
+          yearsWithSnapshots(years.map((y) => y.id)),
+          Promise.all(years.map((y) => movementsCountInRange(y.date_from, y.date_to))),
+        ]);
+        if (cancelled) return;
+        setCounts(() => Object.fromEntries(years.map((y, i) => [y.id, counts[i]])));
+        setSnaps(() => Object.fromEntries(years.map((y) => [y.id, snapIds.has(y.id)])));
+      } catch {
+        /* بيانات عرضية؛ تبقى القيم الافتراضية بلا تنبيهات كونسول */
+      }
+    })();
+    return () => { cancelled = true; };
   }, [data]);
 
   const rows = useMemo(

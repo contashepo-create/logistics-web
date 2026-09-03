@@ -23,10 +23,17 @@ export async function payrollSlipHtml(payrollId: number): Promise<{ html: string
 
   const gross = Number(payroll.base_salary) + Number(payroll.additions);
   const currency = company.currency || "ر.س";
+  const deductionTotal = Number(payroll.deduction_deduction ?? 0);
   const settlementRows = (payroll.settlements ?? []).map((s) => `
     <tr>
       <td>PV-${String(s.voucher_number ?? "").padStart(5, "0")}</td>
       <td>${h(s.voucher_date || "—")}</td>
+      <td>${money(Number(s.amount) || 0)}</td>
+    </tr>`).join("");
+  const deductionRows = (payroll.deduction_settlements ?? []).map((s) => `
+    <tr>
+      <td>DED-${String(s.deduction_number ?? "").padStart(5, "0")}${s.deduction_reason ? ` — ${h(s.deduction_reason)}` : ""}</td>
+      <td>${h(s.deduction_date || "—")}</td>
       <td>${money(Number(s.amount) || 0)}</td>
     </tr>`).join("");
 
@@ -58,6 +65,7 @@ export async function payrollSlipHtml(payrollId: number): Promise<{ html: string
           <tr><td>الراتب الأساسي</td><td>${money(payroll.base_salary)}</td><td>—</td></tr>
           <tr><td>الإضافات والحوافز${payroll.additions_note ? ` — ${h(payroll.additions_note)}` : ""}</td><td>${money(payroll.additions)}</td><td>—</td></tr>
           <tr><td>خصم السلفيات</td><td>—</td><td>${money(payroll.advance_deduction)}</td></tr>
+          <tr><td>خصم الخصومات (جزاءات/تسويات)</td><td>—</td><td>${money(deductionTotal)}</td></tr>
           <tr><td>خصومات أخرى</td><td>—</td><td>${money(payroll.other_deductions)}</td></tr>
           <tr class="payroll-slip-total"><td>الصافي المنصرف</td><td colspan="2">${money(payroll.net_salary)} ${h(currency)}</td></tr>
         </tbody>
@@ -67,6 +75,10 @@ export async function payrollSlipHtml(payrollId: number): Promise<{ html: string
       ${settlementRows ? `
         <h3>تفاصيل السلف المخصومة في هذا الشهر</h3>
         <table class="data-table"><thead><tr><th>سند السلفة</th><th>تاريخ السلفة</th><th>المخصوم</th></tr></thead><tbody>${settlementRows}</tbody></table>
+      ` : ""}
+      ${deductionRows ? `
+        <h3>تفاصيل الخصومات المقتطعة في هذا الشهر</h3>
+        <table class="data-table"><thead><tr><th>بند الخصم</th><th>تاريخ تسجيل الخصم</th><th>المخصوم</th></tr></thead><tbody>${deductionRows}</tbody></table>
       ` : ""}
       ${payroll.notes ? `<div class="payroll-slip-notes"><b>ملاحظات:</b> ${h(payroll.notes)}</div>` : ""}
 

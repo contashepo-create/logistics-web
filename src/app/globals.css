@@ -1288,15 +1288,21 @@ table.data-table thead th { position: sticky; top: 0; z-index: 1; }
 [data-theme="dark"] .cell-danger { color: #fca5a5; }
 
 /* النقلات والحاويات في قائمة الفواتير */
-.invoice-list-trips { display: grid; gap: 6px; min-width: 230px; text-align: start; }
-.invoice-list-trip { display: grid; gap: 2px; padding-bottom: 5px; border-bottom: 1px dashed var(--border); }
+/* ضغط أفقي مخصص لجدول الفواتير حتى تظهر أزرار العين/الطباعة دون شريط تمرير */
+.invoices-table table.data-table th,
+.invoices-table table.data-table td { padding-inline: 6px; padding-block: 8px; }
+.invoices-table table.data-table { font-size: 12.5px; }
+.invoices-table .btn-row { padding: 3px 7px; }
+
+.invoice-list-trips { display: grid; gap: 3px; min-width: 150px; max-width: 240px; text-align: start; }
+.invoice-list-trip { display: grid; gap: 1px; padding-bottom: 3px; border-bottom: 1px dashed var(--border); }
 .invoice-list-trip:last-child { padding-bottom: 0; border-bottom: 0; }
-.invoice-list-trip > span { color: var(--text); font-size: 11.5px; font-weight: 700; }
+.invoice-list-trip > span { color: var(--text); font-size: 11px; font-weight: 700; white-space: normal; line-height: 1.35; }
 .invoice-list-trip > b {
-  width: fit-content; color: var(--primary-dark); font: 700 10.5px ui-monospace, monospace;
-  direction: ltr; text-align: start;
+  width: fit-content; color: var(--primary-dark); font: 700 10px ui-monospace, monospace;
+  direction: ltr; text-align: start; white-space: normal; word-break: break-all;
 }
-.invoice-list-trip > small { color: var(--muted); font-size: 10px; }
+.invoice-list-trip > small { color: var(--muted); font-size: 9.5px; }
 .invoice-list-legacy-container { display: flex; align-items: center; gap: 6px; color: var(--muted); font-size: 10px; }
 .invoice-list-legacy-container b { color: var(--primary-dark); font-family: ui-monospace, monospace; }
 

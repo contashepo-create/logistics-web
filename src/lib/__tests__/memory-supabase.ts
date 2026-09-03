@@ -28,7 +28,7 @@ const collisionCounters: Record<string, number> = {};
 export function forceCollision(name: string, times = 1): void {
   collisionCounters[name] = (collisionCounters[name] ?? 0) + times;
 }
-const NUMBERED_TABLES = new Set(["invoices", "receipt_vouchers", "payment_vouchers", "payrolls", "credit_debit_notes"]);
+const NUMBERED_TABLES = new Set(["invoices", "receipt_vouchers", "payment_vouchers", "payrolls", "credit_debit_notes", "employee_deductions"]);
 // يحاكي قواعد v13 المنشورة قبل الإصلاح: حارس السنة كان يعمل أبجدياً قبل
 // set_company_id في الإدراج المباشر للسندات. إبقاء المحاكاة يضمن أن التطبيق
 // يرسل company_id صراحةً ويظل متوافقاً حتى قبل تشغيل ترحيلة v15.
@@ -39,6 +39,7 @@ const TENANT_TABLES = new Set([
   "invoices", "invoice_trips", "trip_expenses", "receipt_vouchers",
   "payment_vouchers", "payrolls", "advance_settlements", "year_snapshots", "activation_requests",
   "credit_debit_notes", "credit_note_trips", "company_features", "suppliers", "purchase_invoices", "purchase_items",
+  "employee_deductions", "deduction_settlements",
 ]);
 
 // ---------------------------------------------------------------------------
@@ -47,6 +48,7 @@ const TENANT_TABLES = new Set([
 const EMBED_FK: Record<string, Record<string, string>> = {
   payrolls: { employees: "employee_id" },
   advance_settlements: { payrolls: "payroll_id", payment_vouchers: "payment_voucher_id" },
+  deduction_settlements: { payrolls: "payroll_id", employee_deductions: "employee_deduction_id" },
   credit_debit_notes: { invoices: "invoice_id", customers: "customer_id" },
   purchase_invoices: { suppliers: "supplier_id", vehicles: "vehicle_id" },
 };
@@ -327,7 +329,11 @@ const CASCADE_RULES: Record<string, { table: string; column: string; action: "ca
   ],
   trip_expenses: [{ table: "payment_vouchers", column: "source_expense_id", action: "cascade" }],
   payment_vouchers: [{ table: "advance_settlements", column: "payment_voucher_id", action: "cascade" }],
-  payrolls: [{ table: "advance_settlements", column: "payroll_id", action: "cascade" }],
+  payrolls: [
+    { table: "advance_settlements", column: "payroll_id", action: "cascade" },
+    { table: "deduction_settlements", column: "payroll_id", action: "cascade" },
+  ],
+  employee_deductions: [{ table: "deduction_settlements", column: "employee_deduction_id", action: "cascade" }],
   credit_debit_notes: [{ table: "credit_note_trips", column: "credit_note_id", action: "cascade" }],
   financial_years: [{ table: "year_snapshots", column: "year_id", action: "cascade" }],
 };
@@ -546,7 +552,12 @@ function rpcSavePayroll(args: any): { data: any; error: any } {
   const settlements: [number, number][] = (args.p_settlements ?? []).map((p: any) => [Number(p[0]), Number(p[1])]);
   const total = Math.round(settlements.reduce((a, [, amt]) => a + amt, 0) * 100) / 100;
   if (Math.abs(total - args.p_advance_deduction) > 0.001) return err("مجموع خصومات السلف الموزعة لا يطابق قيمة الخصم من السلف.");
-  const net = Math.round((args.p_base_salary + args.p_additions - args.p_advance_deduction - args.p_other_deductions) * 100) / 100;
+  const deductionSettlements: [number, number][] = (args.p_deduction_settlements ?? []).map((p: any) => [Number(p[0]), Number(p[1])]);
+  const deductionDeduction = Math.round(deductionSettlements.reduce((a, [, amt]) => a + amt, 0) * 100) / 100;
+  if (args.p_deduction_deduction != null && Math.abs(deductionDeduction - args.p_deduction_deduction) > 0.01) {
+    return err("مجموع خصومات الخصومات الموزعة لا يطابق إجمالي خصم الخصومات.");
+  }
+  const net = Math.round((args.p_base_salary + args.p_additions - args.p_advance_deduction - deductionDeduction - args.p_other_deductions) * 100) / 100;
   if (net < 0) return err("صافي الراتب سالب: راجع الإضافات والخصومات.");
 
   let payrollId: number;
@@ -559,7 +570,8 @@ function rpcSavePayroll(args: any): { data: any; error: any } {
       period_year: args.p_period_year, period_month: args.p_period_month, account_kind: args.p_account_kind,
       account_id: args.p_account_id, base_salary: args.p_base_salary, additions: args.p_additions,
       additions_note: args.p_additions_note ?? "", advance_deduction: args.p_advance_deduction,
-      other_deductions: args.p_other_deductions, net_salary: net, notes: args.p_notes ?? "",
+      other_deductions: args.p_other_deductions, deduction_deduction: deductionDeduction,
+      net_salary: net, notes: args.p_notes ?? "",
     });
   } else {
     const pr = table("payrolls").find((r) => r.id === args.p_payroll_id && r.company_id === cid);
@@ -570,11 +582,14 @@ function rpcSavePayroll(args: any): { data: any; error: any } {
       date: args.p_date, employee_id: args.p_employee_id, period_year: args.p_period_year, period_month: args.p_period_month,
       account_kind: args.p_account_kind, account_id: args.p_account_id, base_salary: args.p_base_salary, additions: args.p_additions,
       additions_note: args.p_additions_note ?? "", advance_deduction: args.p_advance_deduction, other_deductions: args.p_other_deductions,
-      net_salary: net, notes: args.p_notes ?? "",
+      deduction_deduction: deductionDeduction, net_salary: net, notes: args.p_notes ?? "",
     });
     payrollId = pr.id;
     for (const s of table("advance_settlements").filter((s) => s.payroll_id === payrollId)) {
       table("advance_settlements").splice(table("advance_settlements").indexOf(s), 1);
+    }
+    for (const s of table("deduction_settlements").filter((s) => s.payroll_id === payrollId)) {
+      table("deduction_settlements").splice(table("deduction_settlements").indexOf(s), 1);
     }
   }
 
@@ -585,6 +600,14 @@ function rpcSavePayroll(args: any): { data: any; error: any } {
     const settled = table("advance_settlements").filter((s) => s.payment_voucher_id === vid).reduce((a, s) => a + (s.amount ?? 0), 0);
     if (amt > (adv.amount - settled) + 0.001) return err("قيمة الخصم من إحدى السلف أكبر من المتبقي منها.");
     table("advance_settlements").push({ id: nextId("advance_settlements"), company_id: cid, payment_voucher_id: vid, payroll_id: payrollId, amount: amt });
+  }
+  for (const [did, amt] of deductionSettlements) {
+    if (amt <= 0) continue;
+    const ded = table("employee_deductions").find((d) => d.id === did && d.employee_id === args.p_employee_id && d.company_id === cid);
+    if (!ded) return err("خصم غير موجود أو لا يخص هذا الموظف.");
+    const settled = table("deduction_settlements").filter((s) => s.employee_deduction_id === did).reduce((a, s) => a + (s.amount ?? 0), 0);
+    if (amt > (ded.amount - settled) + 0.001) return err("قيمة الخصم من إحدى بنود الخصومات أكبر من المتبقي منها.");
+    table("deduction_settlements").push({ id: nextId("deduction_settlements"), company_id: cid, employee_deduction_id: did, payroll_id: payrollId, amount: amt });
   }
   return { data: payrollId, error: null };
 }

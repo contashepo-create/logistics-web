@@ -25,31 +25,38 @@ export default function EmployeeStatementReportPage() {
     enabled: !!employeeId,
   });
 
-  const salHeaders = ["رقم", "التاريخ", "عن شهر", "الأساسي", "إضافات", "خصم سلف", "خصومات أخرى", "الصافي"];
+  const salHeaders = ["رقم", "التاريخ", "عن شهر", "الأساسي", "إضافات", "خصم سلف", "خصم خصومات", "خصومات أخرى", "الصافي"];
   const advHeaders = ["رقم السلفة", "التاريخ", "القيمة", "المسدد", "المتبقي", "تفاصيل السداد"];
+  const dedHeaders = ["رقم الخصم", "التاريخ", "السبب", "القيمة", "المخصوم", "المتبقي", "تفاصيل الاقتطاع"];
   const allowHeaders = ["الفاتورة", "التاريخ", "الرحلة", "سعر النقلة", "بدل التريب"];
 
-  const salRows = (st?.salaries ?? []).map((p) => [voucherNumberLabel("PAY", p.number), p.date, periodLabel(p.period_year, p.period_month), money(p.base_salary), money(p.additions), money(p.advance_deduction), money(p.other_deductions), money(p.net_salary)]);
+  const salRows = (st?.salaries ?? []).map((p) => [voucherNumberLabel("PAY", p.number), p.date, periodLabel(p.period_year, p.period_month), money(p.base_salary), money(p.additions), money(p.advance_deduction), money(p.deduction_deduction ?? 0), money(p.other_deductions), money(p.net_salary)]);
   const advRows = (st?.advances ?? []).map((a) => [voucherNumberLabel("PV", a.number), a.date, money(a.amount), money(a.settled), money(a.remaining), (a.settlements ?? []).map((s: any) => `مسير PAY-${String(s.pnum ?? "").padStart(5, "0")}${s.period ? ` (${s.period})` : ""} بتاريخ ${s.pdate}: ${money(s.amount)}`).join(" | ") || "لم يُخصم منها شيء بعد"]);
+  const dedRows = (st?.deductions ?? []).map((d) => [`DED-${String(d.number).padStart(5, "0")}`, d.date, d.reason || "—", money(d.amount), money(d.settled), money(d.remaining), (d.settlements ?? []).map((s: any) => `مسير PAY-${String(s.pnum ?? "").padStart(5, "0")}${s.period ? ` (${s.period})` : ""} بتاريخ ${s.pdate}: ${money(s.amount)}`).join(" | ") || "لم يُخصم منه شيء بعد"]);
   const allowRows = (st?.allowances ?? []).map((a: any) => [invoiceNumberLabel(a.inv_number), a.inv_date, a.route, money(a.price), money(a.trip_allowance)]);
 
-  const t = st?.totals ?? { salaries_net: 0, advances_total: 0, advances_remaining: 0, allowances_total: 0 };
+  const t = st?.totals ?? { salaries_net: 0, advances_total: 0, advances_remaining: 0, deductions_total: 0, deductions_remaining: 0, allowances_total: 0 };
   const employeeLabel = employees?.find((e) => e.id === employeeId)?.name ?? "";
   const subtitle = `الفترة: من ${dFrom} إلى ${dTo}`;
 
-  const tabNames = [" — الرواتب", " — السلف", " — بدلات التريب"];
-  const current = tab === 0 ? { h: salHeaders, r: salRows, name: "الرواتب" } : tab === 1 ? { h: advHeaders, r: advRows, name: "السلف" } : { h: allowHeaders, r: allowRows, name: "بدلات التريب" };
+  const tabNames = [" — الرواتب", " — السلف", " — الخصومات", " — بدلات التريب"];
+  const current = tab === 0 ? { h: salHeaders, r: salRows, name: "الرواتب" }
+    : tab === 1 ? { h: advHeaders, r: advRows, name: "السلف" }
+    : tab === 2 ? { h: dedHeaders, r: dedRows, name: "الخصومات" }
+    : { h: allowHeaders, r: allowRows, name: "بدلات التريب" };
 
   const summary: [string, string | number][] = [
     ["الموظف", employeeLabel],
     ["إجمالي الرواتب الصافية", money(t.salaries_net)],
     ["إجمالي السلف", money(t.advances_total)],
     ["المتبقي من السلف", money(t.advances_remaining)],
+    ["إجمالي الخصومات", money(t.deductions_total ?? 0)],
+    ["المتبقي من الخصومات", money(t.deductions_remaining ?? 0)],
     ["إجمالي بدلات التريب", money(t.allowances_total)],
   ];
 
   return (
-    <PageFrame title="كشف حساب موظف / سائق" subtitle="الرواتب المنصرفة تفصيلياً + سجل السلف وتسوياتها + بدلات التريب من الفواتير"
+    <PageFrame title="كشف حساب موظف / سائق" subtitle="الرواتب المنصرفة تفصيلياً + سجل السلف والخصومات وتسوياتها + بدلات التريب من الفواتير"
       toolbar={
         <FilterRow dFrom={dFrom} dTo={dTo} onFrom={setDFrom} onTo={setDTo} onRefresh={() => qc.invalidateQueries({ queryKey: ["report-emp-stmt"] })}>
           <div><label className="field-label">الموظف</label>
@@ -68,7 +75,8 @@ export default function EmployeeStatementReportPage() {
           <div className="tabs-head">
             <button className={tab === 0 ? "active" : ""} onClick={() => setTab(0)}>الرواتب المنصرفة</button>
             <button className={tab === 1 ? "active" : ""} onClick={() => setTab(1)}>سجل السلف</button>
-            <button className={tab === 2 ? "active" : ""} onClick={() => setTab(2)}>بدلات التريب من الفواتير</button>
+            <button className={tab === 2 ? "active" : ""} onClick={() => setTab(2)}>سجل الخصومات</button>
+            <button className={tab === 3 ? "active" : ""} onClick={() => setTab(3)}>بدلات التريب من الفواتير</button>
           </div>
           <div className="table-wrap">
             <table className="data-table">
@@ -84,6 +92,8 @@ export default function EmployeeStatementReportPage() {
               { label: "إجمالي الرواتب الصافية", value: t.salaries_net },
               { label: "إجمالي السلف", value: t.advances_total },
               { label: "المتبقي من السلف", value: t.advances_remaining },
+              { label: "إجمالي الخصومات", value: t.deductions_total ?? 0 },
+              { label: "المتبقي من الخصومات", value: t.deductions_remaining ?? 0 },
               { label: "إجمالي بدلات التريب", value: t.allowances_total },
             ]} />
           </div>

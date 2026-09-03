@@ -28,12 +28,12 @@ export default function PayrollPage() {
     placeholderData: keepPreviousData,
   });
 
-  const headers = ["رقم الراتب", "تاريخ الصرف", "الموظف", "النوع", "عن شهر", "طريقة الصرف", "الأساسي", "الإضافات", "خصم السلف", "خصومات أخرى", "الصافي المنصرف"];
+  const headers = ["رقم الراتب", "تاريخ الصرف", "الموظف", "النوع", "عن شهر", "طريقة الصرف", "الأساسي", "الإضافات", "خصم السلف", "خصم الخصومات", "خصومات أخرى", "الصافي المنصرف"];
   const rows = useMemo(
     () => (data ?? []).map((p) => [
       voucherNumberLabel("PAY", p.number), p.date, p.employee_name || "—", EMP_TYPES[p.emp_type ?? ""] ?? "—",
       periodLabel(p.period_year, p.period_month), p.account_name || "—", money(p.base_salary), money(p.additions),
-      money(p.advance_deduction), money(p.other_deductions), money(p.net_salary),
+      money(p.advance_deduction), money(p.deduction_deduction ?? 0), money(p.other_deductions), money(p.net_salary),
     ]),
     [data]
   );
@@ -51,7 +51,7 @@ export default function PayrollPage() {
   };
 
   return (
-    <PageFrame title="إدارة الرواتب" subtitle="الصافي = الأساسي + الإضافات − خصم السلف − الخصومات الأخرى" addText="➕ إصدار راتب"
+    <PageFrame title="إدارة الرواتب" subtitle="الصافي = الأساسي + الإضافات − خصم السلف − خصم الخصومات − الخصومات الأخرى" addText="➕ إصدار راتب"
       onAdd={() => setDialog({ mode: "add" })}
       toolbar={
         <FilterRow dFrom={dFrom} dTo={dTo} onFrom={setDFrom} onTo={setDTo} onRefresh={() => qc.invalidateQueries({ queryKey: ["payrolls"] })}>
