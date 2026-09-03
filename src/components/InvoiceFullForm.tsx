@@ -2,6 +2,7 @@
 
 import { useEffect, useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
+import { useQueryClient } from "@tanstack/react-query";
 import { Field, Input, Select, Textarea, AmountInput, DateInput, Button } from "@/components/ui";
 import { notify } from "@/components/toast";
 import { listCustomers, listEmployees, listVehicles, saveInvoice, currentVatRate, getCustomer, companyInfo } from "@/lib/repo";
@@ -24,6 +25,7 @@ const tripLineTotal = (t: { qty: string; unit_price: string }) =>
 
 export default function InvoiceFullForm() {
   const router = useRouter();
+  const qc = useQueryClient();
   const [customers, setCustomers] = useState<{ id: number; name: string }[]>([]);
   const [vehicles, setVehicles] = useState<{ id: number; plate_number: string }[]>([]);
   const [drivers, setDrivers] = useState<{ id: number; name: string }[]>([]);
@@ -151,8 +153,10 @@ export default function InvoiceFullForm() {
         }
       } catch { /* تحذير فقط؛ لا يمنع حفظ الفاتورة */ }
       notify(warn ? `تم حفظ الفاتورة بنجاح.${warn}` : "تم حفظ الفاتورة بنجاح.", warn ? "warning" : "success");
+      // إبطال كاش شاشة الفواتير والبيانات المرتبطة حتى تظهر الفاتورة الجديدة
+      // فوراً دون الحاجة لتحديث الصفحة يدوياً (router.refresh() لا يمسّ كاش React Query).
+      qc.invalidateQueries();
       router.push("/invoices");
-      router.refresh();
     } catch (e) {
       notify(e instanceof Error ? e.message : String(e), "error");
     } finally {

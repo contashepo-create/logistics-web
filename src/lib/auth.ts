@@ -15,6 +15,7 @@ import {
   safePhone,
 } from "./security";
 import { translateDbError } from "./db";
+import { invalidateCompanyCache as invalidateRepoCompanyCache } from "./repo";
 
 /**
  * البريد الإلكتروني للمطوّر — يمنح صاحبه لوحة تحكم خاصة.
@@ -174,6 +175,11 @@ export async function registerCurrentCompany(input: CompanySetupInput): Promise<
     "إنشاء الشركة"
   );
   if (error) throw new Error(translateDbError(error.message));
+  // الشركة أصبحت موجودة فعلاً في قاعدة البيانات؛ أبطِل كل الكواشش فوراً حتى
+  // لا تقرأ الشاشة التالية «لا توجد شركة» من قيمة مخزّنة مؤقتاً فتعيد توجيه
+  // المستخدم إلى /onboarding مرة أخرى (كان يسبب طلب إنشاء الشركة مرتين).
+  clearIdentityCache();
+  invalidateRepoCompanyCache?.();
   return (data as string) ?? null;
 }
 

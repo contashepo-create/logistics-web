@@ -86,6 +86,7 @@ export default function InvoicesPage() {
         onPrint={() => exportPage({ title: "فواتير النقل", subtitle, headers, rows: exportRows, mode: "print" })} />}>
       {isLoading ? <Spinner /> : (
         <>
+          <div className="invoices-table">
           <DataTable actions={["view"]} headers={headers} rows={rows} ids={(data ?? []).map((i) => i.id)}
             extra={[
               { key: "print", label: "🖨️", title: "طباعة فاتورة العميل" },
@@ -96,6 +97,7 @@ export default function InvoicesPage() {
               else if (key === "print") printCustomerInvoice(Number(id));
               else if (key === "pdf") exportCustomerInvoicePdf(Number(id));
             }} />
+          </div>
           <div style={{ marginTop: 12 }}>
             <TotalsBar items={[
               { label: "إجمالي النقلات", value: totals.trips },

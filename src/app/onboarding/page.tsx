@@ -50,7 +50,9 @@ export default function OnboardingPage() {
     try {
       await registerCurrentCompany({ companyName, name: ownerName, address, phone, yearStart, yearEnd });
       notify("تم إنشاء شركتك وفتح السنة المالية بنجاح. أهلاً بك!", "success");
-      router.replace("/customers");
+      // إعادة تحميل كاملة: تضمن قراءة الشركة والسنة الجديدة من قاعدة البيانات
+      // بلا أي قيمة مخزّنة مؤقتاً، فلا تعود شاشة التهيئة للظهور مرة ثانية.
+      window.location.assign("/customers");
     } catch (err) {
       notify(err instanceof Error ? err.message : String(err), "error");
     } finally {

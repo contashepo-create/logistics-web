@@ -3,15 +3,23 @@
 import { useEffect, useMemo, useState } from "react";
 import { Modal, Field, Input, Select, Textarea, AmountInput, DateInput, Button, AccountSelect } from "@/components/ui";
 import { notify } from "@/components/toast";
-import { listEmployees, savePayroll, getPayroll, employeeAdvances, getEmployee } from "@/lib/repo";
-import { allAccounts, advanceArchive, advanceArchiveTotals } from "@/lib/calc";
-import type { AdvanceArchiveRow } from "@/lib/calc";
+import { listEmployees, savePayroll, getPayroll, employeeAdvances, employeeDeductions, getEmployee } from "@/lib/repo";
+import { allAccounts, advanceArchive, advanceArchiveTotals, deductionArchive, deductionArchiveTotals } from "@/lib/calc";
+import type { AdvanceArchiveRow, DeductionArchiveRow } from "@/lib/calc";
 import { money, todayIso, MONTHS_AR, periodLabel } from "@/lib/format";
 
 type AdvanceRow = {
   payment_voucher_id: number; number: number; date: string;
   amount: number; remaining: number; deduct: string;
 };
+
+type DeductionRow = {
+  employee_deduction_id: number; number: number; date: string;
+  amount: number; remaining: number; deduct: string; reason: string;
+};
+
+/** سبب الخصم للعرض المختصر في جدول المسير. */
+const dedReason = (r: DeductionRow): string => r.reason || "—";
 
 const n = (v: string) => parseFloat(String(v).replace(/,/g, "")) || 0;
 const r2 = (v: number) => Math.round(v * 100) / 100;
@@ -26,6 +34,7 @@ export function PayrollDialog({ id, readOnly, onClose }: { id?: number | null; r
     other_deductions: "", deduction_note: "", notes: "",
   });
   const [advances, setAdvances] = useState<AdvanceRow[]>([]);
+  const [deductions, setDeductions] = useState<DeductionRow[]>([]);
   const [saving, setSaving] = useState(false);
 
   useEffect(() => {
@@ -44,7 +53,10 @@ export function PayrollDialog({ id, readOnly, onClose }: { id?: number | null; r
             additions: String(p.additions), additions_note: p.additions_note,
             other_deductions: String(p.other_deductions), notes: p.notes,
           }));
-          const rows = await employeeAdvances(p.employee_id);
+          const [rows, dedRows] = await Promise.all([
+            employeeAdvances(p.employee_id),
+            employeeDeductions(p.employee_id),
+          ]);
           const settlements = p.settlements ?? [];
           setAdvances(rows.map((r: any) => {
             const s = settlements.find((x) => x.payment_voucher_id === r.id);
@@ -54,12 +66,21 @@ export function PayrollDialog({ id, readOnly, onClose }: { id?: number | null; r
               deduct: s ? String(s.amount) : "",
             };
           }));
+          const dedSettlements = p.deduction_settlements ?? [];
+          setDeductions(dedRows.map((r: any) => {
+            const s = dedSettlements.find((x) => x.employee_deduction_id === r.id);
+            return {
+              employee_deduction_id: r.id, number: r.number, date: r.date,
+              amount: r.amount, remaining: r.remaining + (s ? s.amount : 0),
+              deduct: s ? String(s.amount) : "", reason: String(r.reason ?? ""),
+            };
+          }));
         }
       }
     })();
   }, [id]);
 
-  // عند اختيار الموظف: تحميل راتبه الأساسي تلقائياً + سلفه غير المسددة
+  // عند اختيار الموظف: تحميل راتبه الأساسي تلقائياً + سلفه وخصوماته غير المسددة
   useEffect(() => {
     if (!f.employee_id || id) return;
     (async () => {
@@ -67,19 +88,30 @@ export function PayrollDialog({ id, readOnly, onClose }: { id?: number | null; r
       if (emp) {
         setF((old) => ({ ...old, base_salary: emp.base_salary ? String(emp.base_salary) : old.base_salary }));
       }
-      const rows = await employeeAdvances(Number(f.employee_id), false);
+      const [rows, dedRows] = await Promise.all([
+        employeeAdvances(Number(f.employee_id), false),
+        employeeDeductions(Number(f.employee_id), false),
+      ]);
       setAdvances(rows.map((r: any) => ({
         payment_voucher_id: r.id, number: r.number, date: r.date, amount: r.amount, remaining: r.remaining, deduct: "",
+      })));
+      setDeductions(dedRows.map((r: any) => ({
+        employee_deduction_id: r.id, number: r.number, date: r.date, amount: r.amount, remaining: r.remaining, deduct: "", reason: String(r.reason ?? ""),
       })));
     })();
   }, [f.employee_id, id]);
 
   const deductTotal = useMemo(() => r2(advances.reduce((a, r) => a + n(r.deduct), 0)), [advances]);
+  const dedRowTotal = useMemo(() => r2(deductions.reduce((a, r) => a + n(r.deduct), 0)), [deductions]);
   const gross = useMemo(() => r2(n(f.base_salary) + n(f.additions)), [f.base_salary, f.additions]);
-  const net = useMemo(() => r2(gross - deductTotal - n(f.other_deductions)), [gross, deductTotal, f.other_deductions]);
+  const net = useMemo(() => r2(gross - deductTotal - dedRowTotal - n(f.other_deductions)), [gross, deductTotal, dedRowTotal, f.other_deductions]);
   const advancesRemainingAfter = useMemo(
     () => r2(advances.reduce((a, r) => a + (r.remaining - n(r.deduct)), 0)),
     [advances]
+  );
+  const deductionsRemainingAfter = useMemo(
+    () => r2(deductions.reduce((a, r) => a + (r.remaining - n(r.deduct)), 0)),
+    [deductions]
   );
 
   const setDeduct = (i: number, v: string) => setAdvances((p) => p.map((r, x) => (x === i ? { ...r, deduct: v } : r)));
@@ -98,6 +130,13 @@ export function PayrollDialog({ id, readOnly, onClose }: { id?: number | null; r
     }));
   };
 
+  // ——— أدوات جدول الخصومات (كلي/جزئي مثل السلف تماماً) ———
+  const setDeductD = (i: number, v: string) => setDeductions((p) => p.map((r, x) => (x === i ? { ...r, deduct: v } : r)));
+  const deductAllD = (i: number) => setDeductions((p) => p.map((r, x) => (x === i ? { ...r, deduct: String(r.remaining) } : r)));
+  const clearOneD = (i: number) => setDeductions((p) => p.map((r, x) => (x === i ? { ...r, deduct: "" } : r)));
+  const deductEverythingD = () => setDeductions((p) => p.map((r) => ({ ...r, deduct: String(r.remaining) })));
+  const clearAllD = () => setDeductions((p) => p.map((r) => ({ ...r, deduct: "" })));
+
   const save = async () => {
     if (!f.employee_id) return notify("اختر الموظف.", "error");
     if (!f.account_id) return notify("اختر جهة الصرف (خزينة أو بنك).", "error");
@@ -105,6 +144,9 @@ export function PayrollDialog({ id, readOnly, onClose }: { id?: number | null; r
     if (net < 0) return notify("لا يمكن أن يكون صافي الراتب بالسالب — راجع الخصومات.", "error");
     for (const r of advances) {
       if (n(r.deduct) > r.remaining + 0.01) return notify(`خصم السلفة PV-${r.number} أكبر من المتبقي منها.`, "error");
+    }
+    for (const r of deductions) {
+      if (n(r.deduct) > r.remaining + 0.01) return notify(`خصم البند DED-${r.number} أكبر من المتبقي منه.`, "error");
     }
     setSaving(true);
     try {
@@ -119,6 +161,9 @@ export function PayrollDialog({ id, readOnly, onClose }: { id?: number | null; r
         notes: f.deduction_note ? `${f.notes}${f.notes ? " — " : ""}خصومات: ${f.deduction_note}` : f.notes,
         settlements: advances.filter((r) => n(r.deduct) > 0).map((r) => ({
           payment_voucher_id: r.payment_voucher_id, amount: n(r.deduct),
+        })),
+        deduction_settlements: deductions.filter((r) => n(r.deduct) > 0).map((r) => ({
+          employee_deduction_id: r.employee_deduction_id, amount: n(r.deduct),
         })),
       }, id);
       notify("تم حفظ مسير الراتب بنجاح.", "success");
@@ -199,12 +244,56 @@ export function PayrollDialog({ id, readOnly, onClose }: { id?: number | null; r
                       <td>{r.date}</td>
                       <td>{money(r.amount)}</td>
                       <td>{money(r.remaining)}</td>
-                      <td style={{ minWidth: 130 }}><AmountInput value={r.deduct} onChange={(v) => setDeduct(i, v)} /></td>
+                      <td style={{ minWidth: 130 }}><AmountInput value={r.deduct} onChange={(v) => setDeduct(i, v)} readOnly={readOnly} /></td>
                       <td style={{ fontWeight: 700, color: after > 0 ? "var(--warning)" : "var(--success)" }}>{money(after)}</td>
                       <td>
                         <div className="row-actions">
-                          <button className="btn-row" title="خصم الكل" onClick={() => deductAll(i)}>الكل</button>
-                          <button className="btn-row" title="إلغاء" onClick={() => clearOne(i)}>✕</button>
+                          <button className="btn-row" title="خصم الكل" onClick={() => deductAll(i)} disabled={readOnly}>الكل</button>
+                          <button className="btn-row" title="إلغاء" onClick={() => clearOne(i)} disabled={readOnly}>✕</button>
+                        </div>
+                      </td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+        )}
+
+        <div className="inv-sec-title">
+          <span>خصم الخصومات ({deductions.length})</span>
+          {!readOnly && deductions.length > 0 && (
+            <span style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
+              <button className="btn" onClick={deductEverythingD}>خصم كل الخصومات</button>
+              <button className="btn" onClick={clearAllD}>إلغاء الخصم</button>
+            </span>
+          )}
+        </div>
+
+        {deductions.length === 0 ? (
+          <div className="exp-empty">لا توجد خصومات غير مسدَّدة لهذا الموظف.</div>
+        ) : (
+          <div className="table-wrap">
+            <table className="data-table adv-table">
+              <thead>
+                <tr><th>البند</th><th>تاريخ التسجيل</th><th>قيمة الخصم</th><th>السبب</th><th>المتبقي</th><th>يُخصم هذا الشهر</th><th>يتبقى بعد الخصم</th><th></th></tr>
+              </thead>
+              <tbody>
+                {deductions.map((r, i) => {
+                  const after = r2(r.remaining - n(r.deduct));
+                  return (
+                    <tr key={r.employee_deduction_id}>
+                      <td style={{ fontWeight: 700 }}>DED-{String(r.number).padStart(5, "0")}</td>
+                      <td>{r.date}</td>
+                      <td>{money(r.amount)}</td>
+                      <td style={{ maxWidth: 180, fontSize: 12.5 }} title={dedReason(r)}>{dedReason(r)}</td>
+                      <td>{money(r.remaining)}</td>
+                      <td style={{ minWidth: 130 }}><AmountInput value={r.deduct} onChange={(v) => setDeductD(i, v)} readOnly={readOnly} /></td>
+                      <td style={{ fontWeight: 700, color: after > 0 ? "var(--warning)" : "var(--success)" }}>{money(after)}</td>
+                      <td>
+                        <div className="row-actions">
+                          <button className="btn-row" title="خصم الكل" onClick={() => deductAllD(i)} disabled={readOnly}>الكل</button>
+                          <button className="btn-row" title="إلغاء" onClick={() => clearOneD(i)} disabled={readOnly}>✕</button>
                         </div>
                       </td>
                     </tr>
@@ -223,18 +312,22 @@ export function PayrollDialog({ id, readOnly, onClose }: { id?: number | null; r
               <div className="tot-line"><span className="k">الإضافات</span><span className="v">{money(n(f.additions))}</span></div>
               <div className="tot-line"><span className="k">إجمالي الاستحقاق</span><span className="v">{money(gross)}</span></div>
               <div className="tot-line is-cost"><span className="k">خصم السلف</span><span className="v">{money(deductTotal)}</span></div>
+              <div className="tot-line is-cost"><span className="k">خصم الخصومات</span><span className="v">{money(dedRowTotal)}</span></div>
               <div className="tot-line is-cost"><span className="k">خصومات أخرى</span><span className="v">{money(n(f.other_deductions))}</span></div>
               <div className="tot-line grand"><span className="k">الصافي المنصرف</span><span className="v">{money(net)}</span></div>
             </div>
           </div>
           <div className="tot-card internal">
-            <div className="tot-card-head"><span>متابعة السلف</span><span>📌</span></div>
+            <div className="tot-card-head"><span>متابعة السلف والخصومات</span><span>📌</span></div>
             <div className="tot-card-body">
-              <div className="tot-line"><span className="k">إجمالي السلف غير المسددة قبل المسير</span><span className="v">{money(r2(advances.reduce((a, r) => a + r.remaining, 0)))}</span></div>
-              <div className="tot-line is-cost"><span className="k">المخصوم في هذا المسير</span><span className="v">{money(deductTotal)}</span></div>
-              <div className="tot-line is-profit"><span className="k">المتبقي بعد هذا المسير</span><span className="v">{money(advancesRemainingAfter)}</span></div>
+              <div className="tot-line"><span className="k">السلف غير المسددة قبل المسير</span><span className="v">{money(r2(advances.reduce((a, r) => a + r.remaining, 0)))}</span></div>
+              <div className="tot-line is-cost"><span className="k">المخصوم من السلف في هذا المسير</span><span className="v">{money(deductTotal)}</span></div>
+              <div className="tot-line is-profit"><span className="k">المتبقي من السلف بعد المسير</span><span className="v">{money(advancesRemainingAfter)}</span></div>
+              <div className="tot-line"><span className="k">الخصومات غير المسددة قبل المسير</span><span className="v">{money(r2(deductions.reduce((a, r) => a + r.remaining, 0)))}</span></div>
+              <div className="tot-line is-cost"><span className="k">المخصوم من الخصومات في هذا المسير</span><span className="v">{money(dedRowTotal)}</span></div>
+              <div className="tot-line is-profit"><span className="k">المتبقي من الخصومات بعد المسير</span><span className="v">{money(deductionsRemainingAfter)}</span></div>
             </div>
-            <div className="tot-note">يُسجَّل لكل خصم أثر دائم في أرشيف السلفة (رقم المسير وشهره وتاريخه).</div>
+            <div className="tot-note">يُسجَّل لكل خصم أثر دائم في أرشيف السلفة/الخصم (رقم المسير وشهره وتاريخه).</div>
           </div>
         </div>
 
@@ -242,6 +335,79 @@ export function PayrollDialog({ id, readOnly, onClose }: { id?: number | null; r
 
         {!readOnly && <div><Button variant="primary" onClick={save} disabled={saving}>💾 حفظ مسير الراتب</Button></div>}
       </div>
+    </Modal>
+  );
+}
+
+/* ==================== أرشيف الخصومات لموظف ==================== */
+export function DeductionArchiveDialog({ employeeId, employeeName, onClose }: {
+  employeeId: number; employeeName?: string; onClose: () => void;
+}) {
+  const [rows, setRows] = useState<DeductionArchiveRow[] | null>(null);
+
+  useEffect(() => { deductionArchive(employeeId).then(setRows); }, [employeeId]);
+  const totals = rows ? deductionArchiveTotals(rows) : { total: 0, settled: 0, remaining: 0, open_count: 0 };
+
+  const statusChip = (s: DeductionArchiveRow["status"]) => {
+    const map = { open: ["exp-chip src-driver", "لم يُخصم"], partial: ["exp-chip src-cash", "مخصوم جزئياً"], closed: ["exp-chip src-customer", "مسدّد بالكامل"] } as const;
+    const [cls, label] = map[s];
+    return <span className={cls}>{label}</span>;
+  };
+
+  return (
+    <Modal title={`أرشيف الخصومات — ${employeeName ?? ""}`} onClose={onClose} width={980}>
+      <div className="stmt-cards">
+        <div className="stmt-card"><span className="k">إجمالي الخصومات</span><span className="v">{money(totals.total)}</span></div>
+        <div className="stmt-card"><span className="k">المخصوم</span><span className="v">{money(totals.settled)}</span></div>
+        <div className="stmt-card"><span className="k">المتبقي</span><span className="v">{money(totals.remaining)}</span></div>
+        <div className="stmt-card"><span className="k">بنود مفتوحة</span><span className="v">{totals.open_count}</span></div>
+      </div>
+
+      {!rows ? <div className="exp-empty">جارٍ التحميل…</div>
+        : rows.length === 0 ? <div className="exp-empty">لا توجد خصومات مسجّلة لهذا الموظف.</div>
+        : rows.map((d) => (
+          <div key={d.id} className="trip-card">
+            <div className="trip-card-head">
+              <span className="trip-badge">DED</span>
+              <span className="trip-route">
+                خصم رقم DED-{String(d.number).padStart(5, "0")}
+                <span className="muted"> — سُجّل في {d.date}</span>
+              </span>
+              <span className="trip-head-spacer" />
+              {statusChip(d.status)}
+              <span className="trip-head-amount">{money(d.amount)}</span>
+            </div>
+            <div className="trip-card-body">
+              {d.reason && <div style={{ fontSize: 13 }}>السبب: <b>{d.reason}</b></div>}
+              {d.notes && <div style={{ color: "var(--muted)", fontSize: 12.5 }}>ملاحظات: {d.notes}</div>}
+              <div className="trip-summary">
+                <div className="trip-sum-item is-rev"><span className="k">قيمة الخصم</span><span className="v">{money(d.amount)}</span></div>
+                <div className="trip-sum-item is-cost"><span className="k">المخصوم حتى الآن</span><span className="v">{money(d.settled)}</span></div>
+                <div className="trip-sum-item is-net"><span className="k">المتبقي</span><span className="v">{money(d.remaining)}</span></div>
+              </div>
+              <div className="inv-sec-title"><span>سجل الاقتطاعات من الرواتب</span></div>
+              {d.settlements.length === 0 ? (
+                <div className="exp-empty">لم يُخصم منه شيء بعد.</div>
+              ) : (
+                <div className="table-wrap">
+                  <table className="data-table">
+                    <thead><tr><th>مسير الراتب</th><th>تاريخ المسير</th><th>عن شهر</th><th>المبلغ المخصوم</th></tr></thead>
+                    <tbody>
+                      {d.settlements.map((s, i) => (
+                        <tr key={i}>
+                          <td style={{ fontWeight: 700 }}>PAY-{String(s.payroll_number).padStart(5, "0")}</td>
+                          <td>{s.payroll_date}</td>
+                          <td>{s.period_label}</td>
+                          <td style={{ fontWeight: 700 }}>{money(s.amount)}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              )}
+            </div>
+          </div>
+        ))}
     </Modal>
   );
 }

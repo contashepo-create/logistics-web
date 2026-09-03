@@ -8,6 +8,7 @@ import type {
   Cashbox,
   Customer,
   Employee,
+  EmployeeDeduction,
   FinancialYear,
   Invoice,
   InvoiceTrip,
@@ -1519,6 +1520,173 @@ export function advanceArchiveTotals(rows: AdvanceArchiveRow[]): {
   };
 }
 
+// ---------------------------------------------------------------------------
+// الخصومات: متى سُجّلت، وكم اقتُطع، ومن أي مسير/شهر، وما المتبقي
+// ---------------------------------------------------------------------------
+export interface DeductionSettlementRow {
+  payroll_id: number;
+  payroll_number: number;
+  payroll_date: string;
+  period_year: number;
+  period_month: number;
+  period_label: string;
+  amount: number;
+}
+export interface DeductionArchiveRow {
+  id: number;
+  number: number;
+  date: string;
+  amount: number;
+  settled: number;
+  remaining: number;
+  status: "open" | "partial" | "closed";
+  reason: string;
+  notes: string;
+  settlements: DeductionSettlementRow[];
+  last_settled_date: string | null;
+}
+
+export async function deductionArchive(employeeId: number): Promise<DeductionArchiveRow[]> {
+  const { data: deds } = await supabase
+    .from("employee_deductions")
+    .select("*")
+    .eq("employee_id", employeeId)
+    .order("date")
+    .order("id");
+
+  const out: DeductionArchiveRow[] = [];
+  for (const d of deds ?? []) {
+    const { data: rows } = await supabase
+      .from("deduction_settlements")
+      .select("amount, payroll_id, payrolls(number, date, period_year, period_month)")
+      .eq("employee_deduction_id", d.id)
+      .order("payroll_id");
+
+    const settlements: DeductionSettlementRow[] = (rows ?? []).map((r) => {
+      const p = (Array.isArray(r.payrolls) ? (r.payrolls as any[])[0] : (r.payrolls as any)) ?? {};
+      return {
+        payroll_id: r.payroll_id,
+        payroll_number: num(p.number),
+        payroll_date: p.date ?? "",
+        period_year: num(p.period_year),
+        period_month: num(p.period_month),
+        period_label: p.period_year ? periodLabel(num(p.period_year), num(p.period_month)) : "—",
+        amount: num(r.amount),
+      };
+    });
+    settlements.sort((x, y) => (x.payroll_date < y.payroll_date ? -1 : x.payroll_date > y.payroll_date ? 1 : 0));
+
+    const settled = round2(sum(settlements.map((x) => x.amount)));
+    const amount = num(d.amount);
+    const remaining = round2(amount - settled);
+    out.push({
+      id: d.id,
+      number: num(d.number),
+      date: d.date,
+      amount,
+      settled,
+      remaining,
+      status: settled <= 0.009 ? "open" : remaining <= 0.009 ? "closed" : "partial",
+      reason: String(d.reason ?? ""),
+      notes: String(d.notes ?? ""),
+      settlements,
+      last_settled_date: settlements.length ? settlements[settlements.length - 1].payroll_date : null,
+    });
+  }
+  return out;
+}
+
+export interface DeductionTrackingRow {
+  id: number;
+  number: number;
+  date: string;
+  employee_id: number;
+  employee_name: string;
+  amount: number;
+  settled: number;
+  remaining: number;
+  status: "open" | "partial" | "closed";
+  last_settled_date: string | null;
+  settlement_details: string;
+  reason: string;
+}
+
+/** شاشة متابعة مجمّعة لكل بنود الخصم؛ لا تُنشئ أو تعدّل أي بند (التسجيل من شاشة الخصومات). */
+export async function listDeductionTracking(options: {
+  dFrom?: string | null;
+  dTo?: string | null;
+  employeeId?: number | null;
+  status?: "open" | "partial" | "closed" | null;
+} = {}): Promise<DeductionTrackingRow[]> {
+  let dedQuery = supabase
+    .from("employee_deductions")
+    .select("id, number, date, employee_id, amount, reason")
+    .order("date", { ascending: false })
+    .order("number", { ascending: false });
+  if (options.dFrom) dedQuery = dedQuery.gte("date", options.dFrom);
+  if (options.dTo) dedQuery = dedQuery.lte("date", options.dTo);
+  if (options.employeeId) dedQuery = dedQuery.eq("employee_id", options.employeeId);
+
+  const [dedRes, employeeRes, settlementRes, payrollRes] = await Promise.all([
+    dedQuery,
+    supabase.from("employees").select("id, name"),
+    supabase.from("deduction_settlements").select("employee_deduction_id, payroll_id, amount"),
+    supabase.from("payrolls").select("id, number, date, period_year, period_month"),
+  ]);
+
+  const employeeMap = new Map((employeeRes.data ?? []).map((e) => [Number(e.id), String(e.name)]));
+  const payrollMap = new Map((payrollRes.data ?? []).map((p) => [Number(p.id), p]));
+  const settlementMap = new Map<number, { amount: number; payroll_id: number }[]>();
+  for (const row of settlementRes.data ?? []) {
+    const id = Number(row.employee_deduction_id);
+    const list = settlementMap.get(id) ?? [];
+    list.push({ amount: num(row.amount), payroll_id: Number(row.payroll_id) });
+    settlementMap.set(id, list);
+  }
+
+  const rows: DeductionTrackingRow[] = (dedRes.data ?? []).map((d) => {
+    const settlements = settlementMap.get(Number(d.id)) ?? [];
+    const settled = round2(sum(settlements.map((s) => s.amount)));
+    const amount = round2(num(d.amount));
+    const remaining = round2(amount - settled);
+    const status: DeductionTrackingRow["status"] = settled <= 0.009 ? "open" : remaining <= 0.009 ? "closed" : "partial";
+    const details = settlements.map((settlement) => {
+      const payroll = payrollMap.get(settlement.payroll_id);
+      return payroll
+        ? `PAY-${String(payroll.number).padStart(5, "0")} (${periodLabel(Number(payroll.period_year), Number(payroll.period_month))}): ${money(settlement.amount)}`
+        : money(settlement.amount);
+    });
+    const dates = settlements.map((s) => String(payrollMap.get(s.payroll_id)?.date ?? "")).filter(Boolean).sort();
+    return {
+      id: Number(d.id),
+      number: Number(d.number),
+      date: String(d.date),
+      employee_id: Number(d.employee_id),
+      employee_name: employeeMap.get(Number(d.employee_id)) ?? "—",
+      amount,
+      settled,
+      remaining,
+      status,
+      last_settled_date: dates.length ? dates[dates.length - 1] : null,
+      settlement_details: details.join(" | "),
+      reason: String(d.reason ?? ""),
+    };
+  });
+  return options.status ? rows.filter((row) => row.status === options.status) : rows;
+}
+
+/** إجماليات أرشيف الخصومات لموظف */
+export function deductionArchiveTotals(rows: DeductionArchiveRow[]): {
+  total: number; settled: number; remaining: number; open_count: number;
+} {
+  return {
+    total: round2(sum(rows.map((r) => r.amount))),
+    settled: round2(sum(rows.map((r) => r.settled))),
+    remaining: round2(sum(rows.map((r) => r.remaining))),
+    open_count: rows.filter((r) => r.remaining > 0.009).length,
+  };
+}
+
 export async function employeeStatement(
   employeeId: number,
   dFrom?: string | null,
@@ -1526,6 +1694,7 @@ export async function employeeStatement(
 ): Promise<{
   salaries: Payroll[];
   advances: (PaymentVoucher & { settled: number; remaining: number; settlements: any[] })[];
+  deductions: (EmployeeDeduction & { settled: number; remaining: number; settlements: any[] })[];
   allowances: Record<string, unknown>[];
   totals: Record<string, number>;
 }> {
@@ -1575,6 +1744,43 @@ export async function employeeStatement(
     });
   }
 
+  // بنود الخصومات المسجلة على الموظف وتسوياتها في المسيرات
+  let dedQ = supabase
+    .from("employee_deductions")
+    .select("*")
+    .eq("employee_id", employeeId)
+    .order("date")
+    .order("id");
+  if (dFrom) dedQ = dedQ.gte("date", dFrom);
+  if (dTo) dedQ = dedQ.lte("date", dTo);
+  const { data: deds } = await dedQ;
+
+  const deductions: (EmployeeDeduction & { settled: number; remaining: number; settlements: any[] })[] = [];
+  for (const r of deds ?? []) {
+    const { data: srows } = await supabase
+      .from("deduction_settlements")
+      .select("amount, payroll_id, payrolls(date, number, period_year, period_month)")
+      .eq("employee_deduction_id", r.id)
+      .order("payroll_id");
+    const settled = round2(sum((srows ?? []).map((s) => num(s.amount))));
+    const settlements = (srows ?? []).map((s) => ({
+      amount: num(s.amount),
+      payroll_id: s.payroll_id,
+      pdate: Array.isArray(s.payrolls) ? (s.payrolls as any[])[0]?.date : (s.payrolls as any)?.date,
+      pnum: Array.isArray(s.payrolls) ? (s.payrolls as any[])[0]?.number : (s.payrolls as any)?.number,
+      period: (() => {
+        const p2: any = Array.isArray(s.payrolls) ? (s.payrolls as any[])[0] : (s.payrolls as any);
+        return p2?.period_year ? periodLabel(num(p2.period_year), num(p2.period_month)) : "";
+      })(),
+    }));
+    deductions.push({
+      ...(r as EmployeeDeduction),
+      settled,
+      remaining: round2(num(r.amount) - settled),
+      settlements,
+    });
+  }
+
   let tripQ = supabase
     .from("invoice_trips")
     .select("id, from_loc, to_loc, price, invoice_id")
@@ -1615,12 +1821,14 @@ export async function employeeStatement(
   const totals = {
     salaries_net: sum(salList.map((s) => num(s.net_salary))),
     salaries_additions: sum(salList.map((s) => num(s.additions))),
-    salaries_deductions: sum(salList.map((s) => num(s.advance_deduction) + num(s.other_deductions))),
+    salaries_deductions: sum(salList.map((s) => num(s.advance_deduction) + num(s.other_deductions) + num(s.deduction_deduction))),
     advances_total: sum(advances.map((a) => num(a.amount))),
     advances_remaining: sum(advances.map((a) => num(a.remaining))),
+    deductions_total: sum(deductions.map((d) => num(d.amount))),
+    deductions_remaining: sum(deductions.map((d) => num(d.remaining))),
     allowances_total: sum(allowances.map((a) => num(a.trip_allowance))),
   };
-  return { salaries: salList, advances, allowances, totals };
+  return { salaries: salList, advances, deductions, allowances, totals };
 }
 
 // ---------------------------------------------------------------------------

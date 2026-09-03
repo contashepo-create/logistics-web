@@ -274,6 +274,8 @@ export interface Payroll {
   additions_note: string;
   advance_deduction: number;
   other_deductions: number;
+  /** إجمالي خصم بنود الخصومات المُتتبَّعة في هذا المسير */
+  deduction_deduction?: number;
   net_salary: number;
   notes: string;
   created_at?: string;
@@ -281,6 +283,7 @@ export interface Payroll {
   emp_type?: string;
   account_name?: string | null;
   settlements?: AdvanceSettlementRow[];
+  deduction_settlements?: DeductionSettlementRow[];
 }
 
 export interface AdvanceSettlement {
@@ -297,6 +300,40 @@ export interface AdvanceSettlementRow {
   amount: number;
   voucher_number: number;
   voucher_date: string;
+}
+
+/** بند خصم مُسجَّل على موظف/سائق (يُقتطع من الراتب كلياً أو جزئياً). */
+export interface EmployeeDeduction {
+  id: number;
+  number: number;
+  date: string;
+  employee_id: number;
+  amount: number;
+  reason: string;
+  notes: string;
+  created_at?: string;
+  // انضمامات للعرض
+  employee_name?: string;
+  settled?: number;
+  remaining?: number;
+  status?: "open" | "partial" | "closed";
+}
+
+export interface DeductionSettlement {
+  id?: number;
+  employee_deduction_id: number;
+  payroll_id: number;
+  amount: number;
+}
+
+export interface DeductionSettlementRow {
+  id: number;
+  employee_deduction_id: number;
+  payroll_id: number;
+  amount: number;
+  deduction_number: number;
+  deduction_date: string;
+  deduction_reason?: string;
 }
 
 export interface YearSnapshot {

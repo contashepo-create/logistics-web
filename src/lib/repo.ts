@@ -34,6 +34,7 @@ import type {
   CreditableInvoiceTrip,
   Customer,
   Employee,
+  EmployeeDeduction,
   FinancialYear,
   Invoice,
   Payroll,
@@ -603,8 +604,18 @@ export async function createSnapshot(yearId: number): Promise<Record<string, unk
 }
 
 export async function getSnapshot(yearId: number): Promise<Record<string, unknown> | null> {
-  const { data } = await supabase.from("year_snapshots").select("data").eq("year_id", yearId).single();
+  // maybeSingle لا يطلق خطأ 406/404 عند عدم وجود لقطة (كان يملأ كونسول المتصفح
+  // بطلبات فاشلة عند كل سنة بلا لقطة إغلاق).
+  const { data } = await supabase.from("year_snapshots").select("data").eq("year_id", yearId).maybeSingle();
   return data ? (data.data as Record<string, unknown>) : null;
+}
+
+/** معرّفات السنوات التي تملك لقطة إغلاق — طلب واحد مجمّع بدل طلب لكل سنة. */
+export async function yearsWithSnapshots(yearIds: number[]): Promise<Set<number>> {
+  if (!yearIds.length) return new Set();
+  const { data, error } = await supabase.from("year_snapshots").select("year_id").in("year_id", yearIds);
+  if (error) return new Set();
+  return new Set((data ?? []).map((r) => Number((r as { year_id: number }).year_id)));
 }
 
 // ---------------------------------------------------------------------------
@@ -741,6 +752,7 @@ export async function saveEmployee(data: Record<string, any>, employeeId?: numbe
         (await count("invoice_trips", "driver_id", employeeId)) +
         (await count("payrolls", "employee_id", employeeId)) +
         (await count("payment_vouchers", "employee_id", employeeId)) +
+        (await count("employee_deductions", "employee_id", employeeId)) +
         (await count("vehicles", "default_driver_id", employeeId));
       if (linked) {
         throw new RuleError(
@@ -768,10 +780,11 @@ export async function saveEmployee(data: Record<string, any>, employeeId?: numbe
 export async function deleteEmployee(employeeId: number): Promise<void> {
   const nPay = await count("payrolls", "employee_id", employeeId);
   const nAdv = await count("payment_vouchers", "employee_id", employeeId);
+  const nDed = await count("employee_deductions", "employee_id", employeeId);
   const nTrips = await count("invoice_trips", "driver_id", employeeId);
-  if (nPay || nAdv || nTrips) {
+  if (nPay || nAdv || nDed || nTrips) {
     throw new RuleError(
-      `لا يمكن حذف الموظف لوجود حركات مرتبطة به (رواتب: ${nPay}، سلف: ${nAdv}، نقلات: ${nTrips}).`
+      `لا يمكن حذف الموظف لوجود حركات مرتبطة به (رواتب: ${nPay}، سلف: ${nAdv}، خصومات: ${nDed}، نقلات: ${nTrips}).`
     );
   }
   const { error } = await supabase.from("employees").delete().eq("id", employeeId);
@@ -1414,6 +1427,118 @@ export async function employeeAdvances(
 }
 
 // ---------------------------------------------------------------------------
+// الخصومات على الموظفين (تُقتطع من الرواتب كلياً أو جزئياً)
+// ---------------------------------------------------------------------------
+/** كل بنود الخصم لموظف مع المخصوم والمتبقي منها. */
+export async function employeeDeductions(
+  employeeId: number,
+  includeSettled = true
+): Promise<(EmployeeDeduction & { settled: number; remaining: number })[]> {
+  const { data } = await supabase
+    .from("employee_deductions")
+    .select("*")
+    .eq("employee_id", employeeId)
+    .order("date")
+    .order("id");
+  const out: (EmployeeDeduction & { settled: number; remaining: number })[] = [];
+  for (const r of data ?? []) {
+    const { data: settles } = await supabase
+      .from("deduction_settlements")
+      .select("amount")
+      .eq("employee_deduction_id", r.id);
+    const settled = roundMoney((settles ?? []).reduce((a, s) => a + num(s.amount), 0));
+    const remaining = roundMoney(num(r.amount) - settled);
+    if (!includeSettled && remaining <= 0.009) continue;
+    out.push({ ...(r as EmployeeDeduction), settled, remaining });
+  }
+  return out;
+}
+
+export async function listDeductions(
+  dFrom?: string | null,
+  dTo?: string | null,
+  employeeId?: number | null
+): Promise<EmployeeDeduction[]> {
+  let q = supabase.from("employee_deductions").select("*").order("date", { ascending: false }).order("number", { ascending: false });
+  if (dFrom) q = q.gte("date", dFrom);
+  if (dTo) q = q.lte("date", dTo);
+  if (employeeId) q = q.eq("employee_id", employeeId);
+  const { data, error } = await q;
+  if (error) throw new RuleError(translateDbError(error.message));
+
+  const { data: emps } = await supabase.from("employees").select("id, name");
+  const empMap = new Map((emps ?? []).map((e) => [e.id, e.name]));
+  return (data ?? []).map((d) => ({
+    ...(d as EmployeeDeduction),
+    employee_name: empMap.get(d.employee_id) ?? "—",
+  }));
+}
+
+export async function getDeduction(deductionId: number): Promise<EmployeeDeduction | null> {
+  const { data } = await supabase.from("employee_deductions").select("*").eq("id", deductionId).maybeSingle();
+  return (data as EmployeeDeduction) ?? null;
+}
+
+export async function saveDeduction(data: Record<string, any>, deductionId?: number | null): Promise<number> {
+  const date = safeIsoDate(data.date, "تاريخ الخصم");
+  const employeeId = positiveId(data.employee_id, "الموظف");
+  if (!(await getEmployee(employeeId))) throw new RuleError("الموظف المحدد غير موجود.");
+  const amount = roundMoney(data.amount ?? 0);
+  ensurePositive(amount, "مبلغ الخصم");
+  const reason = txt(data.reason ?? "", "سبب الخصم");
+  if (!reason.trim()) throw new RuleError("سبب الخصم إلزامي للمراجعة.");
+  const notes = txt(data.notes ?? "", "الملاحظات", 2000);
+
+  if (deductionId) {
+    const { data: old } = await supabase
+      .from("employee_deductions")
+      .select("date")
+      .eq("id", deductionId)
+      .single();
+    if (!old) throw new RuleError("بند الخصم غير موجود.");
+    // لا يُسمح بتعديل بند خُصم جزء منه في مسير رواتب (سلامة المبالغ المقتطعة)
+    const { count: settledCount } = await supabase
+      .from("deduction_settlements")
+      .select("id", { count: "exact", head: true })
+      .eq("employee_deduction_id", deductionId);
+    if (settledCount) {
+      throw new RuleError(
+        "لا يمكن تعديل بند خصم تم اقتطاع جزء/كل منه في مسير رواتب.\nاحذف الرواتب المرتبطة به أولاً."
+      );
+    }
+    await ensureMovementEditable(old.date, date);
+    const { error } = await supabase
+      .from("employee_deductions")
+      .update({ date, employee_id: employeeId, amount, reason, notes })
+      .eq("id", deductionId);
+    if (error) throw new RuleError(translateDbError(error.message));
+    return deductionId;
+  }
+  await ensureDateInOpenYear(date);
+  const inserted = await insertNumbered<{ id: number }>("employee_deductions", {
+    date, employee_id: employeeId, amount, reason, notes,
+  });
+  return inserted.id;
+}
+
+export async function deleteDeduction(deductionId: number): Promise<void> {
+  const { data: d } = await supabase.from("employee_deductions").select("date").eq("id", deductionId).single();
+  if (!d) return;
+  const { count: settledCount } = await supabase
+    .from("deduction_settlements")
+    .select("id", { count: "exact", head: true })
+    .eq("employee_deduction_id", deductionId);
+  if (settledCount) {
+    throw new RuleError(
+      "لا يمكن حذف بند خصم تم اقتطاعه في مسير رواتب.\nاحذف الرواتب المرتبطة به أولاً."
+    );
+  }
+  await ensureMovementEditable(d.date);
+  const { error } = await supabase.from("employee_deductions").delete().eq("id", deductionId);
+  if (error) throw new RuleError(translateDbError(error.message));
+}
+
+// ---------------------------------------------------------------------------
 // الرواتب
 // ---------------------------------------------------------------------------
 export async function listPayrolls(
@@ -1449,16 +1574,31 @@ export async function listPayrolls(
 export async function getPayroll(payrollId: number): Promise<Payroll | null> {
   const { data } = await supabase.from("payrolls").select("*").eq("id", payrollId).single();
   if (!data) return null;
-  const { data: settles } = await supabase
-    .from("advance_settlements")
-    .select("*, payment_vouchers(number, date)")
-    .eq("payroll_id", payrollId);
+  const [{ data: settles }, { data: dedSettles }] = await Promise.all([
+    supabase
+      .from("advance_settlements")
+      .select("*, payment_vouchers(number, date)")
+      .eq("payroll_id", payrollId),
+    supabase
+      .from("deduction_settlements")
+      .select("*, employee_deductions(number, date, reason)")
+      .eq("payroll_id", payrollId),
+  ]);
   const settlements = (settles ?? []).map((s) => ({
     ...s,
     voucher_number: Array.isArray(s.payment_vouchers) ? (s.payment_vouchers as any[])[0]?.number : (s.payment_vouchers as any)?.number,
     voucher_date: Array.isArray(s.payment_vouchers) ? (s.payment_vouchers as any[])[0]?.date : (s.payment_vouchers as any)?.date,
   }));
-  return { ...(data as Payroll), settlements };
+  const deduction_settlements = (dedSettles ?? []).map((s) => {
+    const d = Array.isArray(s.employee_deductions) ? (s.employee_deductions as any[])[0] : (s.employee_deductions as any);
+    return {
+      ...s,
+      deduction_number: d?.number,
+      deduction_date: d?.date,
+      deduction_reason: d?.reason ?? "",
+    };
+  });
+  return { ...(data as Payroll), settlements, deduction_settlements };
 }
 
 export async function savePayroll(data: Record<string, any>, payrollId?: number | null): Promise<number> {
@@ -1496,6 +1636,20 @@ export async function savePayroll(data: Record<string, any>, payrollId?: number 
     throw new RuleError("مجموع خصومات السلف الموزعة لا يطابق قيمة الخصم من السلف.");
   }
 
+  // تسويات الخصومات (كلي/جزئي): نفس منطق السلف لكن على employee_deductions
+  if (!Array.isArray(data.deduction_settlements ?? [])) throw new RuleError("قائمة تسويات الخصومات غير صالحة.");
+  if ((data.deduction_settlements ?? []).length > 1000) throw new RuleError("عدد تسويات الخصومات أكبر من الحد المسموح.");
+  const deductionSettlements: [number, number][] = (data.deduction_settlements ?? []).map((s: any) => {
+    if (Array.isArray(s)) return [positiveId(s[0], "معرّف بند الخصم"), roundMoney(s[1])];
+    const did = s.employee_deduction_id ?? s.deduction_id ?? s.id;
+    return [positiveId(did, "معرّف بند الخصم"), roundMoney(s.amount)];
+  });
+  const dedSettledTotal = roundMoney(deductionSettlements.reduce((a, [, amt]) => a + amt, 0));
+  const dedDed = roundMoney(data.deduction_deduction ?? dedSettledTotal);
+  if (Math.abs(dedSettledTotal - dedDed) > 0.01) {
+    throw new RuleError("مجموع خصومات الخصومات الموزعة لا يطابق إجمالي خصم الخصومات.");
+  }
+
   const remMap = new Map<number, number>();
   for (const a of await employeeAdvances(data.employee_id)) {
     remMap.set(a.id, a.remaining);
@@ -1518,7 +1672,28 @@ export async function savePayroll(data: Record<string, any>, payrollId?: number 
     }
   }
 
-  const net = Math.round((base + additions - advDed - otherDed) * 100) / 100;
+  const dedRemMap = new Map<number, number>();
+  for (const d of await employeeDeductions(data.employee_id)) {
+    dedRemMap.set(d.id, d.remaining);
+  }
+  if (payrollId) {
+    const { data: existingDed } = await supabase
+      .from("deduction_settlements")
+      .select("employee_deduction_id, amount")
+      .eq("payroll_id", payrollId);
+    for (const s of existingDed ?? []) {
+      dedRemMap.set(s.employee_deduction_id, (dedRemMap.get(s.employee_deduction_id) ?? 0) + num(s.amount));
+    }
+  }
+  for (const [did, amt] of deductionSettlements) {
+    if (amt <= 0) continue;
+    if (!dedRemMap.has(did)) throw new RuleError("بند خصم غير موجود أو لا يخص هذا الموظف.");
+    if (amt > (dedRemMap.get(did) ?? 0) + 0.01) {
+      throw new RuleError("قيمة الخصم من أحد بنود الخصومات أكبر من المتبقي منه.");
+    }
+  }
+
+  const net = Math.round((base + additions - advDed - dedDed - otherDed) * 100) / 100;
   if (net < 0) throw new RuleError("صافي الراتب سالب: راجع الإضافات والخصومات.");
 
   // تحقق مبكر (لرسائل خطأ ودّية) — الدالة الخادمية تعيد التحقق بصلاحية كاملة
@@ -1532,7 +1707,7 @@ export async function savePayroll(data: Record<string, any>, payrollId?: number 
 
   await ensureSufficientFunds(data.account_kind, data.account_id, net, { payrollId: payrollId ?? null });
 
-  // حفظ ذرّي (صف الراتب + تسويات السلف + ترقيم مُقفَل) في معاملة واحدة
+  // حفظ ذرّي (صف الراتب + تسويات السلف + تسويات الخصومات + ترقيم مُقفَل) في معاملة واحدة
   const { data: savedId, error } = await supabase.rpc("save_payroll", {
     p_payroll_id: payrollId ?? null,
     p_date: date,
@@ -1548,6 +1723,8 @@ export async function savePayroll(data: Record<string, any>, payrollId?: number 
     p_other_deductions: otherDed,
     p_notes: txt(data.notes ?? "", "الملاحظات"),
     p_settlements: settlements,
+    p_deduction_settlements: deductionSettlements,
+    p_deduction_deduction: dedDed,
   });
   if (error) throw new RuleError(translateDbError(error.message));
   return savedId as number;
