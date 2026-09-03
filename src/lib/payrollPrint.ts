@@ -71,7 +71,7 @@ export async function payrollSlipHtml(payrollId: number): Promise<{ html: string
         </tbody>
       </table>
 
-      <div class="payroll-slip-words">فقط ${h(amountToArabicWords(payroll.net_salary, currency))} لا غير</div>
+      <div class="payroll-slip-words">${h(amountToArabicWords(payroll.net_salary, currency))}</div>
       ${settlementRows ? `
         <h3>تفاصيل السلف المخصومة في هذا الشهر</h3>
         <table class="data-table"><thead><tr><th>سند السلفة</th><th>تاريخ السلفة</th><th>المخصوم</th></tr></thead><tbody>${settlementRows}</tbody></table>
