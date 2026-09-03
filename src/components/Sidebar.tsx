@@ -226,6 +226,11 @@ export function Sidebar({ open = false, onClose }: { open?: boolean; onClose?: (
             <div className="nav-group-body">
               <Link
                 href="/zerocold"
+                // prefetch={false}: لوحة المطوّر وحدها تحمّل ملف CSS إضافياً
+                // (admin-platform.css) غير موجود في بقية الأقسام؛ الـ prefetch
+                // التلقائي يحمّله مقدّماً فيُهدر ويطبع Chrome تحذير
+                // "preloaded using link preload but not used" في الكونسول.
+                prefetch={false}
                 onClick={onClose}
                 className={`nav-item ${pathname.startsWith("/zerocold") ? "active" : ""}`}
               >
