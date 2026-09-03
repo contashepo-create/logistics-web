@@ -20,7 +20,7 @@ export function translateDbError(msg: string): string {
 
   if (isPermissionError(m)) {
     return "صلاحيات قاعدة البيانات غير مكتملة — نفّذ ملف الصلاحيات " +
-      "`supabase/migration_fix_company_updates.sql` في Supabase SQL Editor ثم أعد المحاولة.";
+      "`supabase/migration_fix_admin_rpc_grants_v21.sql` في Supabase SQL Editor ثم أعد المحاولة.";
   }
 
   if ((m.includes("column") || m.includes("relation")) && m.includes("does not exist")) {

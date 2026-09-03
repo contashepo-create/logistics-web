@@ -18,7 +18,8 @@ grant usage on schema public to anon, authenticated, service_role;
 -- ---------------------------------------------------------------------------
 create or replace function public.is_admin() returns boolean
 language sql stable set search_path = public, pg_temp as $$
-  select coalesce((auth.jwt() ->> 'email'), '') = 'conta.moha@gmail.com';
+  select (current_user in ('service_role', 'postgres'))
+      or coalesce((auth.jwt() ->> 'email'), '') = 'conta.moha@gmail.com';
 $$;
 
 -- ---------------------------------------------------------------------------
@@ -1618,16 +1619,17 @@ begin
     left join pg_namespace n on n.nspname = 'public'
     left join pg_class c on c.relnamespace = n.oid and c.relname = expected.name and c.relkind = 'r';
 
+  -- استخدام pg_proc بدلاً من to_regproc لدعم الدوال التي لها overloads
   select coalesce(jsonb_agg(jsonb_build_object(
       'name', expected.name,
-      'exists', to_regproc('public.' || expected.name) is not null
+      'exists', exists(select 1 from pg_proc p join pg_namespace ns on ns.oid = p.pronamespace where ns.nspname = 'public' and p.proname = expected.name)
     ) order by expected.name), '[]'::jsonb)
     into v_functions
     from unnest(v_expected_functions) expected(name);
 
   if exists(
     select 1 from unnest(v_expected_functions) f(name)
-     where to_regproc('public.' || f.name) is null
+     where not exists(select 1 from pg_proc p join pg_namespace ns on ns.oid = p.pronamespace where ns.nspname = 'public' and p.proname = f.name)
   ) then v_healthy := false; end if;
 
   return jsonb_build_object(

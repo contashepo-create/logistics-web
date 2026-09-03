@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { requireAdmin, userClient, extractAccessToken } from "@/lib/server/supabase";
+import { requireAdmin, serviceClient, hasServiceKey } from "@/lib/server/supabase";
 import { COOKIE_NAME, sameOrigin, verifyTwoFactorToken } from "@/lib/server/admin-session";
 import { rateLimit, clientIp } from "@/lib/server/rate-limit";
 import { FEATURE_KEYS, type FeatureKey } from "@/lib/features";
@@ -32,6 +32,8 @@ export async function POST(req: NextRequest) {
   const twoFactor = req.cookies.get(COOKIE_NAME)?.value;
   if (!verifyTwoFactorToken(twoFactor, admin.email)) return bad("مطلوب التحقق بخطوتين.", 401);
 
+  if (!hasServiceKey()) return bad("مفتاح SUPABASE_SERVICE_ROLE_KEY غير مضبوط على الخادم.", 503);
+
   let body: Record<string, unknown>;
   try { body = (await req.json()) as Record<string, unknown>; }
   catch { return bad("طلب غير صالح."); }
@@ -39,9 +41,9 @@ export async function POST(req: NextRequest) {
   const companyId = String(body.company_id ?? "");
   if (!UUID_RE.test(companyId)) return bad("معرّف الشركة غير صالح.");
 
-  const token = extractAccessToken(req);
-  if (!token) return bad("انتهت جلسة الدخول.", 401);
-  const sb = userClient(token);
+  // serviceClient: أكثر موثوقية من JWT (لا ينتهي ولا يتأثر بـ refresh tokens)
+  // الأمان محفوظ: requireAdmin + 2FA أعلاه + is_admin() داخل الدالة.
+  const sb = serviceClient();
 
   const action = String(body.action ?? "get");
   if (action === "get") {

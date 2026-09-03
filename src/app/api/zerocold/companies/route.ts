@@ -76,18 +76,18 @@ export async function POST(req: NextRequest) {
     const passwordValid = await verifyCurrentUserPassword(admin.email, password);
     if (!passwordValid) return bad("كلمة مرور المطوّر غير صحيحة.", 401);
 
-    const { data, error } = await sb.rpc("admin_reset_company_data_v18", {
+    if (!hasServiceKey()) return bad("مفتاح SUPABASE_SERVICE_ROLE_KEY غير مضبوط على الخادم.", 503);
+
+    // serviceClient: أكثر موثوقية من JWT للعمليات الإدارية المدمّرة
+    const adminSb = serviceClient();
+    const { data, error } = await adminSb.rpc("admin_reset_company_data_v18", {
       p_company_id: companyId,
     });
     if (error) {
-      // «permission denied for function …» تعني أن صلاحية EXECUTE للدور
-      // authenticated ناقصة في قاعدة البيانات (غالباً بعد إعادة تشغيل
-      // migration_linter_hardening_v8.sql على قاعدة أحدث منه) — دالة SQL نفسها
-      // سليمة، والملف أدناه يعيد ضبط الصلاحيات بالقوائم المحدَّثة.
       if (isPermissionError(error.message)) {
         return bad(
           "صلاحية تنفيذ دالة التصفير ناقصة في قاعدة البيانات. نفّذ ملف " +
-            "supabase/migration_fix_admin_rpc_grants_v21.sql في Supabase SQL Editor ثم أعد المحاولة.",
+            "supabase/migration_fix_database_health_v22.sql في Supabase SQL Editor ثم أعد المحاولة.",
           500,
         );
       }
