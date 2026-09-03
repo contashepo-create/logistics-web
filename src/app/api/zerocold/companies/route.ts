@@ -10,6 +10,7 @@ import {
 import { COOKIE_NAME, sameOrigin, verifyTwoFactorToken } from "@/lib/server/admin-session";
 import { clientIp, rateLimit } from "@/lib/server/rate-limit";
 import { checkPassword, safeCompanyName, safeEmail, safePhone } from "@/lib/security";
+import { isPermissionError } from "@/lib/db";
 
 export const runtime = "nodejs";
 
@@ -78,7 +79,20 @@ export async function POST(req: NextRequest) {
     const { data, error } = await sb.rpc("admin_reset_company_data_v18", {
       p_company_id: companyId,
     });
-    if (error) return bad(error.message, 500);
+    if (error) {
+      // «permission denied for function …» تعني أن صلاحية EXECUTE للدور
+      // authenticated ناقصة في قاعدة البيانات (غالباً بعد إعادة تشغيل
+      // migration_linter_hardening_v8.sql على قاعدة أحدث منه) — دالة SQL نفسها
+      // سليمة، والملف أدناه يعيد ضبط الصلاحيات بالقوائم المحدَّثة.
+      if (isPermissionError(error.message)) {
+        return bad(
+          "صلاحية تنفيذ دالة التصفير ناقصة في قاعدة البيانات. نفّذ ملف " +
+            "supabase/migration_fix_admin_rpc_grants_v21.sql في Supabase SQL Editor ثم أعد المحاولة.",
+          500,
+        );
+      }
+      return bad(error.message, 500);
+    }
     return NextResponse.json({ success: true, result: data });
   }
 

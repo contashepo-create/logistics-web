@@ -23,6 +23,15 @@
 --    كل سياسات RLS وأعاد PostgREST 403. تعبير السياسة يُقيَّم بصلاحيات الدور
 --    المستدعي لا بصلاحيات مالك الجدول. صُحّح أدناه عبر مصفوفة policy_fns،
 --    وإصلاح القواعد المتضرّرة في fix_policy_functions_v10.sql.
+--
+-- ⚠️ مهم (v21): هذا الملف ليس «آمن التكرار» بلا قيد — سحبه الشامل لـ EXECUTE
+--    من authenticated يعتمد على قائمة ثابتة بالدوال المعروفة وقت إصداره،
+--    وأي دالة أُنشئت بعده (save_*_v14، save_credit_note_for_trips_v16،
+--    admin_*_v18، admin_reset_company_data_v18 ...) تُفقد صلاحيتها إذا أُعيد
+--    تشغيل الملف بعد إنشائها، فيظهر «permission denied for function …».
+--    لذلك حُدِّثت مصفوفة rpc_authenticated أدناه لتشمل كل دوال v14–v20.
+--    عند الشك بعد إعادة التشغيل، نفّذ supabase/migration_fix_admin_rpc_grants_v21.sql
+--    (نفس المنهجية بالقوائم المحدَّثة) ويعود كل شيء للحالة الصحيحة.
 -- ============================================================================
 
 -- ---------------------------------------------------------------------------
@@ -81,13 +90,20 @@ do $grants$
 declare
   r record;
   -- دوال RPC التي تستدعيها الواجهة بحساب مصادق عليه
+  -- ⚠️ محدَّثة (v21): تشمل كل دوال v14–v20 — لا تحذف أي اسم منها وإلا عاد
+  -- خطأ «permission denied for function …» عند إعادة تشغيل هذا الملف.
   rpc_authenticated text[] := array[
     'register_company',
+    'register_company_with_year',
     'export_company_data',
     'create_next_financial_year',
     'save_invoice',
     'save_payroll',
     'save_purchase_invoice',
+    'save_purchase_invoice_v14',
+    'delete_purchase_invoice_v14',
+    'save_credit_note_for_trips_v16',
+    'valid_trip_container_numbers',
     'admin_update_app_settings',
     'admin_set_company_feature',
     'has_company_feature',
@@ -97,6 +113,12 @@ declare
     'admin_review_activation_request',
     'admin_set_profile_status',
     'admin_set_profile_role',
+    'admin_platform_stats',
+    'admin_get_company_extras_v18',
+    'admin_reset_company_data_v18',
+    'admin_platform_stats_v18',
+    'admin_recent_visitors_v18',
+    'admin_database_health_v18',
     'whoami'
   ];
   -- دوال يحتاجها الزائر (تحقق البريد قبل إنشاء الحساب)

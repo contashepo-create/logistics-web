@@ -3,11 +3,24 @@ import { requireAdmin, userClient, extractAccessToken } from "@/lib/server/supab
 import { COOKIE_NAME, sameOrigin, verifyTwoFactorToken } from "@/lib/server/admin-session";
 import { rateLimit, clientIp } from "@/lib/server/rate-limit";
 import { FEATURE_KEYS, type FeatureKey } from "@/lib/features";
+import { isPermissionError } from "@/lib/db";
 
 export const runtime = "nodejs";
 
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 const bad = (message: string, status = 400) => NextResponse.json({ success: false, message }, { status });
+
+/** خطأ EXECUTE ناقص للدور authenticated (إعادة تشغيل v8 على قاعدة أحدث) — رسالة إجرائية. */
+function rpcError(message: string, status: number) {
+  if (isPermissionError(message)) {
+    return bad(
+      "صلاحيات قاعدة البيانات غير مكتملة. نفّذ ملف " +
+        "supabase/migration_fix_admin_rpc_grants_v21.sql في Supabase SQL Editor ثم أعد المحاولة.",
+      status,
+    );
+  }
+  return bad(message, status);
+}
 
 /** قراءة/تعديل مميزات شركة — مطوّر + جلسة 2FA فقط. */
 export async function POST(req: NextRequest) {
@@ -37,7 +50,7 @@ export async function POST(req: NextRequest) {
     const { data, error } = await sb.rpc("admin_get_company_extras_v18", {
       p_company_id: companyId,
     });
-    if (error) return bad(error.message, error.message.includes("غير موجودة") ? 404 : 500);
+    if (error) return rpcError(error.message, error.message.includes("غير موجودة") ? 404 : 500);
 
     const snapshot = (data ?? {}) as {
       features?: Record<string, boolean>;
@@ -69,7 +82,7 @@ export async function POST(req: NextRequest) {
       p_feature_key: feature,
       p_enabled: body.enabled,
     });
-    if (error) return bad(error.message, 500);
+    if (error) return rpcError(error.message, 500);
     return NextResponse.json({ success: true });
   }
 
