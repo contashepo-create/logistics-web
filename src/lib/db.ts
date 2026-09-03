@@ -20,11 +20,15 @@ export function translateDbError(msg: string): string {
 
   if (isPermissionError(m)) {
     return "صلاحيات قاعدة البيانات غير مكتملة — نفّذ ملف الصلاحيات " +
-      "`supabase/migration_fix_admin_rpc_grants_v21.sql` في Supabase SQL Editor ثم أعد المحاولة.";
+      "`supabase/migration_fix_admin_rpc_grants_v21.sql` أو `supabase/migration_fix_company_updates.sql` في Supabase SQL Editor ثم أعد المحاولة.";
   }
 
   if ((m.includes("column") || m.includes("relation")) && m.includes("does not exist")) {
     return "قاعدة البيانات غير محدّثة (جداول أو أعمدة ناقصة) — نفّذ ملفات الترحيل في Supabase SQL Editor ثم أعد المحاولة.";
+  }
+
+  if (m.includes("save_invoice") && m.includes("function") && m.includes("does not exist")) {
+    return "دالة حفظ الفواتير غير موجودة — نفّذ migration_trip_container_numbers_v17.sql ثم migration_admin_platform_tools_v18.sql ثم migration_fix_database_health_v22.sql في Supabase SQL Editor وأعد المحاولة.";
   }
 
   if (m.includes("function") && m.includes("does not exist")) {

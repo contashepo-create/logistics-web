@@ -681,3 +681,60 @@ select p.proname,
 `supabase/migration_linter_hardening_v8.sql` حُدِّثت قوائمه لتشمل دوال v14–v20
 (راجع `migration_fix_admin_rpc_grants_v21.sql`)، فلا تعِد تشغيل نسخة قديمة منه
 بعد تطبيق v21.
+
+## v22 — إصلاح فحص `save_invoice()` وإصلاح النسخ المتعارضة
+
+إذا ظهرت في **لوحة المطوّر ← صحة Supabase** رسالة:
+
+```text
+دوال غير موجودة: save_invoice
+```
+
+فلا تعتمد على إعادة تحميل الصفحة فقط. كانت هناك مشكلتان محتملتان في قواعد
+البيانات القديمة:
+
+1. فحص v18 القديم كان يستخدم `to_regproc('public.save_invoice')`، وهذا يعيد
+   نتيجة فارغة عندما توجد نسخ متعددة (overloads) للدالة.
+2. نسخة v22 السابقة كانت تقارن أسماء المعاملات بأنواعها، ولذلك قد تحذف التوقيع
+   الصحيح أثناء تنظيف النسخ القديمة.
+
+بعد تنفيذ v17 وv18، نفّذ الملف التالي كاملاً في **Supabase SQL Editor**:
+
+📄 **`supabase/migration_fix_database_health_v22.sql`**
+
+هذه النسخة تقارن `pg_get_function_identity_arguments`، تحذف النسخ غير المتوافقة
+فقط، وتعيد إنشاء توقيع `save_invoice` الذي تستعمله الواجهة إذا كان مفقوداً، ثم
+تُحدّث فحص الصحة. الترحيلة آمنة لإعادة التشغيل ولا تحذف بيانات الفواتير.
+
+### ترتيب الإصلاح لقاعدة موجودة
+
+1. خذ نسخة احتياطية.
+2. نفّذ `supabase/migration_trip_container_numbers_v17.sql` إذا لم تُنفّذ v17
+   أو كانت أعمدة `container_numbers` ونسخة الحفظ النهائية غير موجودة.
+3. نفّذ `supabase/migration_admin_platform_tools_v18.sql`.
+4. نفّذ `supabase/migration_fix_admin_rpc_grants_v21.sql` لإصلاح صلاحيات RPC.
+5. نفّذ `supabase/migration_fix_database_health_v22.sql` لإصلاح `save_invoice`
+   وفحص الدوال والـ overloads.
+6. افتح صفحة التشخيص واضغط **إعادة الفحص**.
+
+للتحقق مباشرةً من التوقيع الذي تحتاجه الواجهة:
+
+```sql
+select p.oid::regprocedure,
+       pg_get_function_identity_arguments(p.oid) as identity_arguments,
+       has_function_privilege('authenticated', p.oid, 'execute') as authenticated_ok
+  from pg_proc p
+  join pg_namespace n on n.oid = p.pronamespace
+ where n.nspname = 'public'
+   and p.proname = 'save_invoice';
+```
+
+يجب أن يظهر توقيع واحد فقط بهذه الأنواع:
+
+```text
+bigint, date, bigint, double precision, text, jsonb, jsonb, text
+```
+
+ثم يجب أن تظهر `save_invoice()` بعلامة ✓ في لوحة التشخيص. إذا فشل تشغيل v22
+بسبب عمود قديم مفقود، نفّذ v17 أولاً؛ لا تشغّل `schema.sql` على قاعدة إنتاجية
+موجودة لأن ذلك ملف تثبيت جديد وقد يحتوي على تغييرات لا تناسب بياناتك.

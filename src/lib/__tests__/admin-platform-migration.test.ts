@@ -2,6 +2,8 @@ import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 
 const migration = readFileSync("supabase/migration_admin_platform_tools_v18.sql", "utf8");
+const healthFix = readFileSync("supabase/migration_fix_database_health_v22.sql", "utf8");
+const schema = readFileSync("supabase/schema.sql", "utf8");
 
 function functionBody(name: string, nextMarker: string): string {
   const start = migration.indexOf(`function public.${name}`);
@@ -32,6 +34,20 @@ describe("ترحيلة منصة المطوّر v18", () => {
 
   it("سجل النشاط يفرض actor_id للمستخدم الحالي", () => {
     expect(migration).toMatch(/create policy activity_read[\s\S]*using \(actor_id = auth\.uid\(\)\)/);
+  });
+
+  it("يفحص save_invoice بالتوقيع الصحيح ولا يخطئ عند وجود overloads", () => {
+    for (const sql of [migration, schema, healthFix]) {
+      expect(sql).toContain("to_regprocedure('public.save_invoice(bigint,date,bigint,double precision,text,jsonb,jsonb,text)')");
+      expect(sql).not.toMatch(/to_regproc\('public\.' \|\| (expected|f)\.name\)/);
+    }
+  });
+
+  it("إصلاح v22 لا يحذف الدالة الصحيحة ويعيد إنشاءها إذا كانت مفقودة", () => {
+    expect(healthFix).toContain("pg_get_function_identity_arguments(p.oid)");
+    expect(healthFix).not.toContain("pg_get_function_arguments(p.oid) as args");
+    expect(healthFix).toMatch(/create or replace function public\.save_invoice/i);
+    expect(healthFix).toContain("grant execute on function public.save_invoice");
   });
 
   it("الزائر الفريد upsert على التجزئة ولا يمنح المتصفح وصولاً مباشراً", () => {

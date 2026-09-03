@@ -101,10 +101,12 @@ describe("API إدارة الشركات الحساسة", () => {
       data: { deleted_rows: 18, new_financial_year: 2026 },
       error: null,
     }));
-    mocks.userClient.mockReturnValue({
+    const sb = {
       from: () => resultQuery({ id: COMPANY_ID, name: "شركة الدلتا للنقل" }),
       rpc,
-    });
+    };
+    mocks.userClient.mockReturnValue(sb);
+    mocks.serviceClient.mockReturnValue(sb);
 
     const res = await POST(req({
       action: "reset",
@@ -122,10 +124,12 @@ describe("API إدارة الشركات الحساسة", () => {
       data: null,
       error: { message: "permission denied for function admin_reset_company_data_v18" },
     }));
-    mocks.userClient.mockReturnValue({
+    const sb = {
       from: () => resultQuery({ id: COMPANY_ID, name: "شركة الدلتا للنقل" }),
       rpc,
-    });
+    };
+    mocks.userClient.mockReturnValue(sb);
+    mocks.serviceClient.mockReturnValue(sb);
 
     const res = await POST(req({
       action: "reset",

@@ -76,7 +76,7 @@ export default function AdminDiagnosticsPage() {
         <section className="diagnostic-alert is-bad">
           <strong>تعذّر تنفيذ فحص Supabase</strong>
           <p>{failure}</p>
-          <p>تحقق من متغيرات NEXT_PUBLIC_SUPABASE_URL وNEXT_PUBLIC_SUPABASE_ANON_KEY، ثم طبّق ترحيلة v18.</p>
+          <p>تحقق من متغيرات NEXT_PUBLIC_SUPABASE_URL وNEXT_PUBLIC_SUPABASE_ANON_KEY، ثم طبّق ترحيلتي v18 وv22 بالترتيب.</p>
         </section>
       )}
 
@@ -86,7 +86,17 @@ export default function AdminDiagnosticsPage() {
           {missingTables.length > 0 && <p>جداول غير موجودة: {missingTables.map((item) => item.name).join("، ")}</p>}
           {rlsProblems.length > 0 && <p>RLS غير مفعّل: {rlsProblems.map((item) => item.name).join("، ")}</p>}
           {missingFunctions.length > 0 && <p>دوال غير موجودة: {missingFunctions.map((item) => item.name).join("، ")}</p>}
-          <p>طبّق ملفات الترحيل غير المنفذة، وبالأخص <code dir="ltr">migration_admin_platform_tools_v18.sql</code>.</p>
+          {missingFunctions.some((item) => item.name === "save_invoice") ? (
+            <p>
+              الدالة <code dir="ltr">save_invoice()</code> مطلوبة لحفظ الفواتير. نفّذ
+              <code dir="ltr">migration_trip_container_numbers_v17.sql</code> ثم
+              <code dir="ltr">migration_admin_platform_tools_v18.sql</code> ثم
+              <code dir="ltr">migration_fix_database_health_v22.sql</code>؛ ترحيلة v22
+              تعيد الدالة الصحيحة وتزيل النسخ القديمة المتعارضة.
+            </p>
+          ) : (
+            <p>طبّق ملفات الترحيل غير المنفذة، وبالأخص <code dir="ltr">migration_admin_platform_tools_v18.sql</code>، ثم أعد تشغيل v21 وv22 للصلاحيات والتشخيص.</p>
+          )}
         </section>
       )}
 

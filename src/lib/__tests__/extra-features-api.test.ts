@@ -72,7 +72,7 @@ describe("API المميزات الإضافية", () => {
   it("يعيد false لكل ميزة عبر RPC محمية دون قراءة companies مباشرة", async () => {
     const rpc = vi.fn(async () => ({ data: { features: {}, users: [] }, error: null }));
     const from = vi.fn(() => { throw new Error("لا ينبغي قراءة الجداول مباشرة"); });
-    mocks.userClient.mockReturnValue({ from, rpc });
+    mocks.serviceClient.mockReturnValue({ from, rpc });
     const res = await featuresPost(req({ action: "get", company_id: COMPANY_ID }));
     expect(res.status).toBe(200);
     const out = await res.json();
@@ -83,7 +83,7 @@ describe("API المميزات الإضافية", () => {
 
   it("يمرر تفعيل الفاتورة الضريبية إلى RPC المحمي", async () => {
     const rpc = vi.fn(async () => ({ error: null }));
-    mocks.userClient.mockReturnValue({
+    mocks.serviceClient.mockReturnValue({
       from: () => query({ data: { id: COMPANY_ID } }),
       rpc,
     });
