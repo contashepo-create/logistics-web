@@ -494,3 +494,142 @@ select indexname from pg_indexes
 ```
 
 > سند الدفع من النوع `purchase` داخلي وآلي، لذلك لا يظهر ضمن سندات الدفع اليدوية. تابع الفاتورة والسند الناتج عنها من شاشة **المشتريات**.
+
+---
+
+## v15 — إصلاح رفض سندات الدفع والقبض داخل السنة المفتوحة
+
+بعد v14 نفّذ:
+
+`supabase/migration_fix_voucher_open_year_v15.sql`
+
+تعالج هذه الترحيلة رفض سند جديد برسالة «خارج نطاق أي سنة مالية مفتوحة» رغم أن
+تاريخه داخل السنة. كان حارس السنة يعمل قبل مشغّل تعيين `company_id` عند الإدراج
+المباشر لسندات الدفع والقبض، فيفحص السنة باستخدام شركة فارغة. أصبح الحارس الآن
+يستخرج شركة الجلسة الموثوقة أولاً، يفرضها على الصف، ثم يتحقق من نطاق التاريخ.
+
+الترحيلة آمنة لإعادة التشغيل ولا تعدّل أي سندات أو أرصدة قائمة. بعد تنفيذها تحقق
+من تحديث الدالة:
+
+```sql
+select pg_get_functiondef('public.guard_movement_open_year()'::regprocedure);
+```
+
+يجب أن يظهر داخلها `v_company_id := public.auth_company_id()` وأن تتم مقارنة
+`financial_years.company_id` مع `v_company_id`.
+
+---
+
+## v16 — إشعار دائن بمرتجع نقلة من فاتورة العميل
+
+بعد v15 نفّذ:
+
+`supabase/migration_credit_note_trip_returns_v16.sql`
+
+تضيف هذه الترحيلة اختيار نقلة أو أكثر من الفاتورة عند إصدار الإشعار الدائن. قيمة
+الإشعار ونسبة الضريبة تُقرأان خادمياً من النقلات والفاتورة داخل معاملة واحدة، ولا
+يمكن للمتصفح تغييرهما. كما تمنع إصدار مرتجع ثانٍ للنقلة نفسها؛ حذف الإشعار يعيد
+إتاحة النقلة للاختيار بفضل الحذف المتسلسل لروابطها.
+
+الترحيلة لا تغيّر مبالغ الفواتير الأصلية أو السندات القائمة. يبقى المستند الأصلي
+ثابتاً، ويظهر التخفيض في رصيد الفاتورة والعميل والتقارير من خلال الإشعار الدائن.
+للتحقق بعد التنفيذ:
+
+```sql
+select to_regclass('public.credit_note_trips');
+select to_regprocedure('public.save_credit_note_for_trips_v16(bigint,date,text,bigint[])');
+select indexname from pg_indexes
+ where schemaname = 'public'
+   and indexname = 'uq_credit_note_trips_one_return_per_trip';
+```
+
+---
+
+## v17 — أرقام حاويات متعددة لكل نقلة
+
+بعد v16 نفّذ:
+
+`supabase/migration_trip_container_numbers_v17.sql`
+
+تضيف هذه الترحيلة حقل `container_numbers` إلى كل سجل في `invoice_trips`. لكل نقلة
+قائمتها المستقلة، ولا يمكن أن يزيد عدد أرقامها على قيمة `qty` الخاصة بها. تتحقق
+قاعدة البيانات أيضاً من أن القيم نصية وغير فارغة وغير مكررة، وتعيد دالة
+`save_invoice` التحقق من عدم تكرار الرقم بين جميع نقلات الفاتورة قبل حفظ الرأس
+والنقلات والأرقام في معاملة واحدة.
+
+القيمة الافتراضية للنقلات السابقة قائمة فارغة، لذلك لا تتغير مبالغ أو بيانات
+الفواتير القائمة. الترحيلة آمنة لإعادة التشغيل. للتحقق بعد التنفيذ:
+
+```sql
+select column_name, data_type
+  from information_schema.columns
+ where table_schema = 'public'
+   and table_name = 'invoice_trips'
+   and column_name = 'container_numbers';
+select conname from pg_constraint
+ where conrelid = 'public.invoice_trips'::regclass
+   and conname = 'invoice_trips_container_numbers_valid';
+select to_regprocedure(
+  'public.save_invoice(bigint,date,bigint,double precision,text,jsonb,jsonb,text)'
+);
+```
+
+---
+
+## v18 — أدوات منصة المطوّر، تشخيص Supabase، والزوار الفريدون
+
+بعد v17 نفّذ في **Supabase SQL Editor**:
+
+`supabase/migration_admin_platform_tools_v18.sql`
+
+> خذ نسخة احتياطية قبل الترحيل واختبره أولاً على مشروع تجريبي، خصوصاً قبل استخدام
+> زر «تصفير البيانات». الترحيلة نفسها لا تحذف بيانات أي شركة؛ الحذف لا يبدأ إلا
+> من لوحة المطوّر بعد جلسة 2FA وإعادة إدخال كلمة مرور المطوّر واسم الشركة.
+
+تضيف الترحيلة:
+- RPC ذرّية لتصفير بيانات العمل لشركة واحدة مع إبقاء الشركة وحساباتها واشتراكها
+  ومميزاتها وطلبات التفعيل ورسائل الدعم والشكاوى، ثم إنشاء سنة مالية حالية فارغة.
+- RPC محمية لصفحة المميزات، فتحل خطأ `permission denied for table companies`
+  من دون فتح جداول أعمال العملاء للمطوّر.
+- مؤشرات إدارة المنصة والزوار فقط، بلا فواتير العملاء أو مبالغهم.
+- تشخيص وجود الجداول وRLS والسياسات والدوال من دون قراءة محتوى الجداول أو أعداد صفوفها.
+- جدول زوار لا يستقبل كتابة مباشرة من المتصفح؛ يُخزّن HMAC لمعرّف Cookie لا
+  المعرّف الخام. الانتقال داخل التطبيق لا ينشئ زائراً جديداً.
+- سياسة تجعل سجل النشاط المرئي مقصوراً على أفعال حساب المطوّر الحالي.
+
+تحتاج مسارات تعديل حساب العميل وتسجيل الزيارة إلى المتغير الخادمي الموجود:
+
+```env
+SUPABASE_SERVICE_ROLE_KEY=...
+```
+
+ويُنصح بشدة بإضافة سر مستقل طويل (32 بايت عشوائية أو أكثر) لتجزئة معرّفات الزوار:
+
+```env
+VISITOR_HASH_SECRET=replace-with-a-long-random-secret
+```
+
+عند غيابه يُستخدم `SUPABASE_SERVICE_ROLE_KEY` لاشتقاق التجزئة، ولا يخرج أي منهما
+إلى المتصفح. تحديد الموقع تقريبي فقط من رؤوس Vercel/Cloudflare إذا كانت متاحة؛
+لا يستخدم النظام GPS أو خدمة تحديد موقع خارجية.
+
+للتحقق بعد التنفيذ:
+
+```sql
+select to_regclass('public.site_visitors');
+select to_regprocedure('public.admin_reset_company_data_v18(uuid)');
+select to_regprocedure('public.admin_get_company_extras_v18(uuid)');
+select to_regprocedure('public.admin_platform_stats_v18()');
+select to_regprocedure('public.admin_recent_visitors_v18(integer)');
+select to_regprocedure('public.admin_database_health_v18()');
+select to_regprocedure(
+  'public.record_site_visit_v18(text,text,text,text,text,text,text,text,text,text,text)'
+);
+select policyname, qual
+  from pg_policies
+ where schemaname = 'public' and tablename = 'activity_logs';
+```
+
+بعد النشر افتح **لوحة المطوّر ← صحة Supabase**. يجب أن يظهر الاتصال ناجحاً،
+والجداول موجودة وRLS مفعلاً، والدوال الأساسية بعلامة نجاح. صفحة التشخيص لا تعرض
+صفوف العملاء أو أعدادها.

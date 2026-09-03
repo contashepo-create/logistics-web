@@ -42,6 +42,8 @@ export interface Profile {
 
 export interface FinancialYear {
   id: number;
+  /** معرّف الشركة موجود دائماً في قاعدة البيانات، واختياري هنا لتوافق بيانات العرض القديمة. */
+  company_id?: string;
   year: number;
   date_from: string;
   date_to: string;
@@ -125,7 +127,7 @@ export interface Invoice {
   vat_rate: number;
   notes: string;
   attachments: string[];
-  /** رقم الحاوية (اختياري — يُدخل عند إصدار الفاتورة ويظهر في العروض والطباعة) */
+  /** رقم حاوية عام قديم — محفوظ للتوافق مع الفواتير السابقة. */
   container_number?: string;
   created_at?: string;
 }
@@ -143,6 +145,8 @@ export interface InvoiceTrip {
   unit_price: number;
   /** إجمالي السطر = qty × unit_price */
   price: number;
+  /** أرقام الحاويات المرتبطة بهذه النقلة، بحد أقصى يساوي qty. */
+  container_numbers: string[];
   notes: string;
   expenses: TripExpense[];
   vehicle_name?: string | null;
@@ -190,8 +194,24 @@ export interface CreditDebitNote {
   invoice_number?: number | null;
   customer_name?: string | null;
   customer_code?: string | null;
+  /** معرّفات ومسميات النقلات المرتجعة في الإشعار الدائن. */
+  trip_ids?: number[];
+  trip_labels?: string[];
   /** إجمالي الإشعار شامل الضريبة */
   total?: number;
+}
+
+/** نقلة فاتورة متاحة للاختيار عند إصدار إشعار دائن بمرتجع. */
+export interface CreditableInvoiceTrip {
+  id: number;
+  from_loc: string;
+  to_loc: string;
+  qty: number;
+  unit_price: number;
+  amount: number;
+  vat_amount: number;
+  total: number;
+  already_credited: boolean;
 }
 
 export interface ReceiptVoucher {

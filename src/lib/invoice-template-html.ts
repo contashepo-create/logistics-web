@@ -18,6 +18,8 @@ export interface InvoiceTemplateParty {
 export interface InvoiceTemplateLine {
   description: string;
   detail?: string;
+  /** أرقام الحاويات المرتبطة ببند النقل نفسه. */
+  containerNumbers?: string[];
   quantity: number;
   unitAmount: number;
   taxableAmount: number;
@@ -131,6 +133,16 @@ function titleBlock(model: InvoiceTemplateModel, ps: PrintSettings, accent: stri
   </div>`;
 }
 
+function lineContainers(line: InvoiceTemplateLine, ps: PrintSettings): string {
+  const numbers = Array.isArray(line.containerNumbers) ? line.containerNumbers.filter(Boolean) : [];
+  if (!numbers.length) return "";
+  const caption = ps.label_language === "en" ? "Containers:" : "الحاويات:";
+  const badges = numbers.map((number) =>
+    `<span dir="ltr" style="display:inline-block;padding:1px 5px;border:1px solid #cbd5e1;border-radius:4px;background:#f8fafc;color:#1e3a8a;font:700 9.5px monospace;">${esc(number)}</span>`
+  ).join(" ");
+  return `<div style="display:flex;align-items:center;gap:4px;flex-wrap:wrap;margin-top:4px;font-size:9.5px;color:#64748b;"><span>${caption}</span>${badges}</div>`;
+}
+
 function invoiceTable(model: InvoiceTemplateModel, ps: PrintSettings, opts: { accent: string; dense?: boolean; classic?: boolean; elegant?: boolean; logistics?: boolean }): string {
   const l = labels(ps);
   const pad = opts.dense ? "5px 6px" : "8px 7px";
@@ -138,7 +150,7 @@ function invoiceTable(model: InvoiceTemplateModel, ps: PrintSettings, opts: { ac
   const headBg = opts.logistics ? "#1e293b" : opts.elegant ? opts.accent : opts.accent;
   const rows = model.lines.map((line, index) => `<tr style="${index % 2 && !opts.elegant ? "background:#f8fafc;" : ""}">
     <td style="padding:${pad};border:${border};text-align:center;color:#64748b;">${index + 1}</td>
-    <td style="padding:${pad};border:${border};text-align:right;"><b style="color:#0f172a;">${esc(line.description)}</b>${line.detail ? `<div style="font-size:10px;color:#64748b;margin-top:2px;">${esc(line.detail)}</div>` : ""}</td>
+    <td style="padding:${pad};border:${border};text-align:right;"><b style="color:#0f172a;">${esc(line.description)}</b>${line.detail ? `<div style="font-size:10px;color:#64748b;margin-top:2px;">${esc(line.detail)}</div>` : ""}${lineContainers(line, ps)}</td>
     <td style="padding:${pad};border:${border};text-align:center;">${money(line.quantity).replace(/\.00$/, "")}</td>
     <td style="padding:${pad};border:${border};text-align:center;white-space:nowrap;">${money(line.unitAmount)}</td>
     <td style="padding:${pad};border:${border};text-align:center;white-space:nowrap;">${money(line.taxableAmount)}</td>
@@ -268,7 +280,7 @@ function renderLogistics(model: InvoiceTemplateModel, ps: PrintSettings, accent:
 
 function renderThermal(model: InvoiceTemplateModel, ps: PrintSettings): string {
   const l = labels(ps);
-  const rows = model.lines.map((line) => `<tr><td style="padding:4px 0;border-bottom:1px dotted #777;text-align:right;">${esc(line.description)}<div style="font-size:8px;color:#555;">${money(line.quantity)} × ${money(line.unitAmount)}</div></td><td style="padding:4px 0;border-bottom:1px dotted #777;text-align:left;font-weight:800;">${money(line.total)}</td></tr>`).join("");
+  const rows = model.lines.map((line) => `<tr><td style="padding:4px 0;border-bottom:1px dotted #777;text-align:right;">${esc(line.description)}<div style="font-size:8px;color:#555;">${money(line.quantity)} × ${money(line.unitAmount)}</div>${lineContainers(line, ps)}</td><td style="padding:4px 0;border-bottom:1px dotted #777;text-align:left;font-weight:800;">${money(line.total)}</td></tr>`).join("");
   return `<div data-invoice-template="thermal" style="direction:rtl;width:72mm;max-width:100%;margin:0 auto;color:#000;font-family:monospace;font-size:10px;background:#fff;">
     <div style="text-align:center;border-bottom:1px dashed #000;padding-bottom:7px;">${logo(model, ps, 44, 0)}<div style="font-size:14px;font-weight:900;">${esc(model.seller.name)}</div>${model.seller.taxNumber ? `<div>${l("الرقم الضريبي", "VAT")}: ${esc(model.seller.taxNumber)}</div>` : ""}<div style="font-size:12px;font-weight:900;border-top:1px dotted #000;margin-top:5px;padding-top:5px;">${esc(ps.label_language === "en" ? model.invoiceTitleEn : model.invoiceTitleAr)}</div><div dir="ltr">${esc(model.invoiceNumber)} — ${esc(model.issueDate)}</div></div>
     <div style="padding:6px 0;border-bottom:1px dashed #000;">${l("العميل", "Client")}: <b>${esc(model.buyer.name)}</b></div>

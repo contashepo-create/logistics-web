@@ -65,6 +65,17 @@ export async function requireAdmin(req: Request): Promise<AuthUser | null> {
   return u.email.toLowerCase() === ADMIN_EMAIL.toLowerCase() ? u : null;
 }
 
+/**
+ * إعادة مصادقة المستخدم الحالي قبل العمليات المدمّرة. يُنشأ عميل مستقل حتى لا
+ * تتأثر جلسة الطلب، ولا تُخزّن كلمة المرور أو تدخل سجل النشاط.
+ */
+export async function verifyCurrentUserPassword(email: string, password: string): Promise<boolean> {
+  if (!email || !password) return false;
+  const verifier = baseClient();
+  const { data, error } = await verifier.auth.signInWithPassword({ email, password });
+  return !error && data.user?.email?.toLowerCase() === email.toLowerCase();
+}
+
 /** عميل بصلاحيات الخدمة (يتجاوز RLS) — للمسارات العامة المحكومة بالخادم فقط.
  *  لا يُستخدم إلا بعد التحقق من المدخلات وتقييد المعدل. */
 export function serviceClient(): SupabaseClient {

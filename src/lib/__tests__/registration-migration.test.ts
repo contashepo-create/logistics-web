@@ -3,6 +3,7 @@ import { readFileSync } from "node:fs";
 import { join } from "node:path";
 
 const sql = readFileSync(join(process.cwd(), "supabase/migration_registration_validation_v13.sql"), "utf8");
+const openYearFixSql = readFileSync(join(process.cwd(), "supabase/migration_fix_voucher_open_year_v15.sql"), "utf8");
 
 describe("ترحيلة التسجيل والتحقق v13", () => {
   it("تنشئ الشركة والملف والسنة المالية داخل RPC واحدة وتوقف المسار القديم", () => {
@@ -30,5 +31,14 @@ describe("ترحيلة التسجيل والتحقق v13", () => {
     expect(sql).toContain("guard_company_print_settings");
     expect(sql).toContain("guard_app_settings_json");
     expect(sql).toContain("jsonb_array_elements");
+  });
+
+  it("لا يعتمد حارس السنة على company_id قبل أن يملأه مشغّل الشركة", () => {
+    for (const migration of [sql, openYearFixSql]) {
+      expect(migration).toMatch(/v_company_id uuid := public\.auth_company_id\(\)/i);
+      expect(migration).toMatch(/new\.company_id := v_company_id/i);
+      expect(migration).toMatch(/y\.company_id = v_company_id/i);
+      expect(migration).not.toMatch(/y\.company_id = new\.company_id/i);
+    }
   });
 });

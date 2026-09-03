@@ -17,6 +17,28 @@ function setup(vatRate = 0): void {
   seedTable("companies", [{ id: "c1", name: "شركة", vat_rate: vatRate, plan_type: "open", is_active: true }]);
 }
 
+describe("حارس السنة المالية عند تسجيل سند دفع أو قبض", () => {
+  it("يقبل السند داخل السنة المفتوحة ويمرر الشركة قبل مشغّل قاعدة البيانات", async () => {
+    setup();
+    await repo.saveYear({ year: 2026, date_from: "2026-01-01", date_to: "2026-12-31" });
+    const cb = await repo.saveAccount("cashbox", {
+      name: "الخزينة", created_date: "2026-01-01", opening_balance: 1000,
+    });
+
+    const receiptId = await repo.saveReceipt({
+      date: "2026-01-01", account_kind: "cashbox", account_id: cb,
+      voucher_type: "other", amount: 200, description: "قبض داخل السنة",
+    });
+    const paymentId = await repo.savePayment({
+      date: "2026-12-31", account_kind: "cashbox", account_id: cb,
+      voucher_type: "general", amount: 100, description: "دفع داخل السنة",
+    });
+
+    expect(table("receipt_vouchers").find((v) => v.id === receiptId)?.company_id).toBe("c1");
+    expect(table("payment_vouchers").find((v) => v.id === paymentId)?.company_id).toBe("c1");
+  });
+});
+
 describe("خصم السلف في الرواتب (شكل الكائنات كما ترسله الواجهة)", () => {
   it("يحفظ الراتب ويخصم السلفة بشكل صحيح عند إرسال settlements ككائنات", async () => {
     setup();

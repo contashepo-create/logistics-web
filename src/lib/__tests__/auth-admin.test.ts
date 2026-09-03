@@ -262,22 +262,35 @@ describe("admin.ts", () => {
     expect(rows[0].company_name).toBe("شركتي");
   });
 
-  it("listActivityLogs يحدّ 1000 سجل", async () => {
-    const order = vi.fn();
+  it("listActivityLogs يفلتر على حساب المطوّر الحالي ويحدّ 1000 سجل", async () => {
+    supabaseMock.auth.getUser = vi.fn(async () => ({ data: { user: { id: "admin-1" } }, error: null }));
+    let actorFilter: unknown;
     const limit = vi.fn(async () => ({ data: [{ id: 1 }], error: null }));
-    supabaseMock.from.mockReturnValue({ select: () => ({ order: () => ({ limit }) }) });
+    supabaseMock.from.mockReturnValue({
+      select: () => ({
+        eq: (column: string, value: unknown) => {
+          if (column === "actor_id") actorFilter = value;
+          return { order: () => ({ limit }) };
+        },
+      }),
+    });
     const rows = await adminLib.listActivityLogs();
     expect(rows).toHaveLength(1);
+    expect(actorFilter).toBe("admin-1");
+    expect(limit).toHaveBeenCalledWith(1000);
   });
 
-  it("adminStats يقرأ الأرقام عبر RPC مجمّعة ولا يلمس جداول العملاء", async () => {
-    // بعد إغلاق ثغرة admin_full_access لم يعد للمطوّر وصول لصفوف بيانات
-    // العملاء؛ الإحصاءات تأتي مجمّعة من admin_platform_stats().
+  it("adminStats يقرأ مؤشرات المنصة فقط ولا يلمس جداول أعمال العملاء", async () => {
     supabaseMock.rpc.mockResolvedValue({
       data: {
-        companies: 3, active_companies: 2, customers: 10, invoices: 20,
-        trips: 40, receipts: 5, payments: 7, payrolls: 4,
-        revenue: 1000, collected: 500, spent: 300, salaries: 200,
+        companies: 3, active_companies: 2, suspended_companies: 1,
+        trial_companies: 1, subscribed_companies: 1, expired_companies: 0,
+        new_companies_today: 1, new_companies_30d: 2,
+        owner_accounts: 3, additional_accounts: 1, pending_requests: 2,
+        visitors: 50, visitors_today: 4, visitors_30d: 30, page_views: 80,
+        last_visit_at: "2026-09-02T10:00:00Z",
+        // حتى لو أعاد إصدار قديم مفاتيح عملاء، لا تنقلها طبقة الواجهة.
+        customers: 10, invoices: 20, revenue: 1000,
       },
       error: null,
     });
@@ -286,16 +299,16 @@ describe("admin.ts", () => {
     });
 
     const st = await adminLib.adminStats();
-    expect(supabaseMock.rpc).toHaveBeenCalledWith("admin_platform_stats");
+    expect(supabaseMock.rpc).toHaveBeenCalledWith("admin_platform_stats_v18");
     expect(supabaseMock.from).not.toHaveBeenCalled();
     expect(st.companies).toBe(3);
     expect(st.active_companies).toBe(2);
-    expect(st.customers).toBe(10);
-    expect(st.invoices).toBe(20);
-    expect(st.revenue).toBe(1000);
-    expect(st.collected).toBe(500);
-    expect(st.spent).toBe(300);
-    expect(st.salaries).toBe(200);
+    expect(st.visitors).toBe(50);
+    expect(st.page_views).toBe(80);
+    expect(st.last_visit_at).toBe("2026-09-02T10:00:00Z");
+    expect(st).not.toHaveProperty("customers");
+    expect(st).not.toHaveProperty("invoices");
+    expect(st).not.toHaveProperty("revenue");
   });
 
   it("adminStats يرمي رسالة واضحة عند رفض الصلاحية", async () => {

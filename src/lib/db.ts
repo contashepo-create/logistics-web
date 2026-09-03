@@ -23,8 +23,8 @@ export function translateDbError(msg: string): string {
       "`supabase/migration_fix_company_updates.sql` في Supabase SQL Editor ثم أعد المحاولة.";
   }
 
-  if (m.includes("column") && m.includes("does not exist")) {
-    return "قاعدة البيانات غير محدّثة (أعمدة ناقصة) — نفّذ ملفات الترحيل في Supabase SQL Editor ثم أعد المحاولة.";
+  if ((m.includes("column") || m.includes("relation")) && m.includes("does not exist")) {
+    return "قاعدة البيانات غير محدّثة (جداول أو أعمدة ناقصة) — نفّذ ملفات الترحيل في Supabase SQL Editor ثم أعد المحاولة.";
   }
 
   if (m.includes("function") && m.includes("does not exist")) {

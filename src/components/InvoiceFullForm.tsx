@@ -14,6 +14,7 @@ type TripRow = {
   to_loc: string;
   qty: string;
   unit_price: string;
+  container_numbers: string[];
   notes: string;
 };
 
@@ -26,8 +27,11 @@ export default function InvoiceFullForm() {
   const [customers, setCustomers] = useState<{ id: number; name: string }[]>([]);
   const [vehicles, setVehicles] = useState<{ id: number; plate_number: string }[]>([]);
   const [drivers, setDrivers] = useState<{ id: number; name: string }[]>([]);
-  const [f, setF] = useState({ customer_id: "", date: todayIso(), vat_rate: "15", notes: "", container_number: "" });
-  const [trips, setTrips] = useState<TripRow[]>([{ vehicle_id: "", driver_id: "", from_loc: "", to_loc: "", qty: "1", unit_price: "", notes: "" }]);
+  const [f, setF] = useState({ customer_id: "", date: todayIso(), vat_rate: "15", notes: "" });
+  const [trips, setTrips] = useState<TripRow[]>([{
+    vehicle_id: "", driver_id: "", from_loc: "", to_loc: "", qty: "1",
+    unit_price: "", container_numbers: [], notes: "",
+  }]);
   const [attachments, setAttachments] = useState<string[]>([]);
   const [saving, setSaving] = useState(false);
 
@@ -50,19 +54,63 @@ export default function InvoiceFullForm() {
   const upd = (i: number, patch: Partial<TripRow>) =>
     setTrips((p) => p.map((t, x) => (x === i ? { ...t, ...patch } : t)));
 
+  const updateTripQty = (i: number, value: string) => {
+    const parsedQty = n(value);
+    setTrips((rows) => rows.map((trip, index) => {
+      if (index !== i) return trip;
+      // لا نفقد الأرقام أثناء مسح الحقل مؤقتاً؛ التقليص يتم فور إدخال كمية صالحة أقل.
+      const containerNumbers = parsedQty >= 1
+        ? trip.container_numbers.slice(0, Math.trunc(parsedQty))
+        : trip.container_numbers;
+      return { ...trip, qty: value, container_numbers: containerNumbers };
+    }));
+  };
+
+  const addContainerNumber = (i: number) => {
+    setTrips((rows) => rows.map((trip, index) => {
+      if (index !== i) return trip;
+      const qty = Math.max(1, Math.trunc(n(trip.qty) || 1));
+      if (trip.container_numbers.length >= qty) return trip;
+      return { ...trip, container_numbers: [...trip.container_numbers, ""] };
+    }));
+  };
+
+  const updateContainerNumber = (tripIndex: number, containerIndex: number, value: string) => {
+    setTrips((rows) => rows.map((trip, index) => index === tripIndex
+      ? { ...trip, container_numbers: trip.container_numbers.map((number, i) => i === containerIndex ? value : number) }
+      : trip));
+  };
+
+  const removeContainerNumber = (tripIndex: number, containerIndex: number) => {
+    setTrips((rows) => rows.map((trip, index) => index === tripIndex
+      ? { ...trip, container_numbers: trip.container_numbers.filter((_, i) => i !== containerIndex) }
+      : trip));
+  };
+
   const save = async () => {
     if (!f.customer_id) return notify("اختر العميل.", "error");
     if (!trips.length) return notify("أضف نقلة واحدة على الأقل.", "error");
-    for (const t of trips) {
+    const seenContainers = new Set<string>();
+    for (const [index, t] of trips.entries()) {
       if (!t.from_loc.trim() || !t.to_loc.trim()) return notify("أكمل أماكن الانطلاق والوصول لكل نقلة.", "error");
-      if (!(n(t.qty) >= 1)) return notify("عدد النقلات يجب أن يكون 1 على الأقل.", "error");
+      const qty = Math.trunc(n(t.qty));
+      if (!(qty >= 1)) return notify("عدد النقلات يجب أن يكون 1 على الأقل.", "error");
       if (!(tripLineTotal(t) > 0)) return notify("سعر النقلة يجب أن يكون أكبر من صفر.", "error");
+      if (t.container_numbers.length > qty) {
+        return notify(`عدد أرقام الحاويات في النقلة ${index + 1} لا يجوز أن يتجاوز عدد النقلات (${qty}).`, "error");
+      }
+      for (const raw of t.container_numbers) {
+        const container = raw.trim();
+        if (!container) return notify(`أكمل رقم الحاوية الفارغ في النقلة ${index + 1} أو احذفه.`, "error");
+        const key = container.toLocaleUpperCase("en-US");
+        if (seenContainers.has(key)) return notify(`رقم الحاوية «${container}» مكرر داخل الفاتورة.`, "error");
+        seenContainers.add(key);
+      }
     }
     setSaving(true);
     try {
       await saveInvoice({
         customer_id: Number(f.customer_id), date: f.date, notes: f.notes,
-        container_number: f.container_number.trim(),
         vat_rate: parseFloat(f.vat_rate || "15") || 15,
         attachments,
         trips: trips.map((t) => ({
@@ -72,6 +120,7 @@ export default function InvoiceFullForm() {
           qty: Math.max(1, Math.trunc(n(t.qty) || 1)),
           unit_price: n(t.unit_price),
           price: tripLineTotal(t),
+          container_numbers: t.container_numbers.map((number) => number.trim()),
           notes: t.notes,
           expenses: [],
         })),
@@ -136,15 +185,19 @@ export default function InvoiceFullForm() {
         <Field label="عدد النقلات في الفاتورة">
           <Input value={`${trips.length} سطر — ${trips.reduce((a, t) => a + Math.max(1, n(t.qty) || 1), 0)} نقلة`} readOnly />
         </Field>
-        <Field label="رقم الحاوية (اختياري)">
-          <Input dir="ltr" value={f.container_number} onChange={(e) => setF({ ...f, container_number: e.target.value })} placeholder="مثال: MSCU1234567" />
-        </Field>
+        <div className="inv-container-head-hint">
+          <strong>أرقام الحاويات</strong>
+          <span>تُضاف لكل نقلة أدناه، وبحد أقصى يساوي عددها.</span>
+        </div>
       </div>
 
       <div>
         <div className="inv-sec-title">
           <span>بنود النقل</span>
-          <button className="btn btn-primary" onClick={() => setTrips((p) => [...p, { vehicle_id: "", driver_id: "", from_loc: "", to_loc: "", qty: "1", unit_price: "", notes: "" }])}>＋ إضافة نقلة</button>
+          <button className="btn btn-primary" onClick={() => setTrips((p) => [...p, {
+            vehicle_id: "", driver_id: "", from_loc: "", to_loc: "", qty: "1",
+            unit_price: "", container_numbers: [], notes: "",
+          }])}>＋ إضافة نقلة</button>
         </div>
 
         {trips.map((t, i) => (
@@ -180,7 +233,7 @@ export default function InvoiceFullForm() {
               <div className="trip-price-box">
                 <Field label="عدد النقلات" required>
                   <Input type="number" min={1} step={1} dir="ltr" style={{ textAlign: "center" }}
-                    value={t.qty} onChange={(e) => upd(i, { qty: e.target.value })} />
+                    value={t.qty} onChange={(e) => updateTripQty(i, e.target.value)} />
                 </Field>
                 <Field label="سعر النقلة الواحدة" required>
                   <AmountInput value={t.unit_price} onChange={(v) => upd(i, { unit_price: v })} />
@@ -188,6 +241,50 @@ export default function InvoiceFullForm() {
                 <Field label="إجمالي بند النقل">
                   <Input value={money(tripLineTotal(t))} readOnly />
                 </Field>
+              </div>
+              <div className="trip-containers-box">
+                <div className="trip-containers-head">
+                  <div>
+                    <strong>أرقام حاويات النقلة</strong>
+                    <span className="trip-containers-count">
+                      {t.container_numbers.length} من {Math.max(1, Math.trunc(n(t.qty) || 1))}
+                    </span>
+                  </div>
+                  <button
+                    type="button"
+                    className="btn btn-sm"
+                    onClick={() => addContainerNumber(i)}
+                    disabled={t.container_numbers.length >= Math.max(1, Math.trunc(n(t.qty) || 1))}
+                  >＋ إضافة رقم حاوية</button>
+                </div>
+                {t.container_numbers.length > 0 ? (
+                  <div className="trip-containers-grid">
+                    {t.container_numbers.map((container, containerIndex) => (
+                      <div className="trip-container-input" key={containerIndex}>
+                        <label htmlFor={`trip-${i}-container-${containerIndex}`}>حاوية {containerIndex + 1}</label>
+                        <div>
+                          <Input
+                            id={`trip-${i}-container-${containerIndex}`}
+                            dir="ltr"
+                            value={container}
+                            onChange={(e) => updateContainerNumber(i, containerIndex, e.target.value)}
+                            placeholder="مثال: MSCU1234567"
+                            autoComplete="off"
+                          />
+                          <button
+                            type="button"
+                            className="trip-container-remove"
+                            onClick={() => removeContainerNumber(i, containerIndex)}
+                            aria-label={`حذف رقم الحاوية ${containerIndex + 1}`}
+                            title="حذف رقم الحاوية"
+                          >×</button>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                ) : (
+                  <p className="trip-containers-empty">لا توجد أرقام حاويات مضافة لهذه النقلة.</p>
+                )}
               </div>
               <Field label="ملاحظات النقلة"><Input value={t.notes} onChange={(e) => upd(i, { notes: e.target.value })} /></Field>
               <div className="exp-hint" style={{ marginTop: 4 }}>

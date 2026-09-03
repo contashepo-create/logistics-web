@@ -61,6 +61,64 @@ describe("كمية النقلات والمصروفات", () => {
   });
 });
 
+describe("أرقام الحاويات لكل نقلة", () => {
+  let s: Awaited<ReturnType<typeof seed>>;
+  beforeEach(async () => { s = await seed(); });
+
+  it("يحفظ لكل نقلة أرقامها المستقلة ويعرضها في بيانات الفاتورة والقائمة", async () => {
+    const id = await repo.saveInvoice({
+      date: "2026-03-01", customer_id: s.cust, attachments: [],
+      trips: [
+        {
+          from_loc: "الرياض", to_loc: "جدة", qty: 3, unit_price: 100,
+          container_numbers: ["MSCU1234567", "TCLU7654321", "OOLU1112223"], expenses: [],
+        },
+        {
+          from_loc: "جدة", to_loc: "الدمام", qty: 1, unit_price: 200,
+          container_numbers: ["MAEU9998887"], expenses: [],
+        },
+      ],
+    });
+
+    const inv = await calc.getInvoiceFull(id);
+    expect(inv!.trips[0].container_numbers).toEqual(["MSCU1234567", "TCLU7654321", "OOLU1112223"]);
+    expect(inv!.trips[1].container_numbers).toEqual(["MAEU9998887"]);
+    const listed = await calc.invoiceList("2026-01-01", "2026-12-31");
+    expect(listed[0].container_number).toContain("MSCU1234567");
+    expect(listed[0].container_number).toContain("MAEU9998887");
+  });
+
+  it("يرفض أرقام حاويات أكثر من كمية النقلة دون حفظ فاتورة جزئية", async () => {
+    await expect(repo.saveInvoice({
+      date: "2026-03-01", customer_id: s.cust, attachments: [],
+      trips: [{
+        from_loc: "الرياض", to_loc: "جدة", qty: 2, unit_price: 100,
+        container_numbers: ["CONT-1", "CONT-2", "CONT-3"], expenses: [],
+      }],
+    })).rejects.toThrow(/لا يجوز أن يتجاوز عدد النقلات/);
+    expect(table("invoices")).toHaveLength(0);
+  });
+
+  it("يرفض رقم الحاوية الفارغ أو المكرر بين نقلتين دون حساسية لحالة الأحرف", async () => {
+    await expect(repo.saveInvoice({
+      date: "2026-03-01", customer_id: s.cust, attachments: [],
+      trips: [{
+        from_loc: "أ", to_loc: "ب", qty: 1, unit_price: 100,
+        container_numbers: ["   "], expenses: [],
+      }],
+    })).rejects.toThrow(/يجب إدخال|مطلوب|فارغ/);
+
+    await expect(repo.saveInvoice({
+      date: "2026-03-01", customer_id: s.cust, attachments: [],
+      trips: [
+        { from_loc: "أ", to_loc: "ب", qty: 1, unit_price: 100, container_numbers: ["mscu123"], expenses: [] },
+        { from_loc: "ج", to_loc: "د", qty: 1, unit_price: 100, container_numbers: ["MSCU123"], expenses: [] },
+      ],
+    })).rejects.toThrow(/مكرر داخل الفاتورة/);
+    expect(table("invoices")).toHaveLength(0);
+  });
+});
+
 describe("مصادر تمويل مصروف النقلة", () => {
   let s: Awaited<ReturnType<typeof seed>>;
   beforeEach(async () => { s = await seed(); });

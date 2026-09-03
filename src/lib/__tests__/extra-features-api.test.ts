@@ -69,19 +69,16 @@ describe("API المميزات الإضافية", () => {
     expect(res.status).toBe(401);
   });
 
-  it("يعيد false لكل ميزة عند غياب منح الشركة", async () => {
-    const sb = {
-      from: vi.fn((table: string) => {
-        if (table === "companies") return query({ data: { id: COMPANY_ID } });
-        return query({ data: [] });
-      }),
-      rpc: vi.fn(),
-    };
-    mocks.userClient.mockReturnValue(sb);
+  it("يعيد false لكل ميزة عبر RPC محمية دون قراءة companies مباشرة", async () => {
+    const rpc = vi.fn(async () => ({ data: { features: {}, users: [] }, error: null }));
+    const from = vi.fn(() => { throw new Error("لا ينبغي قراءة الجداول مباشرة"); });
+    mocks.userClient.mockReturnValue({ from, rpc });
     const res = await featuresPost(req({ action: "get", company_id: COMPANY_ID }));
     expect(res.status).toBe(200);
     const out = await res.json();
     expect(out.features).toEqual({ tax_invoice: false, additional_user: false });
+    expect(rpc).toHaveBeenCalledWith("admin_get_company_extras_v18", { p_company_id: COMPANY_ID });
+    expect(from).not.toHaveBeenCalled();
   });
 
   it("يمرر تفعيل الفاتورة الضريبية إلى RPC المحمي", async () => {

@@ -74,6 +74,62 @@ describe("إشعارات الدين/الدائن", () => {
     expect(pnl.total_revenue).toBeCloseTo(1000 - 230, 2);
   });
 
+  it("ينشئ إشعاراً دائنًا للنقلة المختارة ويحسب مبلغها وضريبة الفاتورة خادمياً", async () => {
+    await repo.saveYear({ year: 2026, date_from: "2026-01-01", date_to: "2026-12-31" });
+    const cust = await repo.saveCustomer({ name: "عميل المرتجع", opening_balance: 100 });
+    const inv = await repo.saveInvoice({
+      date: "2026-05-05", customer_id: cust, attachments: [],
+      trips: [
+        { from_loc: "القاهرة", to_loc: "المنصورة", qty: 2, unit_price: 300, expenses: [] },
+        { from_loc: "دمياط", to_loc: "الإسكندرية", qty: 1, unit_price: 400, expenses: [] },
+      ],
+    });
+    const invoiceTrips = table("invoice_trips").filter((trip) => trip.invoice_id === inv);
+    const returnedTrip = invoiceTrips[1];
+
+    const before = await repo.listCreditableInvoiceTrips(inv);
+    expect(before).toHaveLength(2);
+    expect(before.find((trip) => trip.id === returnedTrip.id)).toMatchObject({
+      amount: 400, vat_amount: 60, total: 460, already_credited: false,
+    });
+
+    const noteId = await repo.saveCreditDebitNote({
+      note_type: "credit", invoice_id: inv, customer_id: cust, date: "2026-05-06",
+      // يجب تجاهل أي مبلغ/ضريبة قادمين من العميل واستخدام بيانات النقلة والفاتورة.
+      amount: 1, vat_rate: 0, trip_ids: [returnedTrip.id], reason: "مرتجع نقلة",
+    });
+    const note = table("credit_debit_notes").find((row) => row.id === noteId)!;
+    expect(note.amount).toBe(400);
+    expect(note.vat_rate).toBe(15);
+    expect(table("credit_note_trips")).toEqual(expect.arrayContaining([
+      expect.objectContaining({ credit_note_id: noteId, trip_id: returnedTrip.id, amount: 400 }),
+    ]));
+
+    // أصل الفاتورة 1000 + 150 ضريبة + 100 افتتاحي، ثم خصم 460 للمرتجع.
+    expect((await calc.customersWithBalance())[0].balance).toBeCloseTo(790, 2);
+    const after = await repo.listCreditableInvoiceTrips(inv);
+    expect(after.find((trip) => trip.id === returnedTrip.id)?.already_credited).toBe(true);
+    const details = await repo.listCreditDebitNotesForInvoice(inv);
+    expect(details[0].trip_ids).toEqual([returnedTrip.id]);
+    expect(details[0].trip_labels?.[0]).toContain("دمياط");
+  });
+
+  it("يمنع تكرار مرتجع النقلة ويتيحها مجدداً بعد حذف الإشعار", async () => {
+    await repo.saveYear({ year: 2026, date_from: "2026-01-01", date_to: "2026-12-31" });
+    const { cust, inv } = await seedInvoice();
+    const tripId = table("invoice_trips").find((trip) => trip.invoice_id === inv)!.id;
+    const payload = {
+      note_type: "credit", invoice_id: inv, customer_id: cust, date: "2026-05-06",
+      trip_ids: [tripId], reason: "مرتجع كامل",
+    };
+    const noteId = await repo.saveCreditDebitNote(payload);
+    await expect(repo.saveCreditDebitNote(payload)).rejects.toThrow("مسبقاً");
+
+    await repo.deleteCreditDebitNote(noteId);
+    expect(table("credit_note_trips")).toHaveLength(0);
+    await expect(repo.saveCreditDebitNote(payload)).resolves.toBeGreaterThan(0);
+  });
+
   it("يظهر الإشعار في كشف الحساب البسيط والمفصّل مع الإجماليات الصحيحة", async () => {
     await repo.saveYear({ year: 2026, date_from: "2026-01-01", date_to: "2026-12-31" });
     const { cust, inv } = await seedInvoice();

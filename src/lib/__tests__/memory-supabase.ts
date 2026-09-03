@@ -29,12 +29,16 @@ export function forceCollision(name: string, times = 1): void {
   collisionCounters[name] = (collisionCounters[name] ?? 0) + times;
 }
 const NUMBERED_TABLES = new Set(["invoices", "receipt_vouchers", "payment_vouchers", "payrolls", "credit_debit_notes"]);
+// يحاكي قواعد v13 المنشورة قبل الإصلاح: حارس السنة كان يعمل أبجدياً قبل
+// set_company_id في الإدراج المباشر للسندات. إبقاء المحاكاة يضمن أن التطبيق
+// يرسل company_id صراحةً ويظل متوافقاً حتى قبل تشغيل ترحيلة v15.
+const EARLY_OPEN_YEAR_GUARD_TABLES = new Set(["receipt_vouchers", "payment_vouchers"]);
 // جداول العزل: يحاكي حارس set_company_id (يفرض company_id من المستخدم الحالي)
 const TENANT_TABLES = new Set([
   "financial_years", "customers", "employees", "vehicles", "cashboxes", "banks",
   "invoices", "invoice_trips", "trip_expenses", "receipt_vouchers",
   "payment_vouchers", "payrolls", "advance_settlements", "year_snapshots", "activation_requests",
-  "credit_debit_notes", "company_features", "suppliers", "purchase_invoices", "purchase_items",
+  "credit_debit_notes", "credit_note_trips", "company_features", "suppliers", "purchase_invoices", "purchase_items",
 ]);
 
 // ---------------------------------------------------------------------------
@@ -271,6 +275,10 @@ class MemQuery {
       }
       const inserted: Row[] = [];
       for (const p of list) {
+        if (EARLY_OPEN_YEAR_GUARD_TABLES.has(this.tname)
+            && (!p.company_id || !openYearContains(p.company_id, p.date))) {
+          return { data: null, error: { message: "تاريخ الحركة خارج نطاق أي سنة مالية مفتوحة." } };
+        }
         const row: Row = this.stampTenant({ ...p });
         if (row.id == null) row.id = this.nextId();
         rows.push(row);
@@ -320,6 +328,7 @@ const CASCADE_RULES: Record<string, { table: string; column: string; action: "ca
   trip_expenses: [{ table: "payment_vouchers", column: "source_expense_id", action: "cascade" }],
   payment_vouchers: [{ table: "advance_settlements", column: "payment_voucher_id", action: "cascade" }],
   payrolls: [{ table: "advance_settlements", column: "payroll_id", action: "cascade" }],
+  credit_debit_notes: [{ table: "credit_note_trips", column: "credit_note_id", action: "cascade" }],
   financial_years: [{ table: "year_snapshots", column: "year_id", action: "cascade" }],
 };
 
@@ -399,6 +408,27 @@ function rpcSaveInvoice(args: any): { data: any; error: any } {
     return err("العميل المحدد غير موجود.");
   }
 
+  // تحقق مسبق حتى تحاكي الأخطاء ذرّية RPC الحقيقية ولا يبقى رأس فاتورة جزئي.
+  const seenContainers = new Set<string>();
+  for (const [tripIndex, trip] of trips.entries()) {
+    const qty = Math.max(1, Math.trunc(Number(trip.qty ?? 1) || 1));
+    const containers = trip.container_numbers ?? [];
+    if (!Array.isArray(containers)) return err("أرقام الحاويات يجب أن تكون قائمة.");
+    if (containers.length > qty) return err(`عدد أرقام الحاويات لا يجوز أن يتجاوز عدد النقلات (${qty}).`);
+    const normalized: string[] = [];
+    for (const value of containers) {
+      if (typeof value !== "string") return err("رقم الحاوية يجب أن يكون نصاً.");
+      const container = value.trim();
+      if (!container) return err(`رقم الحاوية في النقلة ${tripIndex + 1} لا يمكن أن يكون فارغاً.`);
+      if (container.length > 100) return err("رقم الحاوية أطول من الحد المسموح (100 حرف).");
+      const key = container.toLocaleUpperCase("en-US");
+      if (seenContainers.has(key)) return err(`رقم الحاوية «${container}» مكرر داخل الفاتورة.`);
+      seenContainers.add(key);
+      normalized.push(container);
+    }
+    trip.container_numbers = normalized;
+  }
+
   let invoiceId: number;
   if (args.p_invoice_id == null) {
     if (!openYearContains(cid, args.p_date)) return err("لا يمكن تسجيل حركة بهذا التاريخ: خارج نطاق أي سنة مالية مفتوحة.");
@@ -438,7 +468,8 @@ function rpcSaveInvoice(args: any): { data: any; error: any } {
     const base = {
       vehicle_id: t.vehicle_id ?? null, driver_id: t.driver_id ?? null,
       from_loc: t.from_loc ?? "", to_loc: t.to_loc ?? "",
-      qty, unit_price: unit, price: line, notes: t.notes ?? "",
+      qty, unit_price: unit, price: line,
+      container_numbers: t.container_numbers ?? [], notes: t.notes ?? "",
     };
     if (t.id != null) {
       tripId = Number(t.id);
@@ -558,6 +589,39 @@ function rpcSavePayroll(args: any): { data: any; error: any } {
   return { data: payrollId, error: null };
 }
 
+// محاكاة RPC v16: إشعار دائن ذري بقيمة النقلات وضريبة الفاتورة.
+function rpcSaveCreditNoteTripsV16(args: any): { data: any; error: any } {
+  const cid = companyOfUser();
+  if (!cid) return err("لا توجد شركة مرتبطة بحسابك.");
+  const invoice = table("invoices").find((row) => row.id === args.p_invoice_id && row.company_id === cid);
+  if (!invoice) return err("الفاتورة المرتبطة غير موجودة.");
+  if (args.p_date < invoice.date) return err("تاريخ الإشعار لا يجوز أن يسبق تاريخ الفاتورة.");
+  if (!openYearContains(cid, args.p_date)) return err("لا يمكن تسجيل حركة بهذا التاريخ: خارج نطاق أي سنة مالية مفتوحة.");
+  const ids = Array.isArray(args.p_trip_ids) ? args.p_trip_ids.map(Number) : [];
+  if (!ids.length) return err("اختر نقلة واحدة على الأقل لإصدار الإشعار الدائن.");
+  if (new Set(ids).size !== ids.length) return err("قائمة النقلات المختارة تحتوي على تكرار.");
+  const trips = table("invoice_trips").filter((trip) => ids.includes(trip.id) && trip.invoice_id === invoice.id && trip.company_id === cid);
+  if (trips.length !== ids.length) return err("إحدى النقلات المختارة غير موجودة أو لا تنتمي إلى هذه الفاتورة.");
+  if (table("credit_note_trips").some((link) => ids.includes(link.trip_id) && link.company_id === cid)) {
+    return err("تم إصدار إشعار دائن مسبقاً لإحدى النقلات المختارة.");
+  }
+  const amount = Math.round(trips.reduce((sum, trip) => sum + Number(trip.price ?? 0), 0) * 100) / 100;
+  const noteId = nextId("credit_debit_notes");
+  const number = Math.max(0, ...table("credit_debit_notes").filter((row) => row.company_id === cid).map((row) => Number(row.number))) + 1;
+  table("credit_debit_notes").push({
+    id: noteId, company_id: cid, number, note_type: "credit", invoice_id: invoice.id,
+    customer_id: invoice.customer_id, date: args.p_date, amount, vat_rate: invoice.vat_rate,
+    reason: String(args.p_reason ?? "").trim(),
+  });
+  for (const trip of trips) {
+    table("credit_note_trips").push({
+      id: nextId("credit_note_trips"), company_id: cid, credit_note_id: noteId,
+      trip_id: trip.id, amount: Math.round(Number(trip.price) * 100) / 100,
+    });
+  }
+  return { data: noteId, error: null };
+}
+
 function purchaseInvoiceTotal(items: any[], vatIncluded: boolean): number {
   const total = items.reduce((sum, item) => {
     const gross = Number(item.qty) * Number(item.unit_price);
@@ -621,6 +685,7 @@ const rpc = async (fn: string, args?: any) => {
   }
   if (fn === "save_invoice") return rpcSaveInvoice(args);
   if (fn === "save_payroll") return rpcSavePayroll(args);
+  if (fn === "save_credit_note_for_trips_v16") return rpcSaveCreditNoteTripsV16(args);
   if (fn === "save_purchase_invoice_v14") return rpcSavePurchaseV14(args);
   if (fn === "delete_purchase_invoice_v14") return rpcDeletePurchaseV14(args);
   return { data: null, error: { message: `rpc ${fn} not mocked` } };

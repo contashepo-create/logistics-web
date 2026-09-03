@@ -452,6 +452,7 @@ export interface InvoiceListItem extends Invoice {
   vat_rate: number;
   vat_amount: number;
   trips_count: number;
+  trip_summaries: { id: number; route: string; container_numbers: string[] }[];
 }
 
 /**
@@ -475,10 +476,33 @@ export async function invoiceList(
   if (!invs.length) return [];
 
   const invIds = invs.map((i) => i.id);
-  const { data: tripRows } = await supabase.from("invoice_trips").select("id, invoice_id, price").in("invoice_id", invIds);
-  const trips = (tripRows ?? []) as { id: number; invoice_id: number; price: number }[];
+  const { data: tripRows } = await supabase.from("invoice_trips")
+    .select("id, invoice_id, from_loc, to_loc, price, container_numbers")
+    .in("invoice_id", invIds)
+    .order("id");
+  const trips = (tripRows ?? []) as {
+    id: number; invoice_id: number; from_loc?: string; to_loc?: string;
+    price: number; container_numbers?: string[];
+  }[];
   const tripIds = trips.map((t) => t.id);
   const invOfTrip = new Map(trips.map((t) => [t.id, t.invoice_id]));
+  const containersByInvoice = new Map<number, string[]>();
+  const tripSummariesByInvoice = new Map<number, { id: number; route: string; container_numbers: string[] }[]>();
+  for (const trip of trips) {
+    const containers = Array.isArray(trip.container_numbers) ? trip.container_numbers.filter(Boolean) : [];
+    const summaries = tripSummariesByInvoice.get(trip.invoice_id) ?? [];
+    summaries.push({
+      id: trip.id,
+      route: `${trip.from_loc || "—"} ← ${trip.to_loc || "—"}`,
+      container_numbers: containers,
+    });
+    tripSummariesByInvoice.set(trip.invoice_id, summaries);
+    if (containers.length) {
+      const current = containersByInvoice.get(trip.invoice_id) ?? [];
+      current.push(...containers);
+      containersByInvoice.set(trip.invoice_id, current);
+    }
+  }
 
   let exps: { trip_id: number; amount: number; source?: string }[] = [];
   let pays: { trip_id: number; amount: number }[] = [];
@@ -512,11 +536,14 @@ export async function invoiceList(
   return invs.map((inv) => {
     const b = agg.get(inv.id) ?? { trips: 0, billable: 0, cost: 0, later: 0, count: 0 };
     const cust = custMap.get(inv.customer_id);
+    const tripContainers = containersByInvoice.get(inv.id) ?? [];
     return {
       ...inv,
+      container_number: tripContainers.length ? tripContainers.join("، ") : inv.container_number,
       customer_name: cust?.name ?? "—",
       customer_code: cust?.code ?? "—",
       trips_count: b.count,
+      trip_summaries: tripSummariesByInvoice.get(inv.id) ?? [],
       ...totalsFrom(num(inv.vat_rate), b.trips, b.billable, b.cost, b.later),
     };
   });
@@ -585,6 +612,7 @@ export async function getInvoiceFull(invoiceId: number): Promise<InvoiceFull | n
   const empMap = new Map(((empRes.data ?? []) as { id: number; name: string }[]).map((e) => [e.id, e.name]));
   const tripList: InvoiceTrip[] = trips.map((t) => ({
     ...t,
+    container_numbers: Array.isArray(t.container_numbers) ? t.container_numbers : [],
     vehicle_name: vehMap.get(t.vehicle_id ?? 0) ?? null,
     driver_name: empMap.get(t.driver_id ?? 0) ?? null,
     expenses: expByTrip.get(t.id) ?? [],
@@ -604,6 +632,11 @@ export async function getInvoiceFull(invoiceId: number): Promise<InvoiceFull | n
     customer_name: cust?.name ?? "—",
     customer_code: cust?.code ?? "—",
     trips_count: tripList.length,
+    trip_summaries: tripList.map((trip) => ({
+      id: Number(trip.id),
+      route: `${trip.from_loc || "—"} ← ${trip.to_loc || "—"}`,
+      container_numbers: trip.container_numbers,
+    })),
     ...totals,
   };
 }

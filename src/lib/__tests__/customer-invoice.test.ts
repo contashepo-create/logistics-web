@@ -27,6 +27,7 @@ async function seed() {
     date: "2026-03-01", customer_id: cust, notes: "الدفع خلال ٣٠ يوماً", container_number: "MSCU9876543", attachments: [],
     trips: [{
       driver_id: drv, from_loc: "المنصورة", to_loc: "الإسكندرية", qty: 3, unit_price: 1500, notes: "حمولة أسمنت",
+      container_numbers: ["TCLU1112223", "OOLU4445556", "MAEU7778889"],
       expenses: [
         { expense_type: "card", qty: 3, unit_amount: 120, source: "cash", account_kind: "cashbox", account_id: cb, notes: "كارتة" },
         { expense_type: "fuel", qty: 1, unit_amount: 800, source: "driver", notes: "سولار" },
@@ -59,10 +60,14 @@ describe("فاتورة العميل المطبوعة", () => {
     expect(html).not.toContain("Tel:");
   });
 
-  it("تعرض بند النقل بالعدد وسعر الوحدة والإجمالي", () => {
+  it("تعرض بند النقل بالعدد وسعر الوحدة والإجمالي وأرقام حاوياته", () => {
     expect(html).toContain("المنصورة ← الإسكندرية");
     expect(html).toContain("1,500.00"); // سعر النقلة الواحدة
     expect(html).toContain("4,500.00"); // 3 × 1500
+    expect(html).toContain("الحاويات:");
+    expect(html).toContain("TCLU1112223");
+    expect(html).toContain("OOLU4445556");
+    expect(html).toContain("MAEU7778889");
   });
 
   it("تعرض البند الذي يتحمّله العميل فقط دون أي مصروف داخلي", () => {

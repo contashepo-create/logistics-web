@@ -937,6 +937,16 @@ table.data-table thead th { position: sticky; top: 0; z-index: 1; }
 .check-row:hover { border-color: var(--primary-light); }
 .check-row input { width: 18px; height: 18px; accent-color: var(--primary); cursor: pointer; flex: none; }
 
+/* اختيار النقلات المرتجعة داخل الإشعار الدائن */
+.credit-trip-table input[type="checkbox"] {
+  width: 18px; height: 18px; accent-color: var(--primary); cursor: pointer;
+}
+.credit-trip-table th:first-child,
+.credit-trip-table td:first-child { width: 44px; text-align: center; }
+.credit-trip-table .credit-trip-returned { opacity: .62; background: var(--surface-3); }
+.credit-trip-table .credit-trip-returned input { cursor: not-allowed; }
+.credit-trip-table tfoot td { background: var(--primary-glow); color: var(--text); font-weight: 700; }
+
 /* رأس الصفحة وأدواتها — يتكيّف مع كل المقاسات */
 .page-head { display: flex; justify-content: space-between; align-items: flex-start; gap: 12px; flex-wrap: wrap; }
 .page-tools { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
@@ -1013,6 +1023,39 @@ table.data-table thead th { position: sticky; top: 0; z-index: 1; }
   background: var(--surface-2); border: 1px dashed var(--border);
   border-radius: 10px; padding: 10px;
 }
+.inv-container-head-hint {
+  min-height: 64px; padding: 9px 12px; border: 1px dashed var(--primary-light);
+  border-radius: 10px; background: var(--primary-glow); display: flex;
+  flex-direction: column; justify-content: center; gap: 3px;
+}
+.inv-container-head-hint strong { color: var(--primary-dark); font-size: 13px; }
+.inv-container-head-hint span { color: var(--muted); font-size: 11.5px; line-height: 1.5; }
+.trip-containers-box {
+  border: 1px solid color-mix(in srgb, var(--primary) 24%, var(--border));
+  border-radius: 11px; padding: 11px; background: color-mix(in srgb, var(--primary-glow) 48%, var(--card));
+}
+.trip-containers-head { display: flex; align-items: center; justify-content: space-between; gap: 10px; flex-wrap: wrap; }
+.trip-containers-head > div { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.trip-containers-head strong { color: var(--text); font-size: 13.5px; }
+.trip-containers-count {
+  padding: 2px 8px; border-radius: 20px; background: var(--card); border: 1px solid var(--border);
+  color: var(--primary-dark); font-size: 11.5px; font-weight: 800;
+}
+.trip-containers-grid {
+  display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  gap: 9px; margin-top: 10px;
+}
+.trip-container-input label { display: block; color: var(--muted); font-size: 11px; font-weight: 700; margin-bottom: 4px; }
+.trip-container-input > div { display: flex; align-items: stretch; direction: ltr; }
+.trip-container-input .input { border-radius: 0 8px 8px 0; min-width: 0; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
+.trip-container-remove {
+  width: 36px; flex: 0 0 36px; border: 1px solid var(--border); border-right: 0;
+  border-radius: 8px 0 0 8px; background: var(--card); color: var(--danger);
+  font-size: 21px; line-height: 1; cursor: pointer;
+}
+.trip-container-remove:hover { background: var(--danger-light); border-color: var(--danger); }
+.trip-container-remove:focus-visible { outline: 2px solid var(--danger); outline-offset: 1px; }
+.trip-containers-empty { margin: 8px 0 0; color: var(--muted); font-size: 11.5px; }
 
 /* ملخص النقلة (إيراد/تكلفة/صافي) */
 .trip-summary { display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; }
@@ -1092,6 +1135,8 @@ table.data-table thead th { position: sticky; top: 0; z-index: 1; }
   .inv-head-card { grid-template-columns: 1fr; }
   .trip-grid-4 { grid-template-columns: 1fr 1fr; }
   .trip-price-box { grid-template-columns: 1fr 1fr; }
+  .trip-containers-grid { grid-template-columns: 1fr; }
+  .trip-containers-head .btn { width: 100%; }
   .trip-summary { grid-template-columns: 1fr; }
   .exp-grid, .exp-grid-2 { grid-template-columns: 1fr 1fr !important; }
   .exp-grid > button { grid-column: span 2; }
@@ -1242,6 +1287,19 @@ table.data-table thead th { position: sticky; top: 0; z-index: 1; }
 .cell-danger { color: #b91c1c; font-weight: 700; }
 [data-theme="dark"] .cell-danger { color: #fca5a5; }
 
+/* النقلات والحاويات في قائمة الفواتير */
+.invoice-list-trips { display: grid; gap: 6px; min-width: 230px; text-align: start; }
+.invoice-list-trip { display: grid; gap: 2px; padding-bottom: 5px; border-bottom: 1px dashed var(--border); }
+.invoice-list-trip:last-child { padding-bottom: 0; border-bottom: 0; }
+.invoice-list-trip > span { color: var(--text); font-size: 11.5px; font-weight: 700; }
+.invoice-list-trip > b {
+  width: fit-content; color: var(--primary-dark); font: 700 10.5px ui-monospace, monospace;
+  direction: ltr; text-align: start;
+}
+.invoice-list-trip > small { color: var(--muted); font-size: 10px; }
+.invoice-list-legacy-container { display: flex; align-items: center; gap: 6px; color: var(--muted); font-size: 10px; }
+.invoice-list-legacy-container b { color: var(--primary-dark); font-family: ui-monospace, monospace; }
+
 /* ===== معاينة الفاتورة الاحترافية ===== */
 .invoice-preview-card {
   --invoice-accent: #1d4ed8;
@@ -1297,6 +1355,12 @@ table.data-table thead th { position: sticky; top: 0; z-index: 1; }
 .invoice-preview-table td { padding: 13px 10px; border-bottom: 1px solid var(--border); text-align: center; color: var(--text-soft); }
 .invoice-preview-table td:nth-child(2) { text-align: start; color: var(--text); }
 .invoice-preview-table td small { display: block; margin-top: 3px; color: var(--muted); font-size: 10.5px; }
+.invoice-line-containers { display: flex; align-items: center; gap: 5px; flex-wrap: wrap; margin-top: 6px; }
+.invoice-line-containers span { color: var(--muted); font-size: 10.5px; }
+.invoice-line-containers b {
+  padding: 2px 6px; border: 1px solid var(--border); border-radius: 5px;
+  background: var(--surface-2); color: var(--primary-dark); font: 700 10.5px ui-monospace, monospace;
+}
 .invoice-preview-bottom { display: grid; grid-template-columns: minmax(0, 1fr) minmax(310px, 390px); gap: 28px; align-items: start; padding: 18px 22px 24px; }
 .invoice-preview-note { padding: 13px 15px; border: 1px solid var(--border); border-radius: 12px; background: var(--surface-2); }
 .invoice-preview-note span { display: block; color: var(--muted); font-size: 11px; font-weight: 700; }

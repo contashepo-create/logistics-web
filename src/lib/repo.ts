@@ -31,6 +31,7 @@ import type {
   Bank,
   Cashbox,
   CreditDebitNote,
+  CreditableInvoiceTrip,
   Customer,
   Employee,
   FinancialYear,
@@ -283,9 +284,8 @@ export async function saveCreditDebitNote(data: Record<string, any>): Promise<nu
   if (data.note_type !== "credit" && data.note_type !== "debit") throw new RuleError("نوع الإشعار غير صالح.");
   const invoiceId = positiveId(data.invoice_id, "الفاتورة");
   const customerId = positiveId(data.customer_id, "العميل");
-  const amount = roundMoney(data.amount);
-  ensurePositive(amount, "مبلغ الإشعار");
-  if (!String(data.reason ?? "").trim()) throw new RuleError("سبب الإشعار إلزامي للمراجعة المحاسبية.");
+  const reason = txt(data.reason ?? "", "سبب الإشعار");
+  if (!reason.trim()) throw new RuleError("سبب الإشعار إلزامي للمراجعة المحاسبية.");
   const noteDate = safeIsoDate(data.date, "تاريخ الإشعار");
   const { data: inv } = await supabase
     .from("invoices")
@@ -299,19 +299,86 @@ export async function saveCreditDebitNote(data: Record<string, any>): Promise<nu
   if (noteDate < String(inv.date)) {
     throw new RuleError("تاريخ الإشعار لا يجوز أن يسبق تاريخ الفاتورة.");
   }
+
+  // مرتجع نقلة: لا نثق في مبلغ أو ضريبة من الواجهة. RPC تقرأ أسعار النقلات
+  // وضريبة الفاتورة وتُنشئ الإشعار وروابطه داخل معاملة واحدة.
+  if (data.note_type === "credit" && data.trip_ids !== undefined) {
+    if (!Array.isArray(data.trip_ids) || data.trip_ids.length === 0) {
+      throw new RuleError("اختر نقلة واحدة على الأقل لإصدار الإشعار الدائن.");
+    }
+    const tripIds = data.trip_ids.map((id: unknown) => positiveId(id, "النقلة"));
+    if (new Set(tripIds).size !== tripIds.length) throw new RuleError("قائمة النقلات المختارة تحتوي على تكرار.");
+    await ensureDateInOpenYear(noteDate);
+    const { data: savedId, error } = await supabase.rpc("save_credit_note_for_trips_v16", {
+      p_invoice_id: invoiceId,
+      p_date: noteDate,
+      p_reason: reason,
+      p_trip_ids: tripIds,
+    });
+    if (error) throw new RuleError(translateDbError(error.message));
+    return Number(savedId);
+  }
+
+  // الإشعارات اليدوية القديمة والإشعار المدين يظلان متوافقين كما كانا.
+  const amount = roundMoney(data.amount);
+  ensurePositive(amount, "مبلغ الإشعار");
   const vat = boundedNumber(data.vat_rate ?? 15, "نسبة الضريبة", 0, 100);
-  await ensureDateInOpenYear(noteDate);
+  const companyId = await ensureDateInOpenYear(noteDate);
   const row = {
+    company_id: companyId,
     note_type: data.note_type,
     invoice_id: invoiceId,
     customer_id: customerId,
     date: noteDate,
     amount,
     vat_rate: vat,
-    reason: txt(data.reason ?? "", "سبب الإشعار"),
+    reason,
   };
   const inserted = await insertNumbered<{ id: number }>("credit_debit_notes", row);
   return Number(inserted.id);
+}
+
+/** نقلات الفاتورة وقيمة كل نقلة وضريبتها وحالة إصدار مرتجع سابق لها. */
+export async function listCreditableInvoiceTrips(invoiceId: number): Promise<CreditableInvoiceTrip[]> {
+  const cleanInvoiceId = positiveId(invoiceId, "الفاتورة");
+  const [{ data: inv, error: invError }, { data: trips, error: tripsError }] = await Promise.all([
+    supabase.from("invoices").select("id, vat_rate").eq("id", cleanInvoiceId).maybeSingle(),
+    supabase.from("invoice_trips")
+      .select("id, from_loc, to_loc, qty, unit_price, price")
+      .eq("invoice_id", cleanInvoiceId)
+      .order("id"),
+  ]);
+  if (invError) throw new RuleError(translateDbError(invError.message));
+  if (tripsError) throw new RuleError(translateDbError(tripsError.message));
+  if (!inv) throw new RuleError("الفاتورة المرتبطة غير موجودة.");
+
+  const tripIds = (trips ?? []).map((trip) => Number(trip.id));
+  let creditedIds = new Set<number>();
+  if (tripIds.length) {
+    const { data: links, error } = await supabase
+      .from("credit_note_trips")
+      .select("trip_id")
+      .in("trip_id", tripIds);
+    if (error) throw new RuleError(translateDbError(error.message));
+    creditedIds = new Set((links ?? []).map((link) => Number(link.trip_id)));
+  }
+
+  const vatRate = Number(inv.vat_rate ?? 0);
+  return (trips ?? []).map((trip) => {
+    const amount = roundMoney(trip.price);
+    const vatAmount = roundMoney((amount * vatRate) / 100);
+    return {
+      id: Number(trip.id),
+      from_loc: String(trip.from_loc ?? ""),
+      to_loc: String(trip.to_loc ?? ""),
+      qty: Number(trip.qty ?? 1),
+      unit_price: Number(trip.unit_price ?? amount),
+      amount,
+      vat_amount: vatAmount,
+      total: roundMoney(amount + vatAmount),
+      already_credited: creditedIds.has(Number(trip.id)),
+    };
+  });
 }
 
 export async function listCreditDebitNotes(
@@ -346,13 +413,48 @@ export async function listCreditDebitNotesForInvoice(invoiceId: number): Promise
     .order("date", { ascending: false })
     .order("number", { ascending: false });
   if (error) throw new RuleError(translateDbError(error.message));
-  return (data ?? []).map((n: any) => ({
+  const notes: CreditDebitNote[] = (data ?? []).map((n: any) => ({
     ...n,
     invoice_number: Array.isArray(n.invoices) ? (n.invoices[0] as any)?.number : (n.invoices as any)?.number,
     customer_name: Array.isArray(n.customers) ? (n.customers[0] as any)?.name : (n.customers as any)?.name,
     customer_code: Array.isArray(n.customers) ? (n.customers[0] as any)?.code : (n.customers as any)?.code,
     total: roundMoney(num(n.amount) + roundMoney((num(n.amount) * num(n.vat_rate)) / 100)),
   }));
+
+  const noteIds = notes.filter((note) => note.note_type === "credit").map((note) => note.id);
+  if (!noteIds.length) return notes;
+  const { data: links, error: linksError } = await supabase
+    .from("credit_note_trips")
+    .select("credit_note_id, trip_id")
+    .in("credit_note_id", noteIds);
+  if (linksError) throw new RuleError(translateDbError(linksError.message));
+  const tripIds = [...new Set((links ?? []).map((link) => Number(link.trip_id)))];
+  const tripLabels = new Map<number, string>();
+  if (tripIds.length) {
+    const { data: trips, error: tripsError } = await supabase
+      .from("invoice_trips")
+      .select("id, from_loc, to_loc")
+      .in("id", tripIds);
+    if (tripsError) throw new RuleError(translateDbError(tripsError.message));
+    for (const trip of trips ?? []) {
+      tripLabels.set(Number(trip.id), `${trip.from_loc || "—"} ← ${trip.to_loc || "—"}`);
+    }
+  }
+  const idsByNote = new Map<number, number[]>();
+  for (const link of links ?? []) {
+    const noteId = Number(link.credit_note_id);
+    const ids = idsByNote.get(noteId) ?? [];
+    ids.push(Number(link.trip_id));
+    idsByNote.set(noteId, ids);
+  }
+  return notes.map((note) => {
+    const selectedTripIds = idsByNote.get(note.id) ?? [];
+    return {
+      ...note,
+      trip_ids: selectedTripIds,
+      trip_labels: selectedTripIds.map((id) => tripLabels.get(id) ?? `نقلة #${id}`),
+    };
+  });
 }
 
 export async function getCreditDebitNote(noteId: number): Promise<CreditDebitNote | null> {
@@ -866,9 +968,23 @@ export async function saveInvoice(data: Record<string, any>, invoiceId?: number 
       e.expense_type = e.expense_type ?? "other";
     }
   }
-  for (const t of trips) {
+  const seenContainerNumbers = new Set<string>();
+  for (const [tripIndex, t] of trips.entries()) {
     const qty = boundedNumber(t.qty ?? 1, "عدد النقلات", 1, 1_000_000, true);
     t.qty = qty;
+    const rawContainers = t.container_numbers ?? [];
+    if (!Array.isArray(rawContainers)) throw new RuleError(`أرقام حاويات النقلة ${tripIndex + 1} غير صالحة.`);
+    if (rawContainers.length > qty) {
+      throw new RuleError(`عدد أرقام الحاويات في النقلة ${tripIndex + 1} لا يجوز أن يتجاوز عدد النقلات (${qty}).`);
+    }
+    t.container_numbers = rawContainers.map((value: unknown, containerIndex: number) => {
+      const container = txt(value ?? "", `رقم الحاوية ${containerIndex + 1} في النقلة ${tripIndex + 1}`, 100).trim();
+      ensureNotBlank(container, `رقم الحاوية ${containerIndex + 1} في النقلة ${tripIndex + 1}`);
+      const key = container.toLocaleUpperCase("en-US");
+      if (seenContainerNumbers.has(key)) throw new RuleError(`رقم الحاوية «${container}» مكرر داخل الفاتورة.`);
+      seenContainerNumbers.add(key);
+      return container;
+    });
     t.unit_price = roundMoney(t.unit_price ?? (num(t.price) / qty));
     t.price = roundMoney(qty * t.unit_price);
     if (t.price <= 0) throw new RuleError("سعر النقلة يجب أن يكون أكبر من صفر.");
@@ -918,6 +1034,7 @@ export async function saveInvoice(data: Record<string, any>, invoiceId?: number 
     qty: t.qty ?? 1,
     unit_price: roundMoney(t.unit_price ?? 0),
     price: roundMoney(t.price ?? 0),
+    container_numbers: t.container_numbers ?? [],
     notes: t.notes ?? "",
     expenses: (t.expenses ?? []).map((e: any) => ({
       expense_type: e.expense_type,
@@ -1057,8 +1174,10 @@ export async function saveReceipt(data: Record<string, any>, voucherId?: number 
     if (error) throw new RuleError(translateDbError(error.message));
     return voucherId;
   }
-  await ensureDateInOpenYear(date);
-  const inserted = await insertNumbered<{ id: number }>("receipt_vouchers", row);
+  const companyId = await ensureDateInOpenYear(date);
+  // يُرسل company_id صراحةً كي يراه حارس السنة حتى على قواعد البيانات التي
+  // ما زالت ترتب trg_open_year_receipts قبل trg_set_company_id.
+  const inserted = await insertNumbered<{ id: number }>("receipt_vouchers", { ...row, company_id: companyId });
   return inserted.id;
 }
 
@@ -1232,9 +1351,11 @@ export async function savePayment(data: Record<string, any>, voucherId?: number 
     if (error) throw new RuleError(translateDbError(error.message));
     return voucherId;
   }
-  await ensureDateInOpenYear(date);
+  const companyId = await ensureDateInOpenYear(date);
   await ensureSufficientFunds(row.account_kind, row.account_id, row.amount);
-  const inserted = await insertNumbered<{ id: number }>("payment_vouchers", row);
+  // يُرسل company_id صراحةً كي يراه حارس السنة حتى على قواعد البيانات التي
+  // ما زالت ترتب trg_open_year_payments قبل trg_set_company_id.
+  const inserted = await insertNumbered<{ id: number }>("payment_vouchers", { ...row, company_id: companyId });
   return inserted.id;
 }
 

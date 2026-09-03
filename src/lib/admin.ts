@@ -10,8 +10,10 @@ import type { FeatureKey } from "./features";
 
 /** شركة مع بيانات مالكها (للوحة المطوّر). */
 export interface CompanyRow extends Company {
+  owner_id: string;
   owner_name: string;
   owner_email: string;
+  owner_phone: string;
 }
 
 /** قائمة كل الشركات مع أصحابها (للمطوّر فقط). */
@@ -32,8 +34,10 @@ export async function listCompanies(): Promise<CompanyRow[]> {
     const owner = ownerMap.get(c.id);
     return {
       ...c,
+      owner_id: owner?.id ?? "",
       owner_name: owner?.name ?? "—",
       owner_email: owner?.email ?? "—",
+      owner_phone: owner?.phone ?? "",
     };
   });
 }
@@ -90,6 +94,42 @@ export async function reviewActivationRequest(id: string, approve: boolean, admi
 export async function deleteCompany(id: string): Promise<void> {
   const { error } = await supabase.rpc("admin_delete_company", { p_company_id: id });
   if (error) throw new Error(error.message);
+}
+
+/** تعديل بيانات الشركة ومزامنة بريد/هاتف وكلمة مرور حساب المالك عبر Auth Admin. */
+export async function updateCompanyIdentity(input: {
+  companyId: string;
+  name: string;
+  phone: string;
+  email: string;
+  newPassword?: string;
+}): Promise<void> {
+  await authPostJson("/api/zerocold/companies", {
+    action: "update",
+    company_id: input.companyId,
+    name: input.name,
+    phone: input.phone,
+    email: input.email,
+    new_password: input.newPassword ?? "",
+  });
+}
+
+/** تصفير بيانات العمل فقط؛ يتطلب اسم الشركة وكلمة مرور المطوّر. */
+export async function resetCompanyData(input: {
+  companyId: string;
+  confirmName: string;
+  developerPassword: string;
+}): Promise<{ deleted_rows: number; new_financial_year: number }> {
+  const out = await authPostJson<{
+    success: true;
+    result: { deleted_rows: number; new_financial_year: number };
+  }>("/api/zerocold/companies", {
+    action: "reset",
+    company_id: input.companyId,
+    confirm_name: input.confirmName,
+    developer_password: input.developerPassword,
+  });
+  return out.result;
 }
 
 export interface CompanyUserRow {
@@ -176,44 +216,117 @@ export interface ActivityLog {
   created_at: string;
 }
 
-/** قراءة سجل النشاط (آخر 1000 حدث). */
+/** قراءة أفعال حساب المطوّر الحالي فقط (الدفاع مزدوج: فلتر + سياسة RLS). */
 export async function listActivityLogs(): Promise<ActivityLog[]> {
+  const { data: authData, error: authError } = await supabase.auth.getUser();
+  if (authError) throw new Error(authError.message);
+  if (!authData.user) return [];
   const { data, error } = await supabase
     .from("activity_logs")
     .select("*")
+    .eq("actor_id", authData.user.id)
     .order("created_at", { ascending: false })
     .limit(1000);
   if (error) throw new Error(error.message);
   return (data ?? []) as ActivityLog[];
 }
 
-/**
- * إحصاءات عامة لكل النظام (أرقام مجمّعة فقط).
- *
- * تمر عبر `admin_platform_stats()` — دالة SECURITY DEFINER محمية بفحص is_admin().
- * سابقاً كانت هذه الدالة تَعُدّ صفوف customers/invoices/... مباشرة من الجداول،
- * وهو ما كان ينجح فقط بسبب سياسة `admin_full_access` التي كانت تُسرّب بيانات
- * كل الشركات إلى حساب المطوّر (انظر supabase/fix_tenant_leak_v9.sql).
- * بعد إغلاق تلك الثغرة لم يعد للمطوّر وصول لصفوف بيانات العملاء — فقط أعداد
- * ومجاميع لا تكشف أي تفصيل تشغيلي.
- */
-export async function adminStats(): Promise<Record<string, number>> {
-  const { data, error } = await supabase.rpc("admin_platform_stats");
+/** مؤشرات تشغيل المنصة نفسها فقط؛ لا أرقام فواتير/عملاء ولا أي مبالغ. */
+export interface AdminPlatformStats {
+  companies: number;
+  active_companies: number;
+  suspended_companies: number;
+  trial_companies: number;
+  subscribed_companies: number;
+  expired_companies: number;
+  new_companies_today: number;
+  new_companies_30d: number;
+  owner_accounts: number;
+  additional_accounts: number;
+  pending_requests: number;
+  visitors: number;
+  visitors_today: number;
+  visitors_30d: number;
+  page_views: number;
+  last_visit_at: string | null;
+}
+
+export async function adminStats(): Promise<AdminPlatformStats> {
+  const { data, error } = await supabase.rpc("admin_platform_stats_v18");
   if (error) throw new Error(error.message);
   const s = (data ?? {}) as Record<string, unknown>;
-  const keys = [
-    "companies", "active_companies", "customers", "invoices", "trips",
-    "receipts", "payments", "payrolls",
-    "revenue", "collected", "spent", "salaries",
-  ];
-  return Object.fromEntries(keys.map((k) => [k, num(s[k])]));
+  const numericKeys = [
+    "companies", "active_companies", "suspended_companies", "trial_companies",
+    "subscribed_companies", "expired_companies", "new_companies_today",
+    "new_companies_30d", "owner_accounts", "additional_accounts", "pending_requests",
+    "visitors", "visitors_today", "visitors_30d", "page_views",
+  ] as const;
+  const out = Object.fromEntries(numericKeys.map((key) => [key, num(s[key])])) as Omit<AdminPlatformStats, "last_visit_at">;
+  return { ...out, last_visit_at: typeof s.last_visit_at === "string" ? s.last_visit_at : null };
+}
+
+export interface SiteVisitorRow {
+  ip_address: string;
+  browser: string;
+  operating_system: string;
+  device_type: string;
+  country: string;
+  region: string;
+  city: string;
+  first_path: string;
+  last_path: string;
+  referrer: string;
+  page_views: number;
+  first_seen: string;
+  last_seen: string;
+}
+
+export async function recentSiteVisitors(limit = 100): Promise<SiteVisitorRow[]> {
+  const { data, error } = await supabase.rpc("admin_recent_visitors_v18", { p_limit: limit });
+  if (error) throw new Error(error.message);
+  return ((data ?? []) as Array<Record<string, unknown>>).map((row) => ({
+    ip_address: String(row.ip_address ?? ""),
+    browser: String(row.browser ?? ""),
+    operating_system: String(row.operating_system ?? ""),
+    device_type: String(row.device_type ?? ""),
+    country: String(row.country ?? ""),
+    region: String(row.region ?? ""),
+    city: String(row.city ?? ""),
+    first_path: String(row.first_path ?? ""),
+    last_path: String(row.last_path ?? ""),
+    referrer: String(row.referrer ?? ""),
+    page_views: num(row.page_views),
+    first_seen: String(row.first_seen ?? ""),
+    last_seen: String(row.last_seen ?? ""),
+  }));
+}
+
+export interface DatabaseObjectHealth {
+  name: string;
+  exists: boolean;
+  rls_enabled?: boolean;
+  policy_count?: number;
+}
+
+export interface DatabaseHealth {
+  healthy: boolean;
+  checked_at: string;
+  database_time: string;
+  postgres_version: string;
+  tables: DatabaseObjectHealth[];
+  functions: DatabaseObjectHealth[];
+}
+
+/** فحص بنية الاتصال فقط؛ RPC لا تقرأ صفوف أعمال أي شركة. */
+export async function databaseHealth(): Promise<DatabaseHealth> {
+  const { data, error } = await supabase.rpc("admin_database_health_v18");
+  if (error) throw new Error(error.message);
+  return data as DatabaseHealth;
 }
 
 /**
- * ملاحظة خصوصية: لا توجد هنا (ولا في أي مكان بلوحة المطوّر) دالة تقرأ بيانات
- * العملاء التشغيلية — الفواتير والنقلات والسندات والأرصدة والرواتب.
- * لوحة المطوّر مقصورة على: بيانات الاشتراك، والمميزات، وحسابات الشركة التعريفية،
- * والسجل التجاري/الضريبي، والعنوان، وطلبات التفعيل، والرسائل والشكاوى.
- * لا تُقرأ الفواتير أو الحركات التشغيلية، والعزل مفروض أيضاً على مستوى RLS.
+ * ملاحظة خصوصية: لوحة المطوّر لا تقرأ بيانات العملاء التشغيلية — الفواتير
+ * والنقلات والسندات والأرصدة والرواتب. المعروض هو الاشتراك والهوية والمميزات
+ * وصحة المنصة والزوار، والعزل مفروض أيضاً بسياسات RLS.
  */
 
