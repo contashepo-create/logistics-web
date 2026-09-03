@@ -1,0 +1,72 @@
+/* لوحة المطوّر v18 — مؤشرات المنصة، التصفير، والتشخيص */
+.admin-page-heading { display: flex; align-items: flex-start; justify-content: space-between; gap: 18px; }
+.admin-heading-actions { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.admin-metric-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(205px, 1fr)); gap: 12px; margin-top: 18px; }
+.admin-metric-card { display: flex; align-items: center; gap: 13px; min-height: 112px; padding: 18px; border: 1px solid var(--border); border-radius: 16px; background: var(--card); box-shadow: var(--shadow-sm); }
+.admin-metric-icon { display: grid; place-items: center; width: 44px; height: 44px; flex: 0 0 44px; border-radius: 13px; background: color-mix(in srgb, var(--primary) 12%, var(--card)); font-size: 22px; }
+.admin-metric-label { color: var(--muted); font-size: 12.5px; font-weight: 600; }
+.admin-metric-value { margin-top: 2px; color: var(--text); font-size: 27px; font-weight: 800; line-height: 1.15; }
+.admin-metric-hint { margin-top: 3px; color: var(--muted); font-size: 11px; }
+.admin-section-card { margin-top: 18px; }
+.admin-section-head { display: flex; align-items: center; justify-content: space-between; gap: 14px; }
+.admin-section-head h2 { margin: 0 0 4px; font-size: 18px; }
+.admin-section-head p { margin: 0; color: var(--muted); font-size: 12.5px; }
+.privacy-pill { display: inline-flex; align-items: center; padding: 5px 10px; border: 1px solid color-mix(in srgb, var(--primary) 30%, var(--border)); border-radius: 999px; background: color-mix(in srgb, var(--primary) 8%, var(--card)); color: var(--primary); font-size: 11.5px; font-weight: 700; }
+.admin-info-note { padding: 10px 12px; border: 1px solid #bae6fd; border-radius: 10px; background: color-mix(in srgb, #e0f2fe 68%, var(--card)); color: #075985; font-size: 12.5px; line-height: 1.8; }
+.table-secondary { display: block; margin-top: 3px; color: var(--muted); font-size: 11px; }
+.mono-cell { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12px; }
+.empty-cell { padding: 24px !important; text-align: center; color: var(--muted); }
+.admin-form-grid { display: grid; gap: 14px; }
+.btn-reset { border-color: #f59e0b; background: color-mix(in srgb, #f59e0b 10%, var(--card)); color: #a16207; }
+.btn-reset:hover { background: color-mix(in srgb, #f59e0b 18%, var(--card)); }
+.reset-modal { max-width: 570px; border: 1px solid color-mix(in srgb, #dc2626 55%, var(--border)); }
+.reset-modal-head { color: #b91c1c; }
+.reset-warning { padding: 13px 15px; border: 1px solid #fecaca; border-radius: 12px; background: color-mix(in srgb, #fee2e2 70%, var(--card)); color: #991b1b; line-height: 1.8; }
+.reset-warning strong { display: block; margin-bottom: 4px; }
+.reset-warning p { margin: 5px 0 0; font-size: 12.5px; }
+.diagnostic-summary-grid { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 12px; margin-top: 18px; }
+.diagnostic-summary { display: flex; align-items: center; gap: 12px; min-height: 92px; padding: 15px; border: 1px solid var(--border); border-radius: 14px; background: var(--card); }
+.diagnostic-summary small { display: block; margin-bottom: 4px; color: var(--muted); }
+.diagnostic-summary strong { display: block; }
+.diagnostic-icon { display: grid; place-items: center; width: 36px; height: 36px; flex: 0 0 36px; border-radius: 50%; background: color-mix(in srgb, var(--muted) 12%, var(--card)); font-weight: 800; }
+.diagnostic-summary.is-good { border-color: #86efac; }
+.diagnostic-summary.is-good .diagnostic-icon { background: #dcfce7; color: #166534; }
+.diagnostic-summary.is-warn { border-color: #fcd34d; }
+.diagnostic-summary.is-warn .diagnostic-icon { background: #fef3c7; color: #92400e; }
+.diagnostic-summary.is-bad { border-color: #fca5a5; }
+.diagnostic-summary.is-bad .diagnostic-icon { background: #fee2e2; color: #991b1b; }
+.diagnostic-alert { margin-top: 16px; padding: 14px 16px; border-radius: 12px; line-height: 1.75; }
+.diagnostic-alert p { margin: 4px 0 0; font-size: 13px; }
+.diagnostic-alert.is-warn { border: 1px solid #fcd34d; background: color-mix(in srgb, #fef3c7 70%, var(--card)); color: #92400e; }
+.diagnostic-alert.is-bad { border: 1px solid #fca5a5; background: color-mix(in srgb, #fee2e2 70%, var(--card)); color: #991b1b; }
+.diagnostic-object-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(230px, 1fr)); gap: 9px; margin-top: 14px; }
+.diagnostic-object { padding: 11px 12px; border: 1px solid var(--border); border-radius: 10px; background: color-mix(in srgb, var(--card) 88%, var(--bg)); }
+.diagnostic-object.is-good { border-inline-start: 4px solid #22c55e; }
+.diagnostic-object.is-bad { border-inline-start: 4px solid #ef4444; }
+.diagnostic-object-title { display: flex; align-items: center; justify-content: space-between; gap: 8px; font-weight: 700; }
+.diagnostic-object.is-good .diagnostic-object-title span { color: #16a34a; }
+.diagnostic-object.is-bad .diagnostic-object-title span { color: #dc2626; }
+.diagnostic-object-meta { display: flex; flex-wrap: wrap; gap: 4px 9px; margin-top: 7px; color: var(--muted); font-size: 10.5px; }
+.diagnostic-function-list { display: grid; grid-template-columns: repeat(auto-fill, minmax(240px, 1fr)); gap: 8px; margin-top: 13px; }
+.diagnostic-function-list > div { display: flex; align-items: center; gap: 8px; padding: 9px 11px; border: 1px solid var(--border); border-radius: 9px; }
+.diagnostic-function-list .is-good span { color: #16a34a; }
+.diagnostic-function-list .is-bad span { color: #dc2626; }
+.diagnostic-footnote { margin-top: 12px; color: var(--muted); text-align: left; font-size: 11.5px; }
+
+@media (max-width: 900px) {
+  .diagnostic-summary-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+}
+@media (max-width: 620px) {
+  .admin-page-heading, .admin-section-head { align-items: stretch; flex-direction: column; }
+  .admin-heading-actions { width: 100%; }
+  .admin-heading-actions > * { flex: 1; justify-content: center; }
+  .admin-metric-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 9px; }
+  .admin-metric-card { min-height: 100px; padding: 13px; }
+  .admin-metric-icon { width: 36px; height: 36px; flex-basis: 36px; font-size: 18px; }
+  .admin-metric-value { font-size: 22px; }
+  .diagnostic-summary-grid { grid-template-columns: 1fr; }
+  .privacy-pill { align-self: flex-start; }
+}
+@media (max-width: 390px) {
+  .admin-metric-grid { grid-template-columns: 1fr; }
+}

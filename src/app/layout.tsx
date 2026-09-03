@@ -5,6 +5,7 @@ import "@fontsource/ibm-plex-sans-arabic/700.css";
 import "./globals.css";
 import { Providers } from "@/components/Providers";
 import { THEME_INIT_SCRIPT } from "@/components/ThemeToggle";
+import VisitorTracker from "@/components/VisitorTracker";
 
 export const metadata: Metadata = {
   title: "النظام المحاسبي المتكامل لشركة النقل",
@@ -30,6 +31,7 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
       </head>
       <body>
         <Providers>{children}</Providers>
+        <VisitorTracker />
       </body>
     </html>
   );

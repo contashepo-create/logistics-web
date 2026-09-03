@@ -50,6 +50,7 @@ declare
   v_cid uuid := public.auth_company_id(); v_new bigint; r record;
 begin
   if v_cid is null then raise exception 'لا توجد شركة مرتبطة بالحساب.'; end if;
+  if not public.is_company_active() then raise exception 'الوصول غير متاح: اشتراك منتهي أو شركة موقوفة.'; end if;
   if not exists(select 1 from financial_years where id=p_closed_year_id and company_id=v_cid and status='closed') then raise exception 'يجب إغلاق السنة السابقة أولاً.'; end if;
   if p_date_from > p_date_to or p_year <= 0 then raise exception 'بيانات السنة الجديدة غير صحيحة.'; end if;
   if exists(select 1 from financial_years where company_id=v_cid and year=p_year) then raise exception 'السنة الجديدة موجودة مسبقاً.'; end if;

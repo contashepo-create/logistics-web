@@ -10,6 +10,12 @@ const ACTION_LABELS: Record<string, string> = {
   "admin.deactivate_company": "إيقاف شركة",
   "admin.set_subscription": "تغيير الاشتراك",
   "admin.delete_company": "حذف شركة",
+  "admin.reset_company_data": "تصفير بيانات عمل شركة",
+  "admin.update_company_identity": "تعديل بيانات شركة وحساب مالكها",
+  "admin.create_additional_user": "إنشاء مستخدم إضافي",
+  "admin.activate_additional_user": "تفعيل مستخدم إضافي",
+  "admin.deactivate_additional_user": "إيقاف مستخدم إضافي",
+  "admin.delete_additional_user": "حذف مستخدم إضافي",
 };
 
 export default function AdminLogsPage() {
@@ -21,8 +27,8 @@ export default function AdminLogsPage() {
 
   return (
     <div>
-      <h1 className="page-title">سجل النشاط</h1>
-      <p className="page-sub">التسجيلات وإجراءات المطوّر (آخر 1000 حدث)</p>
+      <h1 className="page-title">سجل نشاط المطوّر</h1>
+      <p className="page-sub">إجراءات حساب المطوّر الحالي فقط (آخر 1000 حدث) — لا تظهر أنشطة مستخدمي الشركات</p>
 
       {!logs ? (
         <div style={{ padding: 30, textAlign: "center", color: "var(--muted)" }}>جارٍ التحميل…</div>

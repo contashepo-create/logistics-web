@@ -47,6 +47,7 @@ export default function InvoiceViewPage() {
       key: `trip-${trip.id}`,
       description: `خدمة نقل: ${trip.from_loc || "—"} ← ${trip.to_loc || "—"}`,
       detail: [trip.vehicle_name, trip.notes].filter(Boolean).join(" • "),
+      containers: trip.container_numbers ?? [],
       quantity: Number(trip.qty ?? 1),
       unitAmount: Number(trip.unit_price || (trip.qty ? trip.price / trip.qty : trip.price)),
       total: Number(trip.price),
@@ -57,6 +58,7 @@ export default function InvoiceViewPage() {
         key: `billable-${trip.id}-${expense.id ?? index}`,
         description: expense.notes || EXPENSE_TYPES[expense.expense_type] || "بند إضافي",
         detail: `${trip.from_loc || "—"} ← ${trip.to_loc || "—"}`,
+        containers: [] as string[],
         quantity: Number(expense.qty ?? 1),
         unitAmount: Number(expense.unit_amount || expense.amount),
         total: Number(expense.amount),
@@ -115,7 +117,16 @@ export default function InvoiceViewPage() {
               {invoiceLines.map((line, index) => (
                 <tr key={line.key}>
                   <td>{index + 1}</td>
-                  <td><strong>{line.description}</strong>{line.detail && <small>{line.detail}</small>}</td>
+                  <td>
+                    <strong>{line.description}</strong>
+                    {line.detail && <small>{line.detail}</small>}
+                    {line.containers.length > 0 && (
+                      <div className="invoice-line-containers" aria-label="أرقام حاويات النقلة">
+                        <span>الحاويات:</span>
+                        {line.containers.map((container) => <b dir="ltr" key={container}>{container}</b>)}
+                      </div>
+                    )}
+                  </td>
                   <td>{line.quantity}</td>
                   <td>{money(line.unitAmount)}</td>
                   <td><strong>{money(line.total)}</strong></td>
@@ -156,14 +167,23 @@ export default function InvoiceViewPage() {
           <div><span>التصحيحات النظامية</span><h3>الإشعارات المدينة والدائنة</h3></div>
           {notesRows.length > 0 && <small>الصافي بعد الإشعارات: {money(inv.customer_total + debitNotes - creditNotes)}</small>}
         </div>
+        {notesRows.length > 0 && (
+          <div className="invoice-internal-grid" style={{ marginBottom: 14 }}>
+            <div><span>قيمة الفاتورة الأصلية</span><b>{money(inv.customer_total)}</b></div>
+            <div><span>إجمالي الإشعارات المدينة</span><b className="invoice-note-debit">+{money(debitNotes)}</b></div>
+            <div><span>إجمالي الإشعارات الدائنة</span><b className="invoice-note-credit">−{money(creditNotes)}</b></div>
+            <div><span>صافي الفاتورة بعد الإشعارات</span><b>{money(inv.customer_total + debitNotes - creditNotes)}</b></div>
+          </div>
+        )}
         {notesRows.length ? (
           <div className="table-wrap">
             <table className="data-table">
-              <thead><tr><th>الإشعار</th><th>التاريخ</th><th>السبب</th><th>الأثر</th></tr></thead>
+              <thead><tr><th>الإشعار</th><th>التاريخ</th><th>النقلات المرتجعة</th><th>السبب</th><th>الأثر شامل الضريبة</th></tr></thead>
               <tbody>{notesRows.map((note) => (
                 <tr key={note.id}>
                   <td><b>{note.label}</b></td>
                   <td>{note.date}</td>
+                  <td>{note.trip_labels?.length ? note.trip_labels.join("، ") : "—"}</td>
                   <td>{note.reason || "—"}</td>
                   <td className={note.note_type === "debit" ? "invoice-note-debit" : "invoice-note-credit"}>
                     {note.note_type === "debit" ? "+" : "−"}{money(note.total ?? 0)}

@@ -14,6 +14,7 @@ const model: InvoiceTemplateModel = {
   lines: [{
     description: "خدمة نقل: الرياض ← جدة",
     detail: "حاوية",
+    containerNumbers: ["TCLU1112223", "OOLU4445556"],
     quantity: 2,
     unitAmount: 1000,
     taxableAmount: 2000,
@@ -45,6 +46,9 @@ describe("هياكل قوالب الفاتورة المكيّفة من pro-acc",
       expect(html).toContain(`data-invoice-template=\"${template.id}\"`);
       expect(html).toContain("INV-00042");
       expect(html).toContain("الرياض ← جدة");
+      expect(html).toContain("الحاويات:");
+      expect(html).toContain("TCLU1112223");
+      expect(html).toContain("OOLU4445556");
       expect(html).toContain("300.00");
       expect(html).toContain("2,300.00");
     });

@@ -1,5 +1,6 @@
 "use client";
 
+import "../admin-platform.css";
 import { useEffect, useState } from "react";
 import { useRouter, usePathname } from "next/navigation";
 import Link from "next/link";
@@ -90,7 +91,8 @@ export default function AdminLayout({ children }: { children: React.ReactNode })
           <Link href="/zerocold/features" className={`nav-item ${pathname.startsWith("/zerocold/features") ? "active" : ""}`}>مميزات إضافية</Link>
           <Link href="/zerocold/messages" className={`nav-item ${pathname.startsWith("/zerocold/messages") ? "active" : ""}`}>رسائل العملاء</Link>
           <Link href="/zerocold/complaints" className={`nav-item ${pathname.startsWith("/zerocold/complaints") ? "active" : ""}`}>الشكاوى</Link>
-          <Link href="/zerocold/logs" className={`nav-item ${pathname.startsWith("/zerocold/logs") ? "active" : ""}`}>سجل النشاط</Link>
+          <Link href="/zerocold/logs" className={`nav-item ${pathname.startsWith("/zerocold/logs") ? "active" : ""}`}>سجل نشاط المطوّر</Link>
+          <Link href="/zerocold/diagnostics" className={`nav-item ${pathname.startsWith("/zerocold/diagnostics") ? "active" : ""}`}>صحة Supabase</Link>
           <Link href="/zerocold/settings" className={`nav-item ${pathname.startsWith("/zerocold/settings") ? "active" : ""}`}>بيانات المطوّر والتطبيق</Link>
           <div className="nav-section-title">العودة</div>
           <Link href="/customers" className="nav-item">↩ العودة للتطبيق</Link>

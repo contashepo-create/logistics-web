@@ -30,35 +30,27 @@ export async function POST(req: NextRequest) {
   if (!token) return bad("انتهت جلسة الدخول.", 401);
   const sb = userClient(token);
 
-  const { data: company, error: companyError } = await sb
-    .from("companies").select("id").eq("id", companyId).maybeSingle();
-  if (companyError) return bad(companyError.message, 500);
-  if (!company) return bad("الشركة غير موجودة.", 404);
-
   const action = String(body.action ?? "get");
   if (action === "get") {
-    const [featureResult, userResult] = await Promise.all([
-      sb.from("company_features").select("feature_key, enabled").eq("company_id", companyId),
-      sb.from("profiles").select("id, company_id, name, email, phone, role, is_active, created_at")
-        .eq("company_id", companyId).order("created_at", { ascending: true }),
-    ]);
-    if (featureResult.error) return bad(featureResult.error.message, 500);
-    if (userResult.error) return bad(userResult.error.message, 500);
+    // SECURITY DEFINER RPC تتحقق من is_admin() داخلياً؛ لا توجد قراءة مباشرة
+    // من companies/profiles، لذلك لا يظهر خطأ permission denied for companies.
+    const { data, error } = await sb.rpc("admin_get_company_extras_v18", {
+      p_company_id: companyId,
+    });
+    if (error) return bad(error.message, error.message.includes("غير موجودة") ? 404 : 500);
 
-    const features: Record<FeatureKey, boolean> = {
-      tax_invoice: false,
-      additional_user: false,
+    const snapshot = (data ?? {}) as {
+      features?: Record<string, boolean>;
+      users?: Array<Record<string, unknown>>;
     };
-    for (const row of featureResult.data ?? []) {
-      if ((FEATURE_KEYS as readonly string[]).includes(String(row.feature_key))) {
-        features[row.feature_key as FeatureKey] = row.enabled === true;
-      }
-    }
-
-    const users = (userResult.data ?? []).map((u) => ({
+    const features: Record<FeatureKey, boolean> = {
+      tax_invoice: snapshot.features?.tax_invoice === true,
+      additional_user: snapshot.features?.additional_user === true,
+    };
+    const users = (snapshot.users ?? []).map((u) => ({
       ...u,
       role: u.role === "additional" ? "additional" : "owner",
-      phone: u.phone ?? "",
+      phone: String(u.phone ?? ""),
       is_active: u.is_active !== false,
     }));
     return NextResponse.json({ success: true, features, users });

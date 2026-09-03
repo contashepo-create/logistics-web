@@ -34,7 +34,9 @@ do $$ begin
 end $$;
 
 -- السند الناتج عن الفاتورة النقدية حركة خزينة فقط؛ المصروف نفسه يُحتسب من
--- فاتورة المشتريات حتى لا يتكرر في الأرباح والخسائر.
+-- فاتورة المشتريات حتى لا يتكرر في الأرباح والخسائر. قواعد أقدم استخدمت
+-- اللاحقة _chk؛ حذف الاسمين يمنع بقاء قيد قديم يرفض النوع purchase.
+alter table public.payment_vouchers drop constraint if exists payment_vouchers_voucher_type_chk;
 alter table public.payment_vouchers drop constraint if exists payment_vouchers_voucher_type_check;
 alter table public.payment_vouchers add constraint payment_vouchers_voucher_type_check
   check (voucher_type in ('trip','advance','vehicle','general','supplier','owner','purchase'));
@@ -121,6 +123,7 @@ declare
   it jsonb;
 begin
   if v_cid is null then raise exception 'جلسة غير صالحة.'; end if;
+  if not public.is_company_active() then raise exception 'الوصول غير متاح: اشتراك منتهي أو شركة موقوفة.'; end if;
   if p_date is null or not exists(select 1 from public.financial_years y where y.company_id = v_cid and y.status = 'open' and p_date between y.date_from and y.date_to) then
     raise exception 'تاريخ الفاتورة خارج سنة مالية مفتوحة.';
   end if;
@@ -246,6 +249,8 @@ declare
   v_cid uuid := public.auth_company_id();
   v_date date;
 begin
+  if v_cid is null then raise exception 'جلسة غير صالحة.'; end if;
+  if not public.is_company_active() then raise exception 'الوصول غير متاح: اشتراك منتهي أو شركة موقوفة.'; end if;
   select p.date into v_date from public.purchase_invoices p where p.id = p_invoice_id and p.company_id = v_cid;
   if v_date is null then raise exception 'فاتورة المشتريات غير موجودة.'; end if;
   if not exists(select 1 from public.financial_years y where y.company_id = v_cid and y.status = 'open' and v_date between y.date_from and y.date_to) then

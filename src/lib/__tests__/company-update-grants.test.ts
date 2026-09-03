@@ -64,8 +64,9 @@ describe("ترجمة أخطاء قاعدة البيانات", () => {
     expect(msg).toMatch(/migration_fix_company_updates\.sql/);
   });
 
-  it("يعيد رسالة مناسبة عند نقص الأعمدة أو الدوال", () => {
+  it("يعيد رسالة مناسبة عند نقص الجداول أو الأعمدة أو الدوال", () => {
     expect(translateDbError('column "print_settings" of relation "companies" does not exist')).toMatch(/قاعدة البيانات غير محدّثة/);
+    expect(translateDbError('relation "credit_note_trips" does not exist')).toMatch(/قاعدة البيانات غير محدّثة/);
     expect(translateDbError("function register_company does not exist")).toMatch(/قاعدة البيانات غير محدّثة/);
   });
 });

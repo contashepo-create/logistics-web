@@ -92,7 +92,7 @@ export function dateInOpenYear(dateStr: string, years: FinancialYear[]): boolean
   return years.some((y) => y.date_from <= dateStr && y.date_to >= dateStr);
 }
 
-export async function ensureDateInOpenYear(dateStr: string): Promise<void> {
+export async function ensureDateInOpenYear(dateStr: string): Promise<string> {
   const years = await openYears();
   if (!dateInOpenYear(dateStr, years)) {
     throw new RuleError(
@@ -101,6 +101,17 @@ export async function ensureDateInOpenYear(dateStr: string): Promise<void> {
         "يرجى فتح سنة مالية تشمل هذا التاريخ أولاً (قسم السنوات المالية)."
     );
   }
+
+  // تحتاج الإدراجات المباشرة إلى company_id قبل تشغيل حارس السنة في قاعدة
+  // البيانات؛ فـ PostgreSQL يرتب مشغلات BEFORE المتساوية أبجدياً، وقد يعمل
+  // trg_open_year_* قبل trg_set_company_id. الصف المقروء هنا خاضع لـ RLS،
+  // وبالتالي لا يمكن أن يعيد إلا سنة الشركة الحالية.
+  const matchingYear = years.find((y) => y.date_from <= dateStr && y.date_to >= dateStr);
+  const companyId = matchingYear?.company_id?.trim();
+  if (!companyId) {
+    throw new RuleError("تعذر تحديد شركة السنة المالية المفتوحة. أعد تسجيل الدخول ثم حاول مجدداً.");
+  }
+  return companyId;
 }
 
 export async function ensureMovementEditable(

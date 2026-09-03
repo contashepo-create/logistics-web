@@ -27,12 +27,37 @@ export default function InvoicesPage() {
     placeholderData: keepPreviousData,
   });
 
-  const headers = ["رقم الفاتورة", "التاريخ", "رقم الحاوية", "العميل", "عدد النقلات", "إجمالي النقلات", "المصروفات المباشرة", "الربح المتوقع", "مصاريف لاحقة (سندات)", "الربح الفعلي"];
+  const headers = ["رقم الفاتورة", "التاريخ", "النقلات وأرقام الحاويات", "العميل", "عدد النقلات", "إجمالي النقلات", "المصروفات المباشرة", "الربح المتوقع", "مصاريف لاحقة (سندات)", "الربح الفعلي"];
   const rows = useMemo(
     () => (data ?? []).map((inv) => [
-      `INV-${String(inv.number).padStart(5, "0")}`, inv.date, inv.container_number || "—", inv.customer_name, String(inv.trips_count),
+      `INV-${String(inv.number).padStart(5, "0")}`,
+      inv.date,
+      <div className="invoice-list-trips" key={`trips-${inv.id}`}>
+        {inv.trip_summaries.map((trip, index) => (
+          <div className="invoice-list-trip" key={trip.id}>
+            <span>{index + 1}. {trip.route}</span>
+            {trip.container_numbers.length > 0
+              ? <b dir="ltr">{trip.container_numbers.join(" · ")}</b>
+              : <small>بدون رقم حاوية</small>}
+          </div>
+        ))}
+        {inv.trip_summaries.every((trip) => trip.container_numbers.length === 0) && inv.container_number && (
+          <div className="invoice-list-legacy-container"><span>رقم حاوية عام قديم</span><b dir="ltr">{inv.container_number}</b></div>
+        )}
+      </div>,
+      inv.customer_name,
+      String(inv.trips_count),
       money(inv.trips_total), money(inv.expenses_total), money(inv.expected_profit),
       money(inv.later_payments), money(inv.actual_profit),
+    ]),
+    [data]
+  );
+  const exportRows = useMemo(
+    () => (data ?? []).map((inv) => [
+      `INV-${String(inv.number).padStart(5, "0")}`, inv.date,
+      inv.trip_summaries.map((trip) => `${trip.route}: ${trip.container_numbers.join("، ") || "—"}`).join(" | "),
+      inv.customer_name, String(inv.trips_count), money(inv.trips_total), money(inv.expenses_total),
+      money(inv.expected_profit), money(inv.later_payments), money(inv.actual_profit),
     ]),
     [data]
   );
@@ -56,9 +81,9 @@ export default function InvoicesPage() {
         </FilterRow>
       }
       exportBar={<ExportBar
-        onExcel={() => exportPage({ title: "فواتير النقل", subtitle, headers, rows, mode: "excel" })}
-        onPdf={() => exportPage({ title: "فواتير النقل", subtitle, headers, rows, mode: "pdf" })}
-        onPrint={() => exportPage({ title: "فواتير النقل", subtitle, headers, rows, mode: "print" })} />}>
+        onExcel={() => exportPage({ title: "فواتير النقل", subtitle, headers, rows: exportRows, mode: "excel" })}
+        onPdf={() => exportPage({ title: "فواتير النقل", subtitle, headers, rows: exportRows, mode: "pdf" })}
+        onPrint={() => exportPage({ title: "فواتير النقل", subtitle, headers, rows: exportRows, mode: "print" })} />}>
       {isLoading ? <Spinner /> : (
         <>
           <DataTable actions={["view"]} headers={headers} rows={rows} ids={(data ?? []).map((i) => i.id)}

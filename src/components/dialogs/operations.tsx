@@ -375,11 +375,19 @@ export async function customerInvoiceHtml(invoiceId: number): Promise<{ html: st
     buyerName: buyer?.name, buyerVat, type: invType, date: inv.date,
   });
 
-  const toLine = (description: string, detail: string, quantity: number, unitAmount: number, taxableAmount: number): InvoiceTemplateLine => {
+  const toLine = (
+    description: string,
+    detail: string,
+    quantity: number,
+    unitAmount: number,
+    taxableAmount: number,
+    containerNumbers: string[] = [],
+  ): InvoiceTemplateLine => {
     const vatAmount = Math.round(taxableAmount * vatRate) / 100;
     return {
       description,
       detail,
+      containerNumbers,
       quantity,
       unitAmount,
       taxableAmount,
@@ -397,6 +405,7 @@ export async function customerInvoiceHtml(invoiceId: number): Promise<{ html: st
       Number(t.qty ?? 1),
       Number(t.unit_price || t.price) || 0,
       Number(t.price) || 0,
+      t.container_numbers ?? [],
     )),
     ...inv.trips.flatMap((t) => (t.expenses ?? [])
       .filter((e) => e.source === "customer")

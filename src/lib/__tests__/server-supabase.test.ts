@@ -2,20 +2,22 @@
 import { describe, it, expect, beforeEach, vi } from "vitest";
 
 // محاكاة createClient من @supabase/supabase-js (لأن requireUser/requireAdmin تستدعيانه)
-const { getUserMock, setSessionMock } = vi.hoisted(() => ({
+const { getUserMock, setSessionMock, signInWithPasswordMock } = vi.hoisted(() => ({
   getUserMock: vi.fn(),
   setSessionMock: vi.fn(),
+  signInWithPasswordMock: vi.fn(),
 }));
 vi.mock("@supabase/supabase-js", () => ({
   createClient: () => ({
     auth: {
       getUser: getUserMock,
       setSession: setSessionMock,
+      signInWithPassword: signInWithPasswordMock,
     },
   }),
 }));
 
-import { extractAccessToken, requireUser, requireAdmin, ADMIN_EMAIL } from "@/lib/server/supabase";
+import { extractAccessToken, requireUser, requireAdmin, verifyCurrentUserPassword, ADMIN_EMAIL } from "@/lib/server/supabase";
 
 function req(headers: Record<string, string> = {}): Request {
   return { headers: { get: (k: string) => headers[k.toLowerCase()] ?? null } } as unknown as Request;
@@ -24,6 +26,7 @@ function req(headers: Record<string, string> = {}): Request {
 beforeEach(() => {
   getUserMock.mockReset();
   setSessionMock.mockReset();
+  signInWithPasswordMock.mockReset();
   getUserMock.mockResolvedValue({ data: { user: null }, error: null });
 });
 
@@ -56,6 +59,21 @@ describe("requireUser", () => {
   it("يعيد null عند فشل التحقق", async () => {
     getUserMock.mockResolvedValue({ data: { user: null }, error: { message: "bad" } });
     expect(await requireUser(req({ authorization: "Bearer tok" }))).toBeNull();
+  });
+});
+
+describe("إعادة مصادقة كلمة المرور", () => {
+  it("تقبل فقط نجاح Auth لنفس بريد المطوّر", async () => {
+    signInWithPasswordMock.mockResolvedValue({
+      data: { user: { email: "CONTA.MOHA@gmail.com" } }, error: null,
+    });
+    expect(await verifyCurrentUserPassword("conta.moha@gmail.com", "Secret123")).toBe(true);
+    expect(signInWithPasswordMock).toHaveBeenCalledWith({
+      email: "conta.moha@gmail.com", password: "Secret123",
+    });
+
+    signInWithPasswordMock.mockResolvedValue({ data: { user: null }, error: { message: "bad" } });
+    expect(await verifyCurrentUserPassword("conta.moha@gmail.com", "wrong")).toBe(false);
   });
 });
 

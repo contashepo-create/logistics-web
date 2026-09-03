@@ -451,9 +451,16 @@ create trigger trg_guard_app_settings_json before insert or update of data on pu
 -- كل حركة مؤرخة يجب أن تقع داخل سنة مالية مفتوحة حتى عند استدعاء REST/RPC مباشرة.
 create or replace function public.guard_movement_open_year()
 returns trigger language plpgsql set search_path = public, pg_temp as $$
+declare
+  -- لا نعتمد على new.company_id هنا: PostgreSQL ينفذ مشغلات BEFORE المتساوية
+  -- حسب الاسم، ولذلك يعمل trg_open_year_* قبل trg_set_company_id عند الإدراج.
+  v_company_id uuid := public.auth_company_id();
 begin
+  if v_company_id is null then raise exception 'لا توجد شركة مرتبطة بحسابك.'; end if;
+  -- فرض شركة المستخدم هنا أيضاً يمنع الرفض الكاذب ويمنع تمرير شركة أخرى.
+  new.company_id := v_company_id;
   if new.date is null or new.date < date '1900-01-01' or new.date > date '2200-12-31' then raise exception 'تاريخ الحركة غير صالح.'; end if;
-  if not exists(select 1 from public.financial_years y where y.company_id = new.company_id and y.status = 'open' and new.date between y.date_from and y.date_to)
+  if not exists(select 1 from public.financial_years y where y.company_id = v_company_id and y.status = 'open' and new.date between y.date_from and y.date_to)
     then raise exception 'تاريخ الحركة خارج نطاق أي سنة مالية مفتوحة.'; end if;
   return new;
 end $$;
