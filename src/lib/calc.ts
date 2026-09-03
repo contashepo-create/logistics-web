@@ -454,6 +454,7 @@ export interface InvoiceListItem extends Invoice {
   vat_amount: number;
   trips_count: number;
   trip_summaries: { id: number; route: string; container_numbers: string[] }[];
+  has_credit_note?: boolean;
 }
 
 /**
@@ -507,19 +508,25 @@ export async function invoiceList(
 
   let exps: { trip_id: number; amount: number; source?: string }[] = [];
   let pays: { trip_id: number; amount: number }[] = [];
+  let notes: { invoice_id: number; note_type: string }[] = [];
   if (tripIds.length) {
-    const [expRes, payRes] = await Promise.all([
+    const [expRes, payRes, noteRes] = await Promise.all([
       supabase.from("trip_expenses").select("trip_id, amount, source").in("trip_id", tripIds),
       supabase.from("payment_vouchers").select("trip_id, amount").eq("voucher_type", "trip").is("source_expense_id", null).in("trip_id", tripIds),
+      supabase.from("credit_debit_notes").select("invoice_id, note_type").in("invoice_id", invIds),
     ]);
     exps = (expRes.data ?? []) as typeof exps;
     pays = (payRes.data ?? []) as typeof pays;
+    notes = (noteRes.data ?? []) as typeof notes;
+  } else if (invIds.length) {
+    const noteRes = await supabase.from("credit_debit_notes").select("invoice_id, note_type").in("invoice_id", invIds);
+    notes = (noteRes.data ?? []) as typeof notes;
   }
 
-  const agg = new Map<number, { trips: number; billable: number; cost: number; later: number; count: number }>();
+  const agg = new Map<number, { trips: number; billable: number; cost: number; later: number; count: number; has_credit: boolean }>();
   const bucket = (id: number) => {
     let b = agg.get(id);
-    if (!b) { b = { trips: 0, billable: 0, cost: 0, later: 0, count: 0 }; agg.set(id, b); }
+    if (!b) { b = { trips: 0, billable: 0, cost: 0, later: 0, count: 0, has_credit: false }; agg.set(id, b); }
     return b;
   };
   for (const t of trips) { const b = bucket(t.invoice_id); b.trips += num(t.price); b.count += 1; }
@@ -533,9 +540,12 @@ export async function invoiceList(
     const iid = invOfTrip.get(pmt.trip_id);
     if (iid != null) bucket(iid).later += num(pmt.amount);
   }
+  for (const n of notes) {
+    if (n.note_type === "credit") bucket(n.invoice_id).has_credit = true;
+  }
 
   return invs.map((inv) => {
-    const b = agg.get(inv.id) ?? { trips: 0, billable: 0, cost: 0, later: 0, count: 0 };
+    const b = agg.get(inv.id) ?? { trips: 0, billable: 0, cost: 0, later: 0, count: 0, has_credit: false };
     const cust = custMap.get(inv.customer_id);
     const tripContainers = containersByInvoice.get(inv.id) ?? [];
     return {
@@ -545,6 +555,7 @@ export async function invoiceList(
       customer_code: cust?.code ?? "—",
       trips_count: b.count,
       trip_summaries: tripSummariesByInvoice.get(inv.id) ?? [],
+      has_credit_note: b.has_credit,
       ...totalsFrom(num(inv.vat_rate), b.trips, b.billable, b.cost, b.later),
     };
   });

@@ -16,6 +16,7 @@ export function DataTable({
   ids,
   actions = ["view", "edit", "delete"],
   extra = [],
+  rowClasses = [],
   onAction,
   loading = false,
 }: {
@@ -24,6 +25,7 @@ export function DataTable({
   ids: (number | string)[];
   actions?: string[];
   extra?: RowAction[];
+  rowClasses?: string[];
   onAction?: (id: number | string, key: string) => void;
   loading?: boolean;
 }) {
@@ -51,7 +53,7 @@ export function DataTable({
         </thead>
         <tbody>
           {rows.map((row, r) => (
-            <tr key={r}>
+            <tr key={r} className={rowClasses[r] || undefined}>
               {row.map((cell, c) => (
                 <td key={c}>{cell}</td>
               ))}

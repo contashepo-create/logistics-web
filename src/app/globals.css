@@ -17,6 +17,8 @@
   --success: #059669;
   --success-light: #d1fae5;
   --warning: #d97706;
+  --warning-light: #fef3c7;
+  --warning-dark: #b45309;
   --text: #0f172a;
   --muted: #64748b;
   --sidebar-bg: #0b1220;
@@ -1292,6 +1294,20 @@ table.data-table thead th { position: sticky; top: 0; z-index: 1; }
 .invoices-table table.data-table th,
 .invoices-table table.data-table td { padding-inline: 6px; padding-block: 8px; }
 .invoices-table table.data-table { font-size: 12.5px; }
+
+/* تمييز الفواتير التي تحتوي على إشعارات دائنة */
+table.data-table tbody tr.invoice-has-credit td {
+  background: var(--warning-light) !important;
+  color: var(--warning-dark) !important;
+}
+table.data-table tbody tr.invoice-has-credit:hover td {
+  background: var(--warning) !important;
+  color: #fff !important;
+}
+table.data-table tbody tr.invoice-has-credit b {
+  color: inherit !important;
+}
+
 .invoices-table .btn-row { padding: 3px 7px; }
 
 .invoice-list-trips { display: grid; gap: 3px; min-width: 150px; max-width: 240px; text-align: start; }

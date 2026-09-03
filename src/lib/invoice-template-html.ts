@@ -38,6 +38,8 @@ export interface InvoiceTemplateModel {
   seller: InvoiceTemplateParty;
   buyer: InvoiceTemplateParty;
   lines: InvoiceTemplateLine[];
+  hasCreditNote?: boolean;
+  creditNoteAmount?: number;
   subtotal: number;
   vatRate: number;
   vatAmount: number;
@@ -215,10 +217,18 @@ function footer(model: InvoiceTemplateModel, ps: PrintSettings): string {
   return pieces.length ? `<div style="margin-top:15px;border-top:1px solid #e2e8f0;padding-top:7px;text-align:center;font-size:9px;color:#64748b;">${pieces.map(esc).join("<br/>")}</div>` : "";
 }
 
+function creditNoteWarningBanner(model: InvoiceTemplateModel, ps: PrintSettings): string {
+  if (!model.hasCreditNote) return "";
+  const l = labels(ps);
+  const text = l("تنبيه: تم إصدار إشعار دائن لهذه الفاتورة بقيمة", "Notice: A credit note has been issued for this invoice in the amount of");
+  return `<div style="background:#fffbeb;color:#b45309;padding:8px 12px;border:1px solid #f59e0b;border-radius:6px;margin-bottom:12px;text-align:center;font-weight:bold;font-size:11.5px;">${text} ${money(model.creditNoteAmount || 0)} ${esc(model.currency)}</div>`;
+}
+
 function renderModern(model: InvoiceTemplateModel, ps: PrintSettings, accent: string): string {
   return `<div data-invoice-template="modern" style="direction:rtl;color:#0f172a;border:1px solid #e2e8f0;border-radius:16px;overflow:hidden;background:#fff;">
     <div style="height:8px;background:linear-gradient(90deg,${accent},#4f46e5,${accent});"></div>
-    <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:25px;padding:22px;border-bottom:1px solid #e2e8f0;">
+    <div style="padding:16px 22px 0;">${creditNoteWarningBanner(model, ps)}</div>
+    <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:25px;padding:12px 22px 22px;border-bottom:1px solid #e2e8f0;">
       <div style="display:flex;align-items:flex-start;gap:12px;">${logo(model, ps, 64)}${sellerBlock(model, ps, accent)}</div>
       ${titleBlock(model, ps, accent, "filled")}
     </div>
@@ -232,6 +242,7 @@ function renderModern(model: InvoiceTemplateModel, ps: PrintSettings, accent: st
 function renderClassic(model: InvoiceTemplateModel, ps: PrintSettings, accent: string): string {
   const l = labels(ps);
   return `<div data-invoice-template="classic" style="direction:rtl;color:#111827;border:2px solid ${accent};padding:22px;background:#fff;">
+    ${creditNoteWarningBanner(model, ps)}
     <div style="display:flex;justify-content:space-between;gap:25px;align-items:flex-start;border-bottom:2px solid ${accent};padding-bottom:16px;margin-bottom:16px;">
       <div style="display:flex;gap:12px;">${logo(model, ps, 62, 0)}${sellerBlock(model, ps, accent)}</div>
       ${titleBlock(model, ps, accent, "outlined")}
@@ -246,6 +257,7 @@ function renderClassic(model: InvoiceTemplateModel, ps: PrintSettings, accent: s
 function renderCompact(model: InvoiceTemplateModel, ps: PrintSettings, accent: string): string {
   const l = labels(ps);
   return `<div data-invoice-template="compact" style="direction:rtl;color:#0f172a;border:1px solid #cbd5e1;border-radius:8px;padding:15px;background:#fff;">
+    ${creditNoteWarningBanner(model, ps)}
     <div style="display:flex;justify-content:space-between;align-items:center;border-bottom:1px solid #cbd5e1;padding-bottom:9px;">
       <div style="display:flex;align-items:center;gap:9px;">${logo(model, ps, 40, 7)}<div>${visible(ps.invoice_show_company_name, model.seller.name) ? `<b style="font-size:14px;color:${accent};">${esc(model.seller.name)}</b>` : ""}<div style="font-size:9.5px;color:#64748b;">${visible(ps.invoice_show_company_tax_number, model.seller.taxNumber) ? `${l("الضريبي", "VAT")}: ${esc(model.seller.taxNumber)}` : ""}${visible(ps.invoice_show_company_phone, model.seller.phone) ? ` — ${esc(model.seller.phone)}` : ""}</div></div></div>
       <div style="text-align:left;"><b style="font-size:14px;color:${accent};">${esc(ps.label_language === "en" ? model.invoiceTitleEn : model.invoiceTitleAr)}</b><div dir="ltr" style="font-size:11px;font-weight:800;">${esc(model.invoiceNumber)} | ${esc(model.issueDate)}</div></div>
@@ -259,6 +271,7 @@ function renderCompact(model: InvoiceTemplateModel, ps: PrintSettings, accent: s
 
 function renderElegant(model: InvoiceTemplateModel, ps: PrintSettings, accent: string): string {
   return `<div data-invoice-template="elegant" style="direction:rtl;color:#1e1b4b;border:1px solid ${accent}26;border-radius:24px;padding:24px;background:#fff;">
+    ${creditNoteWarningBanner(model, ps)}
     <div style="text-align:center;border-bottom:1px solid ${accent}26;padding-bottom:17px;">${logo(model, ps, 62, 16)}<div style="font-size:23px;font-weight:900;color:${accent};margin-top:7px;">${esc(ps.label_language === "en" ? model.invoiceTitleEn : model.invoiceTitleAr)}</div><div dir="ltr" style="display:inline-block;margin-top:7px;padding:5px 15px;border-radius:999px;background:${accent}12;color:${accent};font-size:11px;font-weight:800;">${esc(model.invoiceNumber)} • ${esc(model.issueDate)}</div></div>
     <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;margin:16px 0;"><div style="padding:13px;border-radius:16px;background:${accent}0a;border:1px solid ${accent}20;">${sellerBlock(model, ps, accent)}</div><div style="padding:13px;border-radius:16px;background:${accent}0a;border:1px solid ${accent}20;">${buyerBlock(model, ps, accent, false)}</div></div>
     <div style="border:1px solid ${accent}26;border-radius:15px;overflow:hidden;">${invoiceTable(model, ps, { accent, elegant: true })}</div>
@@ -270,6 +283,7 @@ function renderElegant(model: InvoiceTemplateModel, ps: PrintSettings, accent: s
 function renderLogistics(model: InvoiceTemplateModel, ps: PrintSettings, accent: string): string {
   const l = labels(ps);
   return `<div data-invoice-template="logistics" style="direction:rtl;color:#0f172a;border-top:8px solid ${accent};border-radius:12px;padding:20px;background:#fff;box-shadow:0 0 0 1px #e2e8f0 inset;">
+    ${creditNoteWarningBanner(model, ps)}
     <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:20px;border-bottom:2px solid #e2e8f0;padding-bottom:13px;"> <div style="display:flex;gap:11px;">${logo(model, ps, 55)}${sellerBlock(model, ps, accent)}</div>${titleBlock(model, ps, accent, "plain")}</div>
     <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:8px;background:#f8fafc;border:1px solid #e2e8f0;border-radius:8px;padding:9px;margin:12px 0;font-size:10.5px;"><div>${l("العميل", "Client")}: <b>${esc(model.buyer.name)}</b></div><div>${l("رقم الحاوية", "Container No.")}: <b dir="ltr">${esc(model.containerNumber || "—")}</b></div><div>${l("عدد بنود النقل", "Transport lines")}: <b>${model.lines.length}</b></div></div>
     ${invoiceTable(model, ps, { accent, logistics: true })}
@@ -282,6 +296,7 @@ function renderThermal(model: InvoiceTemplateModel, ps: PrintSettings): string {
   const l = labels(ps);
   const rows = model.lines.map((line) => `<tr><td style="padding:4px 0;border-bottom:1px dotted #777;text-align:right;">${esc(line.description)}<div style="font-size:8px;color:#555;">${money(line.quantity)} × ${money(line.unitAmount)}</div>${lineContainers(line, ps)}</td><td style="padding:4px 0;border-bottom:1px dotted #777;text-align:left;font-weight:800;">${money(line.total)}</td></tr>`).join("");
   return `<div data-invoice-template="thermal" style="direction:rtl;width:72mm;max-width:100%;margin:0 auto;color:#000;font-family:monospace;font-size:10px;background:#fff;">
+    ${creditNoteWarningBanner(model, ps)}
     <div style="text-align:center;border-bottom:1px dashed #000;padding-bottom:7px;">${logo(model, ps, 44, 0)}<div style="font-size:14px;font-weight:900;">${esc(model.seller.name)}</div>${model.seller.taxNumber ? `<div>${l("الرقم الضريبي", "VAT")}: ${esc(model.seller.taxNumber)}</div>` : ""}<div style="font-size:12px;font-weight:900;border-top:1px dotted #000;margin-top:5px;padding-top:5px;">${esc(ps.label_language === "en" ? model.invoiceTitleEn : model.invoiceTitleAr)}</div><div dir="ltr">${esc(model.invoiceNumber)} — ${esc(model.issueDate)}</div></div>
     <div style="padding:6px 0;border-bottom:1px dashed #000;">${l("العميل", "Client")}: <b>${esc(model.buyer.name)}</b></div>
     <table style="width:100%;border-collapse:collapse;font-size:9.5px;"><thead><tr><th style="padding:5px 0;border-bottom:1px solid #000;text-align:right;">${l("الخدمة", "Service")}</th><th style="padding:5px 0;border-bottom:1px solid #000;text-align:left;">${l("الإجمالي", "Total")}</th></tr></thead><tbody>${rows}</tbody></table>

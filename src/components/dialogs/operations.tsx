@@ -4,7 +4,7 @@ import { useEffect, useRef, useState } from "react";
 import { Modal, Field, Input, Select, Textarea, AmountInput, DateInput, Button, AccountSelect } from "@/components/ui";
 import { notify } from "@/components/toast";
 import { listSuppliers, supplierBalance } from "@/lib/suppliers";
-import { listCustomers, listEmployees, listVehicles, saveReceipt, savePayment, getReceipt, getPayment, companyInfo } from "@/lib/repo";
+import { listCustomers, listEmployees, listVehicles, saveReceipt, savePayment, getReceipt, getPayment, companyInfo, listCreditDebitNotesForInvoice } from "@/lib/repo";
 import { getInvoiceFull, allAccounts, invoiceOptions, tripOptionsByInvoice, tripInvoiceId } from "@/lib/calc";
 import type { Customer } from "@/lib/types";
 import { money, todayIso, amountToArabicWords, EXPENSE_TYPES, PAYMENT_TYPES, RECEIPT_TYPES, VEHICLE_EXPENSES } from "@/lib/format";
@@ -316,12 +316,13 @@ export function PaymentDialog({ id, readOnly, onClose, embedded = false }: { id?
 export async function customerInvoiceHtml(invoiceId: number): Promise<{ html: string; number: number; warnTaxInvoice: boolean; settings: PrintSettings } | null> {
   const inv = await getInvoiceFull(invoiceId);
   if (!inv) return null;
-  const [info, ps, meta, taxInvoiceEnabled, profile] = await Promise.all([
+  const [info, ps, meta, taxInvoiceEnabled, profile, notes] = await Promise.all([
     companyInfo(),
     import("@/lib/print").then((m) => m.getPrintSettings()),
     import("@/lib/exportHelper").then((m) => m.printMeta()),
     hasFeature("tax_invoice"),
     getProfile().catch(() => null),
+    listCreditDebitNotesForInvoice(invoiceId).catch(() => []),
   ]);
   const { buildZatcaQr, zatcaQrDataUrl, zatcaInvoiceType, zatcaMissingFields, ZATCA_TYPE_LABEL } = await import("@/lib/zatca");
   const { formatNationalAddress } = await import("@/lib/tax");
@@ -418,6 +419,10 @@ export async function customerInvoiceHtml(invoiceId: number): Promise<{ html: st
       ))),
   ];
 
+  const creditNotesList = notes.filter((n) => n.note_type === "credit");
+  const hasCreditNote = creditNotesList.length > 0;
+  const creditNoteAmount = creditNotesList.reduce((sum, n) => sum + Number(n.total ?? 0), 0);
+
   const html = renderInvoiceTemplate({
     invoiceNumber: `INV-${num}`,
     issueDate: inv.date,
@@ -446,6 +451,8 @@ export async function customerInvoiceHtml(invoiceId: number): Promise<{ html: st
       phone: buyer?.phone || "",
     },
     lines,
+    hasCreditNote,
+    creditNoteAmount,
     subtotal,
     vatRate,
     vatAmount: vat,

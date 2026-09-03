@@ -4,7 +4,7 @@
 import { supabase } from "./supabase";
 import { translateDbError } from "./db";
 import { normalizeTaxProfile, validateTaxProfile } from "./tax";
-import { num, accountTable, accountKindLabel } from "./calc";
+import { num, accountTable, accountKindLabel, invoiceTotals } from "./calc";
 import type { Company } from "./types";
 import {
   RuleError,
@@ -1296,6 +1296,27 @@ async function validatePayment(data: Record<string, any>): Promise<void> {
     if (!t) throw new RuleError("الرحلة المحددة غير موجودة.");
     if (data.invoice_id && Number(data.invoice_id) !== Number(t.invoice_id)) {
       throw new RuleError("الرحلة المحددة لا تنتمي إلى الفاتورة المختارة.");
+    }
+    const { data: creditedTrip } = await supabase.from("credit_note_trips").select("trip_id").eq("trip_id", data.trip_id).maybeSingle();
+    if (creditedTrip) {
+      throw new RuleError("لا يمكن إضافة سند صرف (دفع) لرحلة تم إصدار إشعار دائن (مرتجع) لها.");
+    }
+    
+    // Check if the entire invoice is fully credited
+    if (t.invoice_id) {
+      const { data: notes } = await supabase.from("credit_debit_notes").select("note_type, amount, vat_rate").eq("invoice_id", t.invoice_id);
+      let totalCredit = 0;
+      let totalDebit = 0;
+      for (const n of notes ?? []) {
+        const amt = parseFloat(n.amount) * (1 + parseFloat(n.vat_rate) / 100);
+        if (n.note_type === "credit") totalCredit += amt;
+        else totalDebit += amt;
+      }
+      
+      const invTotals = await invoiceTotals(t.invoice_id);
+      if ((invTotals.customer_total + totalDebit - totalCredit) <= 0.001) {
+        throw new RuleError("لا يمكن إضافة سند صرف لرحلة ضمن فاتورة تم إصدار إشعار دائن لها بالكامل.");
+      }
     }
   }
   if (vt === "advance" && !(await getEmployee(data.employee_id))) {
