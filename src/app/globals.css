@@ -79,13 +79,13 @@ html, body {
   background: transparent;
   border: 1px solid var(--border);
   border-radius: 8px;
-  padding: 3px 9px;
-  font-size: 13px;
+  padding: 2px 6px;
+  font-size: 12.5px;
   color: var(--muted);
 }
 .btn-row:hover { background: var(--primary-glow); color: var(--primary); border-color: var(--primary-light); }
 
-.btn-row-danger { background: transparent; color: var(--danger); border: 1px solid #fecaca; border-radius: 8px; padding: 3px 9px; font-size: 13px; }
+.btn-row-danger { background: transparent; color: var(--danger); border: 1px solid #fecaca; border-radius: 8px; padding: 2px 6px; font-size: 12.5px; }
 .btn-row-danger:hover { background: var(--danger-light); }
 
 /* ============================ الحقول ============================ */
@@ -126,23 +126,30 @@ html, body {
   background: #fff;
   box-shadow: var(--shadow-sm);
 }
-table.data-table { width: 100%; border-collapse: collapse; font-size: 14px; }
+table.data-table { width: 100%; border-collapse: collapse; font-size: 13.5px; }
 table.data-table th {
   background: #f8fafc;
   color: #475569;
   font-weight: 700;
   font-size: 12.5px;
-  padding: 11px 10px;
+  padding: 10px 6px;
   text-align: center;
   white-space: nowrap;
   border-bottom: 1px solid var(--border);
 }
 table.data-table td {
-  padding: 10px 10px;
+  padding: 8px 6px;
   text-align: center;
   border-bottom: 1px solid var(--border-light);
   white-space: nowrap;
   color: #334155;
+}
+/* خلايا النصوص الحرة الطويلة: تلتف بدل التمدد العرضي (تقلل التمرير الأفقي) */
+table.data-table td.data-cell-wrap {
+  white-space: normal;
+  min-width: 150px;
+  max-width: 300px;
+  line-height: 1.5;
 }
 table.data-table tbody tr:nth-child(even) { background: #f8fafc; }
 table.data-table tbody tr:hover { background: var(--primary-glow); }
@@ -814,12 +821,12 @@ table.data-table .total-row td { background: var(--surface-3); color: var(--text
   outline: 2px solid var(--primary);
   outline-offset: 2px;
 }
-.btn-row, .btn-row-danger { min-height: 32px; min-width: 32px; padding: 4px 9px; }
+.btn-row, .btn-row-danger { min-height: 26px; min-width: 26px; padding: 2px 6px; }
 .btn-sm { min-height: 32px; padding: 5px 12px; font-size: 13px; }
 .btn-block { width: 100%; }
 .btn-group { display: flex; gap: 8px; flex-wrap: wrap; }
 .export-bar { display: flex; gap: 6px; flex-wrap: wrap; }
-.row-actions { display: flex; gap: 4px; justify-content: center; flex-wrap: nowrap; }
+.row-actions { display: flex; gap: 3px; justify-content: center; flex-wrap: nowrap; }
 
 /* ============================================================================
    ٣) شريط علوي للجوال + شريط جانبي منزلق (Drawer)
@@ -868,7 +875,7 @@ table.data-table .total-row td { background: var(--surface-3); color: var(--text
   .input, .select, .textarea, .input-base { font-size: 16px; min-height: 44px; padding: 10px 12px; }
   .textarea { min-height: 90px; }
   .btn { min-height: 42px; padding: 9px 14px; }
-  .btn-row, .btn-row-danger { min-height: 36px; min-width: 36px; font-size: 14px; }
+  .btn-row, .btn-row-danger { min-height: 32px; min-width: 32px; font-size: 13px; }
 
   .page-card { padding: 14px; border-radius: 14px; }
   .group-box { padding: 12px; }
@@ -886,8 +893,8 @@ table.data-table .total-row td { background: var(--surface-3); color: var(--text
   .export-bar .btn { flex: 1; }
 
   table.data-table { font-size: 13px; }
-  table.data-table th { padding: 9px 7px; font-size: 12px; }
-  table.data-table td { padding: 8px 7px; }
+  table.data-table th { padding: 8px 5px; font-size: 12px; }
+  table.data-table td { padding: 8px 5px; }
 
   .modal-backdrop { padding: 0; align-items: stretch; }
   .modal-card { max-width: 100% !important; border-radius: 0; min-height: 100%; display: flex; flex-direction: column; }
@@ -1308,9 +1315,7 @@ table.data-table tbody tr.invoice-has-credit b {
   color: inherit !important;
 }
 
-.invoices-table .btn-row { padding: 3px 7px; }
-
-.invoice-list-trips { display: grid; gap: 3px; min-width: 150px; max-width: 240px; text-align: start; }
+.invoice-list-trips { display: grid; gap: 3px; min-width: 130px; max-width: 210px; text-align: start; }
 .invoice-list-trip { display: grid; gap: 1px; padding-bottom: 3px; border-bottom: 1px dashed var(--border); }
 .invoice-list-trip:last-child { padding-bottom: 0; border-bottom: 0; }
 .invoice-list-trip > span { color: var(--text); font-size: 11px; font-weight: 700; white-space: normal; line-height: 1.35; }

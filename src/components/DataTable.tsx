@@ -40,6 +40,11 @@ export function DataTable({
   if (loading) return <EmptyState text="جارٍ التحميل…" />;
   if (!rows.length) return <EmptyState text="لا توجد بيانات" />;
 
+  // النصوص الحرة الطويلة (البيان/السبب/العنوان…) تلتف على سطرين بدل أن تمدّ
+  // عمودها عرضياً وتدفع الجدول كله لشريط تمرير أفقي.
+  const cellClass = (cell: React.ReactNode): string | undefined =>
+    typeof cell === "string" && cell.length > 48 ? "data-cell-wrap" : undefined;
+
   return (
     <div className="table-wrap">
       <table className="data-table">
@@ -48,14 +53,14 @@ export function DataTable({
             {headers.map((h, i) => (
               <th key={i}>{h}</th>
             ))}
-            {showActions && <th style={{ minWidth: allActionLabels.length * 40 + 10 }}>العمليات</th>}
+            {showActions && <th style={{ minWidth: allActionLabels.length * 29 + 6 }}>العمليات</th>}
           </tr>
         </thead>
         <tbody>
           {rows.map((row, r) => (
             <tr key={r} className={rowClasses[r] || undefined}>
               {row.map((cell, c) => (
-                <td key={c}>{cell}</td>
+                <td key={c} className={cellClass(cell)}>{cell}</td>
               ))}
               {showActions && (
                 <td>
