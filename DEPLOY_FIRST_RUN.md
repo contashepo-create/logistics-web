@@ -633,3 +633,51 @@ select policyname, qual
 بعد النشر افتح **لوحة المطوّر ← صحة Supabase**. يجب أن يظهر الاتصال ناجحاً،
 والجداول موجودة وRLS مفعلاً، والدوال الأساسية بعلامة نجاح. صفحة التشخيص لا تعرض
 صفوف العملاء أو أعدادها.
+
+---
+
+## v21 — إصلاح «permission denied for function admin_reset_company_data_v18» عند تصفير شركة
+
+### السبب
+
+رسالة `permission denied for function …` عند الضغط على «تصفير البيانات» لا تعني
+خطأ في كود الدالة — الدالة ومنحها في ملفات الترحيل سليمة. تعني أن صلاحية تنفيذ
+الوظيفة (`EXECUTE`) للدور `authenticated` **ناقصة في قاعدة البيانات الفعلية**،
+والدور `authenticated` هو ما يستخدمه التطبيق عند استدعاء RPC بجلسة المطوّر
+(JWT)، بينما يعمل SQL Editor بحساب المالك فيبدو الكود «سليماً».
+
+أشهر سبب للنقص: `migration_linter_hardening_v8.sql` يسحب `EXECUTE` من
+`authenticated` عن **كل** دوال `public` ثم يعيده من قائمة كُتبت وقت إصداره.
+أي إعادة تشغيل له على قاعدة تحتوي دوال أحدث (v14/v16/v18/v20) تُفقد هذه الدوال
+صلاحيتها — ومنها `admin_reset_company_data_v18`.
+
+### الحل
+
+نفّذ في Supabase SQL Editor:
+
+📄 **`supabase/migration_fix_admin_rpc_grants_v21.sql`**
+
+الملف يعيد ضبط صلاحيات `EXECUTE` بالكامل بقوائم محدَّثة (اسم الدالة لا توقيعها)،
+ويضمن ملكية دوال المطوّر لدور مالك الجداول، ويُبقي المنع قائماً عن `anon`
+والدوال الداخلية. آمن التكرار.
+
+> إن كانت الدالة نفسها غير موجودة أصلاً (رسالة `function does not exist`):
+> نفّذ أولاً `supabase/migration_admin_platform_tools_v18.sql` ثم أعِد تشغيل v21.
+
+للتحقق بعد التنفيذ — يجب أن يعيد صفاً بـ `authenticated_ok = true`:
+
+```sql
+select p.proname,
+       has_function_privilege('authenticated', p.oid, 'execute') as authenticated_ok
+  from pg_proc p join pg_namespace n on n.oid = p.pronamespace
+ where n.nspname = 'public'
+   and p.proname = 'admin_reset_company_data_v18';
+```
+
+ثم أعد المحاولة من لوحة المطوّر ← الشركات ← «تصفير البيانات».
+
+### ملاحظة لمنع تكرار المشكلة
+
+`supabase/migration_linter_hardening_v8.sql` حُدِّثت قوائمه لتشمل دوال v14–v20
+(راجع `migration_fix_admin_rpc_grants_v21.sql`)، فلا تعِد تشغيل نسخة قديمة منه
+بعد تطبيق v21.

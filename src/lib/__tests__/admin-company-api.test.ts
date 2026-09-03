@@ -117,6 +117,30 @@ describe("API إدارة الشركات الحساسة", () => {
     expect(rpc).toHaveBeenCalledWith("admin_reset_company_data_v18", { p_company_id: COMPANY_ID });
   });
 
+  it("يحوّل permission denied من دالة التصفير إلى رسالة إجرائية ترشد لملف الإصلاح", async () => {
+    const rpc = vi.fn(async () => ({
+      data: null,
+      error: { message: "permission denied for function admin_reset_company_data_v18" },
+    }));
+    mocks.userClient.mockReturnValue({
+      from: () => resultQuery({ id: COMPANY_ID, name: "شركة الدلتا للنقل" }),
+      rpc,
+    });
+
+    const res = await POST(req({
+      action: "reset",
+      company_id: COMPANY_ID,
+      confirm_name: "شركة الدلتا للنقل",
+      developer_password: "AdminStrong123",
+    }));
+    expect(res.status).toBe(500);
+    const body = await res.json();
+    expect(body.success).toBe(false);
+    expect(body.message).toContain("migration_fix_admin_rpc_grants_v21.sql");
+    expect(body.message).not.toContain("permission denied");
+    expect(rpc).toHaveBeenCalledWith("admin_reset_company_data_v18", { p_company_id: COMPANY_ID });
+  });
+
   it("يحدّث الشركة والمالك وSupabase Auth ولا يسجل كلمة المرور", async () => {
     const updates: Array<{ table: string; payload: Record<string, unknown> }> = [];
     const activityRows: Array<Record<string, unknown>> = [];
