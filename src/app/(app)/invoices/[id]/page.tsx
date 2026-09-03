@@ -77,16 +77,31 @@ export default function InvoiceViewPage() {
       title={`فاتورة ${number}`}
       subtitle="معاينة واضحة للفاتورة الصادرة — التصحيح يتم بإشعار مدين أو دائن"
       toolbar={
-        <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
-          <Button onClick={() => router.push("/invoices")}>→ عودة للفواتير</Button>
-          <Button variant="primary" onClick={() => printCustomerInvoice(id)}>🖨️ طباعة</Button>
-          <Button onClick={() => exportCustomerInvoicePdf(id)}>📄 PDF</Button>
-          <Button onClick={() => setNoteDialog("debit")}>➕ إشعار مدين</Button>
-          <Button onClick={() => setNoteDialog("credit")}>➖ إشعار دائن</Button>
+        <div style={{ display: "flex", gap: 12, flexWrap: "wrap", alignItems: "flex-start" }}>
+          <Button onClick={() => router.push("/invoices")} style={{ marginTop: 2 }}>→ عودة للفواتير</Button>
+          <Button variant="primary" onClick={() => printCustomerInvoice(id)} style={{ marginTop: 2 }}>🖨️ طباعة</Button>
+          <Button onClick={() => exportCustomerInvoicePdf(id)} style={{ marginTop: 2 }}>📄 PDF</Button>
+          <div style={{ display: "flex", flexDirection: "column", gap: 4, alignItems: "center" }}>
+            <Button onClick={() => setNoteDialog("debit")}>➕ إشعار مدين</Button>
+            <small style={{ fontSize: 10, color: "var(--muted)", maxWidth: 120, textAlign: "center", lineHeight: 1.2 }}>
+              يُزيد من قيمة الفاتورة ومستحقاتك على العميل
+            </small>
+          </div>
+          <div style={{ display: "flex", flexDirection: "column", gap: 4, alignItems: "center" }}>
+            <Button onClick={() => setNoteDialog("credit")}>➖ إشعار دائن</Button>
+            <small style={{ fontSize: 10, color: "var(--muted)", maxWidth: 120, textAlign: "center", lineHeight: 1.2 }}>
+              يُخفض قيمة الفاتورة ويخصم من مستحقاتك على العميل
+            </small>
+          </div>
         </div>
       }
     >
       <section className="invoice-preview-card" aria-label="معاينة الفاتورة">
+        {creditNotes > 0 && (
+          <div style={{ background: "var(--warning-light)", color: "var(--warning-dark)", padding: "8px 16px", borderRadius: "10px", marginBottom: "16px", fontWeight: "bold", textAlign: "center", border: "1px solid var(--warning)" }} className="print-only-stamp">
+            تنبيه: تم إصدار إشعار دائن لهذه الفاتورة بقيمة {money(creditNotes)}
+          </div>
+        )}
         <header className="invoice-preview-head">
           <div>
             <span className="invoice-preview-kicker">{inv.vat_rate > 0 ? "فاتورة ضريبية" : "فاتورة نقل"}</span>

@@ -52,6 +52,8 @@ export default function InvoicesPage() {
     ]),
     [data]
   );
+  const rowClasses = useMemo(() => (data ?? []).map((inv) => (inv.has_credit_note ? "invoice-has-credit" : "")), [data]);
+
   const exportRows = useMemo(
     () => (data ?? []).map((inv) => [
       `INV-${String(inv.number).padStart(5, "0")}`, inv.date,
@@ -88,6 +90,7 @@ export default function InvoicesPage() {
         <>
           <div className="invoices-table">
           <DataTable actions={["view"]} headers={headers} rows={rows} ids={(data ?? []).map((i) => i.id)}
+            rowClasses={rowClasses}
             extra={[
               { key: "print", label: "🖨️", title: "طباعة فاتورة العميل" },
               { key: "pdf", label: "📄", title: "حفظ فاتورة العميل PDF" },
