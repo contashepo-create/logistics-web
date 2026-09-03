@@ -1600,8 +1600,8 @@ declare
   ];
   v_expected_functions text[] := array[
     'auth_company_id','is_company_active','register_company_with_year','save_invoice',
-    'save_payroll','admin_set_company_feature','admin_reset_company_data_v18',
-    'admin_platform_stats_v18','record_site_visit_v18'
+    'save_payroll','admin_set_company_feature','admin_get_company_extras_v18',
+    'admin_reset_company_data_v18','admin_platform_stats_v18','record_site_visit_v18'
   ];
   v_tables jsonb; v_functions jsonb; v_healthy boolean;
 begin
@@ -1619,17 +1619,35 @@ begin
     left join pg_namespace n on n.nspname = 'public'
     left join pg_class c on c.relnamespace = n.oid and c.relname = expected.name and c.relkind = 'r';
 
-  -- استخدام pg_proc بدلاً من to_regproc لدعم الدوال التي لها overloads
+  -- لا تستخدم to_regproc(name) هنا: يفشل عندما توجد أكثر من نسخة للدالة.
+  -- save_invoice يحتاج توقيعه الذي تستعمله الواجهة تحديداً، أما بقية الدوال
+  -- فيكفي التحقق من وجود الاسم في pg_proc.
   select coalesce(jsonb_agg(jsonb_build_object(
       'name', expected.name,
-      'exists', exists(select 1 from pg_proc p join pg_namespace ns on ns.oid = p.pronamespace where ns.nspname = 'public' and p.proname = expected.name)
+      'exists', case
+        when expected.name = 'save_invoice' then
+          to_regprocedure('public.save_invoice(bigint,date,bigint,double precision,text,jsonb,jsonb,text)') is not null
+        else exists(
+          select 1 from pg_proc p
+          join pg_namespace ns on ns.oid = p.pronamespace
+          where ns.nspname = 'public' and p.proname = expected.name
+        )
+      end
     ) order by expected.name), '[]'::jsonb)
     into v_functions
     from unnest(v_expected_functions) expected(name);
 
   if exists(
     select 1 from unnest(v_expected_functions) f(name)
-     where not exists(select 1 from pg_proc p join pg_namespace ns on ns.oid = p.pronamespace where ns.nspname = 'public' and p.proname = f.name)
+     where case
+       when f.name = 'save_invoice' then
+         to_regprocedure('public.save_invoice(bigint,date,bigint,double precision,text,jsonb,jsonb,text)') is null
+       else not exists(
+         select 1 from pg_proc p
+         join pg_namespace ns on ns.oid = p.pronamespace
+         where ns.nspname = 'public' and p.proname = f.name
+       )
+     end
   ) then v_healthy := false; end if;
 
   return jsonb_build_object(

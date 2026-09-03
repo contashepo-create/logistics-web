@@ -87,7 +87,7 @@ export async function POST(req: NextRequest) {
       if (isPermissionError(error.message)) {
         return bad(
           "صلاحية تنفيذ دالة التصفير ناقصة في قاعدة البيانات. نفّذ ملف " +
-            "supabase/migration_fix_database_health_v22.sql في Supabase SQL Editor ثم أعد المحاولة.",
+            "supabase/migration_fix_admin_rpc_grants_v21.sql ثم supabase/migration_fix_database_health_v22.sql في Supabase SQL Editor ثم أعد المحاولة.",
           500,
         );
       }
