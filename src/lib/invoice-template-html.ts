@@ -178,26 +178,26 @@ function totals(model: InvoiceTemplateModel, ps: PrintSettings, accent: string, 
   const l = labels(ps);
   const fg = dark ? "#fff" : "#0f172a";
   const muted = dark ? "rgba(255,255,255,.75)" : "#64748b";
-  return `<div style="color:${fg};font-size:12px;min-width:285px;">
-    <div style="display:flex;justify-content:space-between;gap:20px;padding:5px 0;color:${muted};"><span>${l("الإجمالي الخاضع للضريبة", "Taxable subtotal")}</span><b>${money(model.subtotal)} ${esc(model.currency)}</b></div>
-    <div style="display:flex;justify-content:space-between;gap:20px;padding:5px 0;color:${muted};"><span>${l(`ضريبة القيمة المضافة (${model.vatRate}%)`, `VAT (${model.vatRate}%)`)}</span><b>${money(model.vatAmount)} ${esc(model.currency)}</b></div>
-    <div style="display:flex;justify-content:space-between;gap:20px;padding:9px 0 2px;border-top:2px solid ${dark ? "rgba(255,255,255,.35)" : accent};font-size:15px;font-weight:900;"><span>${l("الإجمالي المستحق شامل الضريبة", "Total due incl. VAT")}</span><span style="color:${dark ? "#fde047" : accent};">${money(model.total)} ${esc(model.currency)}</span></div>
+  return `<div style="color:${fg};font-size:12px;min-width:260px;max-width:100%;min-width:0;flex-shrink:0;word-break:break-word;overflow-wrap:anywhere;">
+    <div style="display:flex;justify-content:space-between;gap:12px;padding:5px 0;color:${muted};flex-wrap:wrap;"><span style="min-width:0;word-break:break-word;">${l("الإجمالي الخاضع للضريبة", "Taxable subtotal")}</span><b style="white-space:nowrap;">${money(model.subtotal)} ${esc(model.currency)}</b></div>
+    <div style="display:flex;justify-content:space-between;gap:12px;padding:5px 0;color:${muted};flex-wrap:wrap;"><span style="min-width:0;word-break:break-word;">${l(`ضريبة القيمة المضافة (${model.vatRate}%)`, `VAT (${model.vatRate}%)`)}</span><b style="white-space:nowrap;">${money(model.vatAmount)} ${esc(model.currency)}</b></div>
+    <div style="display:flex;justify-content:space-between;gap:12px;padding:9px 0 2px;border-top:2px solid ${dark ? "rgba(255,255,255,.35)" : accent};font-size:15px;font-weight:900;flex-wrap:wrap;"><span style="min-width:0;word-break:break-word;">${l("الإجمالي المستحق شامل الضريبة", "Total due incl. VAT")}</span><span style="color:${dark ? "#fde047" : accent};white-space:nowrap;">${money(model.total)} ${esc(model.currency)}</span></div>
   </div>`;
 }
 
 function qr(model: InvoiceTemplateModel, size = 105): string {
   if (!model.qrDataUrl) return "";
-  return `<div style="text-align:center;"><img src="${esc(model.qrDataUrl)}" alt="QR" style="width:${size}px;height:${size}px;object-fit:contain;background:#fff;border:1px solid #e2e8f0;padding:4px;border-radius:9px;"/>${model.qrCaption ? `<div style="font-size:8.5px;color:#64748b;margin-top:3px;">${esc(model.qrCaption)}</div>` : ""}</div>`;
+  return `<div style="text-align:center;flex-shrink:0;"><img src="${esc(model.qrDataUrl)}" alt="QR" style="width:${size}px;height:${size}px;object-fit:contain;background:#fff;border:1px solid #e2e8f0;padding:4px;border-radius:9px;"/>${model.qrCaption ? `<div style="font-size:8.5px;color:#64748b;margin-top:3px;word-break:break-word;">${esc(model.qrCaption)}</div>` : ""}</div>`;
 }
 
 function notesAndWords(model: InvoiceTemplateModel, ps: PrintSettings, accent: string): string {
   const l = labels(ps);
-  return `<div style="display:flex;gap:9px;flex:1;">
-    <div style="flex:1;border:1px solid #e2e8f0;border-radius:10px;padding:9px 11px;background:#f8fafc;">
+  return `<div style="display:flex;flex-direction:column;gap:9px;flex:1 1 0;min-width:0;overflow:hidden;">
+    <div style="border:1px solid #e2e8f0;border-radius:10px;padding:9px 11px;background:#f8fafc;min-width:0;overflow-wrap:anywhere;word-break:break-word;">
       <div style="font-size:10px;color:${accent};font-weight:800;margin-bottom:3px;">${l("المبلغ كتابةً", "Amount in words")}</div>
-      <div style="font-size:11px;font-weight:700;line-height:1.7;">${esc(model.amountInWords)}</div>
+      <div style="font-size:11px;font-weight:700;line-height:1.8;overflow-wrap:anywhere;word-break:break-word;white-space:normal;">${esc(model.amountInWords)}</div>
     </div>
-    ${model.notes ? `<div style="flex:1;border:1px solid #e2e8f0;border-radius:10px;padding:9px 11px;"><div style="font-size:10px;color:${accent};font-weight:800;margin-bottom:3px;">${l("ملاحظات", "Notes")}</div><div style="font-size:11px;line-height:1.7;">${esc(model.notes)}</div></div>` : ""}
+    ${model.notes ? `<div style="border:1px solid #e2e8f0;border-radius:10px;padding:9px 11px;min-width:0;overflow-wrap:anywhere;word-break:break-word;"><div style="font-size:10px;color:${accent};font-weight:800;margin-bottom:3px;">${l("ملاحظات", "Notes")}</div><div style="font-size:11px;line-height:1.7;overflow-wrap:anywhere;word-break:break-word;white-space:normal;">${esc(model.notes)}</div></div>` : ""}
   </div>`;
 }
 
@@ -228,13 +228,13 @@ function renderModern(model: InvoiceTemplateModel, ps: PrintSettings, accent: st
   return `<div data-invoice-template="modern" style="direction:rtl;color:#0f172a;border:1px solid #e2e8f0;border-radius:16px;overflow:hidden;background:#fff;">
     <div style="height:8px;background:linear-gradient(90deg,${accent},#4f46e5,${accent});"></div>
     <div style="padding:16px 22px 0;">${creditNoteWarningBanner(model, ps)}</div>
-    <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:25px;padding:12px 22px 22px;border-bottom:1px solid #e2e8f0;">
-      <div style="display:flex;align-items:flex-start;gap:12px;">${logo(model, ps, 64)}${sellerBlock(model, ps, accent)}</div>
+    <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:25px;padding:12px 22px 22px;border-bottom:1px solid #e2e8f0;flex-wrap:wrap;">
+      <div style="display:flex;align-items:flex-start;gap:12px;min-width:0;flex:1 1 200px;">${logo(model, ps, 64)}${sellerBlock(model, ps, accent)}</div>
       ${titleBlock(model, ps, accent, "filled")}
     </div>
-    <div style="display:flex;justify-content:space-between;gap:18px;padding:14px 22px;background:#f8fafc;">${buyerBlock(model, ps, accent, false)}${model.containerNumber ? `<div style="font-size:11px;color:#64748b;text-align:left;">${ps.label_language === "en" ? "Container No." : "رقم الحاوية"}<br/><b dir="ltr" style="font-size:13px;color:#0f172a;">${esc(model.containerNumber)}</b></div>` : ""}</div>
+    <div style="display:flex;justify-content:space-between;gap:18px;padding:14px 22px;background:#f8fafc;flex-wrap:wrap;">${buyerBlock(model, ps, accent, false)}${model.containerNumber ? `<div style="font-size:11px;color:#64748b;text-align:left;min-width:0;word-break:break-word;">${ps.label_language === "en" ? "Container No." : "رقم الحاوية"}<br/><b dir="ltr" style="font-size:13px;color:#0f172a;">${esc(model.containerNumber)}</b></div>` : ""}</div>
     <div style="padding:18px 22px;">${invoiceTable(model, ps, { accent })}</div>
-    <div style="display:flex;align-items:flex-start;justify-content:space-between;gap:18px;padding:18px 22px;background:#f8fafc;border-top:1px solid #e2e8f0;">${qr(model)}${notesAndWords(model, ps, accent)}${totals(model, ps, accent)}</div>
+    <div style="display:flex;align-items:flex-start;justify-content:space-between;gap:18px;padding:18px 22px;background:#f8fafc;border-top:1px solid #e2e8f0;flex-wrap:wrap;">${qr(model)}${notesAndWords(model, ps, accent)}${totals(model, ps, accent)}</div>
     <div style="padding:0 22px 15px;">${signatures(ps)}${footer(model, ps)}</div>
   </div>`;
 }
@@ -243,13 +243,13 @@ function renderClassic(model: InvoiceTemplateModel, ps: PrintSettings, accent: s
   const l = labels(ps);
   return `<div data-invoice-template="classic" style="direction:rtl;color:#111827;border:2px solid ${accent};padding:22px;background:#fff;">
     ${creditNoteWarningBanner(model, ps)}
-    <div style="display:flex;justify-content:space-between;gap:25px;align-items:flex-start;border-bottom:2px solid ${accent};padding-bottom:16px;margin-bottom:16px;">
-      <div style="display:flex;gap:12px;">${logo(model, ps, 62, 0)}${sellerBlock(model, ps, accent)}</div>
+    <div style="display:flex;justify-content:space-between;gap:25px;align-items:flex-start;border-bottom:2px solid ${accent};padding-bottom:16px;margin-bottom:16px;flex-wrap:wrap;">
+      <div style="display:flex;gap:12px;min-width:0;flex:1 1 200px;">${logo(model, ps, 62, 0)}${sellerBlock(model, ps, accent)}</div>
       ${titleBlock(model, ps, accent, "outlined")}
     </div>
-    <div style="border:1px solid #475569;padding:11px;margin-bottom:15px;"><div style="font-size:10px;font-weight:900;margin-bottom:4px;">${l("بيانات المشتري", "BUYER DETAILS")}</div>${buyerBlock(model, ps, accent, false)}</div>
+    <div style="border:1px solid #475569;padding:11px;margin-bottom:15px;overflow-wrap:anywhere;word-break:break-word;"><div style="font-size:10px;font-weight:900;margin-bottom:4px;">${l("بيانات المشتري", "BUYER DETAILS")}</div>${buyerBlock(model, ps, accent, false)}</div>
     ${invoiceTable(model, ps, { accent, classic: true })}
-    <div style="display:grid;grid-template-columns:120px 1fr 300px;gap:14px;align-items:start;border:1px solid #475569;padding:12px;margin-top:15px;">${qr(model, 95)}${notesAndWords(model, ps, accent)}${totals(model, ps, accent)}</div>
+    <div style="display:grid;grid-template-columns:120px minmax(0,1fr) 300px;gap:14px;align-items:start;border:1px solid #475569;padding:12px;margin-top:15px;">${qr(model, 95)}${notesAndWords(model, ps, accent)}${totals(model, ps, accent)}</div>
     ${signatures(ps)}${footer(model, ps)}
   </div>`;
 }
@@ -258,13 +258,13 @@ function renderCompact(model: InvoiceTemplateModel, ps: PrintSettings, accent: s
   const l = labels(ps);
   return `<div data-invoice-template="compact" style="direction:rtl;color:#0f172a;border:1px solid #cbd5e1;border-radius:8px;padding:15px;background:#fff;">
     ${creditNoteWarningBanner(model, ps)}
-    <div style="display:flex;justify-content:space-between;align-items:center;border-bottom:1px solid #cbd5e1;padding-bottom:9px;">
-      <div style="display:flex;align-items:center;gap:9px;">${logo(model, ps, 40, 7)}<div>${visible(ps.invoice_show_company_name, model.seller.name) ? `<b style="font-size:14px;color:${accent};">${esc(model.seller.name)}</b>` : ""}<div style="font-size:9.5px;color:#64748b;">${visible(ps.invoice_show_company_tax_number, model.seller.taxNumber) ? `${l("الضريبي", "VAT")}: ${esc(model.seller.taxNumber)}` : ""}${visible(ps.invoice_show_company_phone, model.seller.phone) ? ` — ${esc(model.seller.phone)}` : ""}</div></div></div>
-      <div style="text-align:left;"><b style="font-size:14px;color:${accent};">${esc(ps.label_language === "en" ? model.invoiceTitleEn : model.invoiceTitleAr)}</b><div dir="ltr" style="font-size:11px;font-weight:800;">${esc(model.invoiceNumber)} | ${esc(model.issueDate)}</div></div>
+    <div style="display:flex;justify-content:space-between;align-items:center;border-bottom:1px solid #cbd5e1;padding-bottom:9px;flex-wrap:wrap;gap:10px;">
+      <div style="display:flex;align-items:center;gap:9px;min-width:0;">${logo(model, ps, 40, 7)}<div style="min-width:0;">${visible(ps.invoice_show_company_name, model.seller.name) ? `<b style="font-size:14px;color:${accent};">${esc(model.seller.name)}</b>` : ""}<div style="font-size:9.5px;color:#64748b;word-break:break-word;">${visible(ps.invoice_show_company_tax_number, model.seller.taxNumber) ? `${l("الضريبي", "VAT")}: ${esc(model.seller.taxNumber)}` : ""}${visible(ps.invoice_show_company_phone, model.seller.phone) ? ` — ${esc(model.seller.phone)}` : ""}</div></div></div>
+      <div style="text-align:left;flex-shrink:0;"><b style="font-size:14px;color:${accent};">${esc(ps.label_language === "en" ? model.invoiceTitleEn : model.invoiceTitleAr)}</b><div dir="ltr" style="font-size:11px;font-weight:800;">${esc(model.invoiceNumber)} | ${esc(model.issueDate)}</div></div>
     </div>
-    <div style="display:flex;justify-content:space-between;gap:12px;background:#f8fafc;border:1px solid #e2e8f0;border-radius:6px;padding:7px 9px;margin:8px 0;font-size:10px;"><div>${l("العميل", "Client")}: <b>${esc(model.buyer.name)}</b></div><div>${model.containerNumber ? `${l("الحاوية", "Container")}: <b dir="ltr">${esc(model.containerNumber)}</b>` : `${l("البنود", "Items")}: <b>${model.lines.length}</b>`}</div></div>
+    <div style="display:flex;justify-content:space-between;gap:12px;background:#f8fafc;border:1px solid #e2e8f0;border-radius:6px;padding:7px 9px;margin:8px 0;font-size:10px;flex-wrap:wrap;"><div style="min-width:0;word-break:break-word;">${l("العميل", "Client")}: <b>${esc(model.buyer.name)}</b></div><div style="min-width:0;word-break:break-word;">${model.containerNumber ? `${l("الحاوية", "Container")}: <b dir="ltr">${esc(model.containerNumber)}</b>` : `${l("البنود", "Items")}: <b>${model.lines.length}</b>`}</div></div>
     ${invoiceTable(model, ps, { accent, dense: true })}
-    <div style="display:grid;grid-template-columns:85px 1fr 270px;gap:10px;align-items:center;border-top:1px solid #cbd5e1;margin-top:9px;padding-top:9px;">${qr(model, 70)}${notesAndWords(model, ps, accent)}${totals(model, ps, accent)}</div>
+    <div style="display:grid;grid-template-columns:85px minmax(0,1fr) 270px;gap:10px;align-items:start;border-top:1px solid #cbd5e1;margin-top:9px;padding-top:9px;">${qr(model, 70)}${notesAndWords(model, ps, accent)}${totals(model, ps, accent)}</div>
     ${footer(model, ps)}
   </div>`;
 }
@@ -273,9 +273,9 @@ function renderElegant(model: InvoiceTemplateModel, ps: PrintSettings, accent: s
   return `<div data-invoice-template="elegant" style="direction:rtl;color:#1e1b4b;border:1px solid ${accent}26;border-radius:24px;padding:24px;background:#fff;">
     ${creditNoteWarningBanner(model, ps)}
     <div style="text-align:center;border-bottom:1px solid ${accent}26;padding-bottom:17px;">${logo(model, ps, 62, 16)}<div style="font-size:23px;font-weight:900;color:${accent};margin-top:7px;">${esc(ps.label_language === "en" ? model.invoiceTitleEn : model.invoiceTitleAr)}</div><div dir="ltr" style="display:inline-block;margin-top:7px;padding:5px 15px;border-radius:999px;background:${accent}12;color:${accent};font-size:11px;font-weight:800;">${esc(model.invoiceNumber)} • ${esc(model.issueDate)}</div></div>
-    <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;margin:16px 0;"><div style="padding:13px;border-radius:16px;background:${accent}0a;border:1px solid ${accent}20;">${sellerBlock(model, ps, accent)}</div><div style="padding:13px;border-radius:16px;background:${accent}0a;border:1px solid ${accent}20;">${buyerBlock(model, ps, accent, false)}</div></div>
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;margin:16px 0;"><div style="padding:13px;border-radius:16px;background:${accent}0a;border:1px solid ${accent}20;min-width:0;overflow-wrap:anywhere;">${sellerBlock(model, ps, accent)}</div><div style="padding:13px;border-radius:16px;background:${accent}0a;border:1px solid ${accent}20;min-width:0;overflow-wrap:anywhere;">${buyerBlock(model, ps, accent, false)}</div></div>
     <div style="border:1px solid ${accent}26;border-radius:15px;overflow:hidden;">${invoiceTable(model, ps, { accent, elegant: true })}</div>
-    <div style="display:grid;grid-template-columns:115px 1fr 310px;gap:16px;align-items:center;background:${accent};color:#fff;border-radius:16px;padding:16px;margin-top:16px;">${qr(model, 90)}<div style="font-size:11px;line-height:1.7;color:rgba(255,255,255,.85);">${esc(model.amountInWords)}${model.notes ? `<div style="margin-top:5px;">${esc(model.notes)}</div>` : ""}</div>${totals(model, ps, accent, true)}</div>
+    <div style="display:grid;grid-template-columns:115px minmax(0,1fr) 310px;gap:16px;align-items:start;background:${accent};color:#fff;border-radius:16px;padding:16px;margin-top:16px;"><div style="display:flex;justify-content:center;">${qr(model, 90)}</div><div style="font-size:11px;line-height:1.8;color:rgba(255,255,255,.9);min-width:0;overflow-wrap:anywhere;word-break:break-word;white-space:normal;"><div style="font-weight:700;">${esc(model.amountInWords)}</div>${model.notes ? `<div style="margin-top:8px;padding-top:8px;border-top:1px solid rgba(255,255,255,.25);white-space:normal;word-break:break-word;overflow-wrap:anywhere;">${esc(model.notes)}</div>` : ""}</div>${totals(model, ps, accent, true)}</div>
     ${signatures(ps)}${footer(model, ps)}
   </div>`;
 }
@@ -284,10 +284,10 @@ function renderLogistics(model: InvoiceTemplateModel, ps: PrintSettings, accent:
   const l = labels(ps);
   return `<div data-invoice-template="logistics" style="direction:rtl;color:#0f172a;border-top:8px solid ${accent};border-radius:12px;padding:20px;background:#fff;box-shadow:0 0 0 1px #e2e8f0 inset;">
     ${creditNoteWarningBanner(model, ps)}
-    <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:20px;border-bottom:2px solid #e2e8f0;padding-bottom:13px;"> <div style="display:flex;gap:11px;">${logo(model, ps, 55)}${sellerBlock(model, ps, accent)}</div>${titleBlock(model, ps, accent, "plain")}</div>
-    <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:8px;background:#f8fafc;border:1px solid #e2e8f0;border-radius:8px;padding:9px;margin:12px 0;font-size:10.5px;"><div>${l("العميل", "Client")}: <b>${esc(model.buyer.name)}</b></div><div>${l("رقم الحاوية", "Container No.")}: <b dir="ltr">${esc(model.containerNumber || "—")}</b></div><div>${l("عدد بنود النقل", "Transport lines")}: <b>${model.lines.length}</b></div></div>
+    <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:20px;border-bottom:2px solid #e2e8f0;padding-bottom:13px;flex-wrap:wrap;"> <div style="display:flex;gap:11px;min-width:0;flex:1 1 200px;">${logo(model, ps, 55)}${sellerBlock(model, ps, accent)}</div>${titleBlock(model, ps, accent, "plain")}</div>
+    <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:8px;background:#f8fafc;border:1px solid #e2e8f0;border-radius:8px;padding:9px;margin:12px 0;font-size:10.5px;"><div style="min-width:0;word-break:break-word;">${l("العميل", "Client")}: <b>${esc(model.buyer.name)}</b></div><div style="min-width:0;word-break:break-word;">${l("رقم الحاوية", "Container No.")}: <b dir="ltr">${esc(model.containerNumber || "—")}</b></div><div style="min-width:0;word-break:break-word;">${l("عدد بنود النقل", "Transport lines")}: <b>${model.lines.length}</b></div></div>
     ${invoiceTable(model, ps, { accent, logistics: true })}
-    <div style="display:grid;grid-template-columns:120px 1fr 300px;gap:14px;align-items:start;background:#f8fafc;border:1px solid #e2e8f0;border-radius:8px;padding:12px;margin-top:13px;">${qr(model, 95)}${notesAndWords(model, ps, accent)}${totals(model, ps, accent)}</div>
+    <div style="display:grid;grid-template-columns:120px minmax(0,1fr) 300px;gap:14px;align-items:start;background:#f8fafc;border:1px solid #e2e8f0;border-radius:8px;padding:12px;margin-top:13px;">${qr(model, 95)}${notesAndWords(model, ps, accent)}${totals(model, ps, accent)}</div>
     ${signatures(ps)}${footer(model, ps)}
   </div>`;
 }
