@@ -10,6 +10,12 @@ export const runtime = "nodejs";
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 const bad = (message: string, status = 400) => NextResponse.json({ success: false, message }, { status });
 
+/** دالة RPC غير موجودة في القاعدة — ترحيلة ناقصة وليست خطأ بيانات. */
+function isMissingRpc(message: string): boolean {
+  const m = message.toLowerCase();
+  return m.includes("could not find the function") || m.includes("does not exist") || m.includes("schema cache");
+}
+
 /** خطأ EXECUTE ناقص للدور authenticated (إعادة تشغيل v8 على قاعدة أحدث) — رسالة إجرائية. */
 function rpcError(message: string, status: number) {
   if (isPermissionError(message)) {
@@ -57,6 +63,8 @@ export async function POST(req: NextRequest) {
     const snapshot = (data ?? {}) as {
       features?: Record<string, boolean>;
       users?: Array<Record<string, unknown>>;
+      max_additional_users?: number;
+      used_additional_users?: number;
     };
     const features: Record<FeatureKey, boolean> = {
       tax_invoice: snapshot.features?.tax_invoice === true,
@@ -68,7 +76,43 @@ export async function POST(req: NextRequest) {
       phone: String(u.phone ?? ""),
       is_active: u.is_active !== false,
     }));
-    return NextResponse.json({ success: true, features, users });
+    // القاعدة قبل ترحيلة v25 لا ترجع الحد؛ الافتراضي الآمن مستخدم واحد.
+    const maxAdditional = Number.isFinite(snapshot.max_additional_users)
+      ? Math.max(0, Math.min(10, Number(snapshot.max_additional_users)))
+      : 1;
+    const usedAdditional = Number.isFinite(snapshot.used_additional_users)
+      ? Number(snapshot.used_additional_users)
+      : users.filter((u) => u.role === "additional").length;
+
+    return NextResponse.json({
+      success: true,
+      features,
+      users,
+      max_additional_users: maxAdditional,
+      used_additional_users: usedAdditional,
+    });
+  }
+
+  if (action === "set_user_limit") {
+    const max = Number(body.max);
+    if (!Number.isInteger(max) || max < 0 || max > 10) {
+      return bad("عدد المستخدمين الإضافيين يجب أن يكون بين 0 و10.");
+    }
+    const { error } = await sb.rpc("admin_set_company_user_limit_v25", {
+      p_company_id: companyId,
+      p_max: max,
+    });
+    if (error) {
+      if (isMissingRpc(error.message)) {
+        return bad(
+          "دالة ضبط عدد المستخدمين غير موجودة. نفّذ ملف " +
+            "supabase/migration_multi_company_users_v25.sql في Supabase SQL Editor ثم أعد المحاولة.",
+          500,
+        );
+      }
+      return rpcError(error.message, 400);
+    }
+    return NextResponse.json({ success: true });
   }
 
   if (action === "set") {

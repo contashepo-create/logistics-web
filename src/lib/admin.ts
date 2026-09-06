@@ -146,15 +146,42 @@ export interface CompanyUserRow {
 export interface CompanyExtras {
   features: Record<FeatureKey, boolean>;
   users: CompanyUserRow[];
+  /** أقصى عدد حسابات إضافية مسموح بها لهذه الشركة (المالك غير محسوب). */
+  maxAdditionalUsers: number;
+  /** عدد الحسابات الإضافية القائمة فعلاً. */
+  usedAdditionalUsers: number;
 }
 
 /** قراءة المميزات والمستخدمين لشركة من مسار محمي بجلسة المطوّر و2FA. */
 export async function getCompanyExtras(companyId: string): Promise<CompanyExtras> {
-  const out = await authPostJson<{ success: true } & CompanyExtras>("/api/zerocold/features", {
-    action: "get",
+  const out = await authPostJson<{
+    success: true;
+    features: Record<FeatureKey, boolean>;
+    users: CompanyUserRow[];
+    max_additional_users?: number;
+    used_additional_users?: number;
+  }>("/api/zerocold/features", { action: "get", company_id: companyId });
+
+  const used = out.users.filter((u) => u.role === "additional").length;
+  return {
+    features: out.features,
+    users: out.users,
+    maxAdditionalUsers: Number.isFinite(out.max_additional_users)
+      ? Number(out.max_additional_users)
+      : 1,
+    usedAdditionalUsers: Number.isFinite(out.used_additional_users)
+      ? Number(out.used_additional_users)
+      : used,
+  };
+}
+
+/** ضبط عدد المستخدمين الإضافيين المسموح بهم لشركة (0..10). */
+export async function setCompanyUserLimit(companyId: string, max: number): Promise<void> {
+  await authPostJson("/api/zerocold/features", {
+    action: "set_user_limit",
     company_id: companyId,
+    max,
   });
-  return { features: out.features, users: out.users };
 }
 
 /** تفعيل/إلغاء ميزة عن شركة بعينها. */
