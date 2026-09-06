@@ -7,30 +7,82 @@
 --   البيانات: كل سياسات RLS تعتمد على public.auth_company_id() التي تقرأ
 --   company_id من profiles، فأي عدد من الصفوف بنفس الشركة يعمل بلا تعديل.
 --
+-- ⚠️ ملاحظة تشغيلية مهمة — لماذا لا توجد معاملة واحدة هنا؟
+--   النسخة الأولى غلّفت كل شيء بـ begin/commit، فكانت تحتفظ بـ
+--   AccessExclusiveLock على companies ثم على profiles طوال الترحيلة، بينما
+--   التطبيق الحيّ (PostgREST) يقرأ الجدولين بالترتيب المعاكس، فينشأ:
+--       ERROR: 40P01: deadlock detected
+--   الحل: كل عبارة DDL تُنفَّذ في معاملتها الضمنية القصيرة، مع lock_timeout
+--   قصير وإعادة محاولة، فلا يبقى أي قفل حصري محجوزاً أثناء انتظار قفل آخر.
+--
 -- ما يفعله هذا الملف:
 --   1) عمود companies.max_additional_users (افتراضي 1) = حد الباقة لكل شركة.
 --   2) حذف الفهرس الفريد للمستخدم الإضافي، مع الإبقاء على «مالك واحد فقط».
---   3) مشغّل يمنع تجاوز الحد عند الإدراج/التحويل إلى دور additional،
---      مع قفل استشاري يمنع سباق طلبين متزامنين.
---   4) RPC للمطوّر لضبط الحد (1..10) مع رفض حد أقل من العدد الحالي.
---   5) تحديث admin_get_company_extras_v18 لإرجاع max_additional_users
---      وعدد المستخدمين الإضافيين النشطين.
+--   3) مشغّل يمنع تجاوز الحد عند الإدراج/التحويل إلى دور additional.
+--   4) RPC للمطوّر لضبط الحد (0..10) مع رفض حد أقل من العدد الحالي.
+--   5) تحديث admin_get_company_extras_v18 لإرجاع الحد والاستهلاك.
 --
 -- لا يمسّ هذا الملف أي جدول تشغيلي (رحلات/فواتير/سندات)، ولا يحذف بيانات،
--- وآمن تماماً لإعادة التشغيل.
+-- وآمن تماماً لإعادة التشغيل، ويمكن تنفيذه مجدداً إن توقف في المنتصف.
 -- ============================================================================
 
-begin;
+-- لا تنتظر الأقفال طويلاً: الفشل السريع أفضل من الجمود المتبادل.
+set lock_timeout = '4s';
+set statement_timeout = '60s';
+
+-- ---------------------------------------------------------------------------
+-- (0) مساعد إعادة المحاولة: ينفّذ عبارة DDL ويعيد المحاولة عند تعذّر القفل.
+--     كل استدعاء معاملة مستقلة قصيرة، فلا تتراكم الأقفال الحصرية.
+-- ---------------------------------------------------------------------------
+create or replace function public.v25_try_ddl(p_sql text, p_tries int default 8)
+returns void language plpgsql as $v25$
+declare
+  i int := 0;
+begin
+  loop
+    i := i + 1;
+    begin
+      execute p_sql;
+      return;
+    exception
+      when lock_not_available or deadlock_detected then
+        if i >= p_tries then
+          raise notice 'تعذّر الحصول على القفل بعد % محاولة: %', i, p_sql;
+          raise;
+        end if;
+        -- مهلة تصاعدية بسيطة تفسح المجال لمعاملات التطبيق الجارية.
+        perform pg_sleep(0.5 * i);
+    end;
+  end loop;
+end $v25$;
 
 -- ---------------------------------------------------------------------------
 -- (1) حد المستخدمين الإضافيين لكل شركة
+--     ADD COLUMN بقيمة افتراضية ثابتة لا يعيد كتابة الجدول في PG 11+،
+--     فالقفل الحصري لحظي.
 -- ---------------------------------------------------------------------------
-alter table public.companies
-  add column if not exists max_additional_users int not null default 1;
+select public.v25_try_ddl($ddl$
+  alter table public.companies
+    add column if not exists max_additional_users int not null default 1
+$ddl$);
 
-alter table public.companies drop constraint if exists companies_max_additional_users_check;
-alter table public.companies add constraint companies_max_additional_users_check
-  check (max_additional_users between 0 and 10);
+select public.v25_try_ddl($ddl$
+  alter table public.companies
+    drop constraint if exists companies_max_additional_users_check
+$ddl$);
+
+-- NOT VALID ثم VALIDATE: الأولى لا تفحص الصفوف القائمة (قفل قصير)،
+-- والثانية تفحصها بقفل أضعف لا يمنع القراءة والكتابة.
+select public.v25_try_ddl($ddl$
+  alter table public.companies
+    add constraint companies_max_additional_users_check
+    check (max_additional_users between 0 and 10) not valid
+$ddl$);
+
+select public.v25_try_ddl($ddl$
+  alter table public.companies
+    validate constraint companies_max_additional_users_check
+$ddl$);
 
 comment on column public.companies.max_additional_users is
   'أقصى عدد حسابات بدور additional مسموح بها لهذه الشركة (المالك غير محسوب).';
@@ -38,15 +90,23 @@ comment on column public.companies.max_additional_users is
 -- ---------------------------------------------------------------------------
 -- (2) رفع القيد القديم: مالك واحد فقط يبقى، والمستخدم الإضافي يصبح متعدداً
 -- ---------------------------------------------------------------------------
-drop index if exists public.uq_profiles_one_additional_per_company;
+select public.v25_try_ddl($ddl$
+  drop index if exists public.uq_profiles_one_additional_per_company
+$ddl$);
 
--- الفهرس التالي موجود من v11؛ نضمن بقاءه لأنه شرط سلامة حقيقي.
-create unique index if not exists uq_profiles_one_owner_per_company
-  on public.profiles(company_id) where company_id is not null and role = 'owner';
+-- الفهارس تُبنى بالطريقة العادية عمداً، لا CONCURRENTLY: محرّر SQL في
+-- Supabase قد يغلّف العبارات بمعاملة، و CREATE INDEX CONCURRENTLY ممنوع
+-- داخل المعاملات. وجدول profiles صغير (صفوف قليلة لكل شركة) فالقفل لحظي،
+-- و lock_timeout أعلاه يمنع أي انتظار طويل.
+select public.v25_try_ddl($ddl$
+  create unique index if not exists uq_profiles_one_owner_per_company
+    on public.profiles(company_id) where company_id is not null and role = 'owner'
+$ddl$);
 
--- فهرس العدّ السريع داخل المشغّل والـ RPC.
-create index if not exists ix_profiles_company_role
-  on public.profiles(company_id, role);
+select public.v25_try_ddl($ddl$
+  create index if not exists ix_profiles_company_role
+    on public.profiles(company_id, role)
+$ddl$);
 
 -- ---------------------------------------------------------------------------
 -- (3) فرض الحد على مستوى القاعدة (بديل الفهرس الفريد)
@@ -68,7 +128,8 @@ begin
     return new;
   end if;
 
-  -- يمنع تجاوز الحد عند وصول طلبَي إنشاء متزامنين لنفس الشركة.
+  -- قفل استشاري على الشركة فقط: يمنع تجاوز الحد عند وصول طلبَي إنشاء
+  -- متزامنين، ولا يقفل أي جدول فلا يشارك في أي جمود.
   perform pg_advisory_xact_lock(hashtextextended('company-users:' || new.company_id::text, 0));
 
   select coalesce(c.max_additional_users, 1) into v_limit
@@ -88,10 +149,15 @@ begin
   return new;
 end $$;
 
-drop trigger if exists trg_profiles_additional_limit on public.profiles;
-create trigger trg_profiles_additional_limit
-  before insert or update of role, company_id on public.profiles
-  for each row execute function public.enforce_additional_user_limit();
+select public.v25_try_ddl($ddl$
+  drop trigger if exists trg_profiles_additional_limit on public.profiles
+$ddl$);
+
+select public.v25_try_ddl($ddl$
+  create trigger trg_profiles_additional_limit
+    before insert or update of role, company_id on public.profiles
+    for each row execute function public.enforce_additional_user_limit()
+$ddl$);
 
 -- ---------------------------------------------------------------------------
 -- (4) RPC المطوّر: ضبط حد المستخدمين لشركة
@@ -181,14 +247,34 @@ end $$;
 revoke all on function public.admin_get_company_extras_v18(uuid) from public, anon;
 grant execute on function public.admin_get_company_extras_v18(uuid) to authenticated, service_role;
 
-commit;
+-- ---------------------------------------------------------------------------
+-- (6) تنظيف المساعد المؤقت
+-- ---------------------------------------------------------------------------
+drop function if exists public.v25_try_ddl(text, int);
+
+reset lock_timeout;
+reset statement_timeout;
 
 -- ============================================================================
--- ملاحظات التشغيل
--- • كل الشركات تبقى على حد = 1، فلا يتغيّر أي سلوك حتى يرفع المطوّر الحد يدوياً.
--- • ميزة additional_user تظل البوابة العامة في RLS: تُفعَّل ما دام هناك مستخدم
---   إضافي نشط واحد على الأقل، وتعطيل مستخدم بعينه يتم عبر profiles.is_active.
--- • للتحقق بعد التشغيل:
---     select id, name, max_additional_users from public.companies;
---     select company_id, role, count(*) from public.profiles group by 1,2;
+-- التحقق بعد التشغيل
+--
+--   -- العمود والحد:
+--   select id, name, max_additional_users from public.companies;
+--
+--   -- المشغّل موجود:
+--   select tgname from pg_trigger where tgname = 'trg_profiles_additional_limit';
+--
+--   -- كل الفهارس صالحة (يجب ألا يظهر أي صف):
+--   select c.relname from pg_class c join pg_index i on i.indexrelid = c.oid
+--    where not i.indisvalid and c.relname like '%profiles%';
+--
+--   -- القيد القديم مرفوع (يجب ألا يظهر أي صف):
+--   select indexname from pg_indexes
+--    where indexname = 'uq_profiles_one_additional_per_company';
+--
+-- ملاحظات:
+-- • كل الشركات تبقى على حد = 1، فلا يتغيّر أي سلوك حتى يرفع المطوّر الحد.
+-- • إن ظهر «تعذّر الحصول على القفل» فهناك معاملة طويلة جارية؛ نفّذ:
+--     select pid, state, query from pg_stat_activity where state <> 'idle';
+--   ثم أعد تشغيل الملف — فهو آمن للتكرار بالكامل.
 -- ============================================================================
