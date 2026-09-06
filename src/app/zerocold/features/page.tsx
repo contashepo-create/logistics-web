@@ -9,6 +9,7 @@ import {
   listCompanies,
   setAdditionalUserStatus,
   setCompanyFeature,
+  setCompanyUserLimit,
   type CompanyExtras,
   type CompanyRow,
   type CompanyUserRow,
@@ -20,7 +21,11 @@ import { ALLOWED_EMAIL_HINT } from "@/lib/security";
 const EMPTY_EXTRAS: CompanyExtras = {
   features: { tax_invoice: false, additional_user: false },
   users: [],
+  maxAdditionalUsers: 1,
+  usedAdditionalUsers: 0,
 };
+
+const USER_LIMIT_CHOICES = [0, 1, 2, 3, 4, 5] as const;
 
 function FeaturesContent() {
   const searchParams = useSearchParams();
@@ -64,8 +69,33 @@ function FeaturesContent() {
 
   const company = useMemo(() => companies?.find((c) => c.id === companyId) ?? null, [companies, companyId]);
   const owner = extras.users.find((u) => u.role === "owner");
-  const additional = extras.users.find((u) => u.role === "additional");
-  const additionalEnabled = Boolean(additional?.is_active && extras.features.additional_user);
+  const additionalUsers = useMemo(
+    () => extras.users.filter((u) => u.role === "additional"),
+    [extras.users],
+  );
+  const activeCount = additionalUsers.filter((u) => u.is_active).length;
+  const limit = extras.maxAdditionalUsers;
+  const canAddMore = additionalUsers.length < limit;
+  const additionalEnabled = activeCount > 0 && extras.features.additional_user;
+
+  const changeLimit = async (next: number) => {
+    if (!company) return;
+    setBusy("limit");
+    try {
+      await setCompanyUserLimit(company.id, next);
+      notify(
+        next === 0
+          ? "تم منع المستخدمين الإضافيين لهذه الشركة."
+          : `تم ضبط الحد على ${next} مستخدم إضافي لهذه الشركة.`,
+        "success",
+      );
+      await loadExtras(company.id);
+    } catch (e) {
+      notify(e instanceof Error ? e.message : String(e), "error");
+    } finally {
+      setBusy("");
+    }
+  };
 
   const toggleTaxInvoice = async () => {
     if (!company) return;
@@ -88,7 +118,7 @@ function FeaturesContent() {
     setBusy("create-user");
     try {
       await createAdditionalUser({ companyId: company.id, ...form });
-      notify("تم إنشاء المستخدم الإضافي وبريده مؤكد، ويمكنه تسجيل الدخول مباشرة.", "success");
+      notify("تم إنشاء المستخدم وبريده مؤكد، ويمكنه تسجيل الدخول مباشرة.", "success");
       setShowAdd(false);
       setForm({ name: "", email: "", phone: "", password: "" });
       await loadExtras(company.id);
@@ -183,38 +213,63 @@ function FeaturesContent() {
           <section className="page-card" style={{ borderTop: `4px solid ${additionalEnabled ? "#16a34a" : "#94a3b8"}` }}>
             <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: 12 }}>
               <div>
-                <div className="group-title" style={{ margin: 0 }}>👤 المستخدم الإضافي</div>
+                <div className="group-title" style={{ margin: 0 }}>👥 المستخدمون الإضافيون</div>
                 <p className="page-sub" style={{ marginTop: 7, lineHeight: 1.8 }}>
-                  حساب واحد إضافي ببريد مؤكد يصل إلى بيانات الشركة نفسها.
+                  حسابات ببريد مؤكد تعمل على بيانات الشركة نفسها بصلاحيات كاملة.
                 </p>
               </div>
               <span className={`badge ${additionalEnabled ? "badge-on" : "badge-off"}`}>
-                {additionalEnabled ? "مفعّل" : "غير مفعّل"}
+                {additionalUsers.length} / {limit}
               </span>
             </div>
 
-            {additional ? (
-              <div>
-                <div style={{ border: "1px solid var(--border)", borderRadius: 10, padding: 12, marginBottom: 12, lineHeight: 1.9 }}>
-                  <div><b>{additional.name}</b></div>
-                  <div dir="ltr" style={{ textAlign: "right", color: "var(--muted)" }}>{additional.email}</div>
-                  <div dir="ltr" style={{ textAlign: "right", color: "var(--muted)" }}>{additional.phone || "—"}</div>
-                </div>
-                <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
-                  <Button variant={additional.is_active ? "danger" : "primary"} onClick={() => toggleUser(additional)} disabled={busy !== ""}>
-                    {busy === "user-status" ? "جارٍ الحفظ…" : additional.is_active ? "إيقاف المستخدم" : "إعادة التفعيل"}
-                  </Button>
-                  <Button variant="row-danger" onClick={() => removeUser(additional)} disabled={busy !== ""}>
-                    {busy === "delete-user" ? "جارٍ الحذف…" : "حذف الحساب"}
-                  </Button>
-                </div>
-              </div>
+            <Field label="عدد المستخدمين الإضافيين المسموح بهم">
+              <Select
+                value={String(limit)}
+                disabled={busy !== ""}
+                onChange={(e) => void changeLimit(Number(e.target.value))}
+              >
+                {USER_LIMIT_CHOICES.map((n) => (
+                  <option key={n} value={n} disabled={n < additionalUsers.length}>
+                    {n === 0 ? "لا يُسمح بمستخدمين إضافيين" : `${n} مستخدم إضافي`}
+                  </option>
+                ))}
+              </Select>
+            </Field>
+            <p style={{ color: "var(--muted)", fontSize: 12, margin: "6px 0 14px" }}>
+              لخفض الحد يجب حذف الحسابات الزائدة أولاً. المالك غير محسوب ضمن هذا العدد.
+            </p>
+
+            {additionalUsers.length === 0 ? (
+              <p style={{ color: "var(--muted)", fontSize: 13 }}>لا يوجد مستخدمون إضافيون لهذه الشركة.</p>
             ) : (
-              <div>
-                <p style={{ color: "var(--muted)", fontSize: 13 }}>لا يوجد مستخدم إضافي لهذه الشركة.</p>
-                <Button variant="primary" onClick={() => setShowAdd(true)}>إضافة مستخدم إضافي</Button>
+              <div style={{ display: "grid", gap: 10, marginBottom: 12 }}>
+                {additionalUsers.map((user) => (
+                  <div key={user.id} style={{ border: "1px solid var(--border)", borderRadius: 10, padding: 12, lineHeight: 1.9 }}>
+                    <div style={{ display: "flex", justifyContent: "space-between", gap: 10, alignItems: "center" }}>
+                      <b>{user.name}</b>
+                      <span className={`badge ${user.is_active ? "badge-on" : "badge-off"}`}>
+                        {user.is_active ? "نشط" : "موقوف"}
+                      </span>
+                    </div>
+                    <div dir="ltr" style={{ textAlign: "right", color: "var(--muted)" }}>{user.email}</div>
+                    <div dir="ltr" style={{ textAlign: "right", color: "var(--muted)" }}>{user.phone || "—"}</div>
+                    <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginTop: 8 }}>
+                      <Button variant={user.is_active ? "danger" : "primary"} onClick={() => toggleUser(user)} disabled={busy !== ""}>
+                        {user.is_active ? "إيقاف المستخدم" : "إعادة التفعيل"}
+                      </Button>
+                      <Button variant="row-danger" onClick={() => removeUser(user)} disabled={busy !== ""}>
+                        حذف الحساب
+                      </Button>
+                    </div>
+                  </div>
+                ))}
               </div>
             )}
+
+            <Button variant="primary" onClick={() => setShowAdd(true)} disabled={busy !== "" || !canAddMore}>
+              {canAddMore ? "إضافة مستخدم" : `بلغت الحد المسموح (${limit})`}
+            </Button>
           </section>
         </div>
       ) : null}

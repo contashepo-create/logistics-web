@@ -13,8 +13,8 @@ export const FEATURE_LABELS: Record<FeatureKey, { name: string; description: str
     description: "خصائص الفاتورة الضريبية والتحقق وطباعة رمز QR.",
   },
   additional_user: {
-    name: "المستخدم الإضافي",
-    description: "حساب إضافي واحد يعمل على بيانات الشركة نفسها.",
+    name: "المستخدمون الإضافيون",
+    description: "حسابات إضافية تعمل على بيانات الشركة نفسها، بعدد يحدده المطوّر لكل شركة.",
   },
 };
 

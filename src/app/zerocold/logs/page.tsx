@@ -16,6 +16,7 @@ const ACTION_LABELS: Record<string, string> = {
   "admin.activate_additional_user": "تفعيل مستخدم إضافي",
   "admin.deactivate_additional_user": "إيقاف مستخدم إضافي",
   "admin.delete_additional_user": "حذف مستخدم إضافي",
+  "admin.set_company_user_limit": "تغيير عدد المستخدمين المسموح به",
 };
 
 export default function AdminLogsPage() {

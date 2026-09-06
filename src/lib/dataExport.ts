@@ -119,7 +119,13 @@ export async function exportDataPdf(): Promise<void> {
   const companyName = String(company.name ?? "الشركة");
   const { printMeta } = await import("./exportHelper");
   const meta = await printMeta();
-  const esc = (v: unknown) => String(v ?? "").replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+  const esc = (v: unknown) =>
+    String(v ?? "")
+      .replace(/&/g, "&amp;")
+      .replace(/</g, "&lt;")
+      .replace(/>/g, "&gt;")
+      .replace(/"/g, "&quot;")
+      .replace(/'/g, "&#39;");
 
   let html = `<div dir="rtl" style="font-family:'IBM Plex Sans Arabic',sans-serif;color:#111;">
     <div style="text-align:center;border-bottom:2px solid #1d4ed8;padding-bottom:8px;margin-bottom:8px;">

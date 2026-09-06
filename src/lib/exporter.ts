@@ -2,10 +2,14 @@
 // Excel (exceljs) + PDF (html2canvas + jsPDF) + طباعة (window.print)
 
 export function esc(v: unknown): string {
+  // يشمل الاقتباسات لأن هذه القيم تُحقن أحياناً داخل خصائص HTML
+  // (مثل src/alt/style)، وبدونها يستطيع نص يحتوي " الخروج من الخاصية.
   return String(v ?? "—")
     .replace(/&/g, "&amp;")
     .replace(/</g, "&lt;")
-    .replace(/>/g, "&gt;");
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&#39;");
 }
 
 export interface DocOptions {

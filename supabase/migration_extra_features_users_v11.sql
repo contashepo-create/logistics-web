@@ -38,11 +38,28 @@ alter table public.profiles add constraint profiles_role_check
 
 -- إزالة القيد القديم الذي كان يفرض مستخدماً واحداً فقط لكل شركة.
 drop index if exists public.uq_profiles_one_user_per_company;
--- مالك واحد ومستخدم إضافي واحد كحد أقصى لكل شركة.
+-- مالك واحد لكل شركة.
 create unique index if not exists uq_profiles_one_owner_per_company
   on public.profiles(company_id) where company_id is not null and role = 'owner';
-create unique index if not exists uq_profiles_one_additional_per_company
-  on public.profiles(company_id) where company_id is not null and role = 'additional';
+
+-- ⚠️ أُلغي قيد «مستخدم إضافي واحد» في v25 واستُبدل بحدّ قابل للضبط لكل شركة
+-- (companies.max_additional_users + المشغّل trg_profiles_additional_limit).
+-- إعادة تشغيل v11 على قاعدة مُرحَّلة كانت ستعيد القيد القديم وتكسر تعدّد
+-- المستخدمين، لذلك لا يُنشأ الفهرس إلا إذا لم تُطبَّق v25 بعد.
+do $v11_additional$
+begin
+  if not exists (
+    select 1 from information_schema.columns
+     where table_schema = 'public'
+       and table_name = 'companies'
+       and column_name = 'max_additional_users'
+  ) then
+    create unique index if not exists uq_profiles_one_additional_per_company
+      on public.profiles(company_id) where company_id is not null and role = 'additional';
+  else
+    raise notice 'v25 مطبّقة: تخطّي قيد المستخدم الإضافي الواحد.';
+  end if;
+end $v11_additional$;
 
 -- إعادة تعريف الحارس: يحافظ على الدور الذي يعيّنه الخادم بدلاً من استبداله
 -- بالقيمة القديمة user/admin، مع استمرار تطبيع البريد والاسم والهاتف.

@@ -26,6 +26,38 @@ function friendlyAuthError(message: string): string {
   return message || "تعذّر إنشاء حساب المستخدم.";
 }
 
+/** حد المستخدمين الإضافيين لشركة، مع افتراض آمن قبل تشغيل ترحيلة v25. */
+function userLimit(raw: unknown): number {
+  const n = Number(raw);
+  if (!Number.isFinite(n) || n < 0) return 1;
+  return Math.min(Math.trunc(n), 10);
+}
+
+/**
+ * يعيد ضبط ميزة additional_user لتعكس الواقع: مفعّلة ما دام هناك مستخدم إضافي
+ * نشط واحد على الأقل. مع تعدّد المستخدمين لم يعد جائزاً أن يُطفئ إيقافُ حسابٍ
+ * واحد الوصولَ عن بقية الحسابات، لأن الميزة بوابة على مستوى الشركة في RLS.
+ */
+async function syncAdditionalFeature(
+  sb: ReturnType<typeof serviceClient>,
+  companyId: string,
+  adminId: string,
+): Promise<string | null> {
+  const { count, error } = await sb
+    .from("profiles").select("id", { count: "exact", head: true })
+    .eq("company_id", companyId).eq("role", "additional").eq("is_active", true);
+  if (error) return error.message;
+
+  const { error: featureError } = await sb.from("company_features").upsert({
+    company_id: companyId,
+    feature_key: "additional_user",
+    enabled: (count ?? 0) > 0,
+    updated_by: adminId,
+    updated_at: new Date().toISOString(),
+  }, { onConflict: "company_id,feature_key" });
+  return featureError?.message ?? null;
+}
+
 /** كل عمليات المستخدم الإضافي حساسة وتُنفذ حصراً من الخادم بمفتاح الخدمة. */
 export async function POST(req: NextRequest) {
   if (!rateLimit(`adm:company-users:${clientIp(req)}`, 40, 60_000).allowed) return bad("طلبات كثيرة جداً.", 429);
@@ -45,8 +77,13 @@ export async function POST(req: NextRequest) {
   if (!UUID_RE.test(companyId)) return bad("معرّف الشركة غير صالح.");
 
   const sb = serviceClient();
-  const { data: company, error: companyError } = await sb
-    .from("companies").select("id, name").eq("id", companyId).maybeSingle();
+  let { data: company, error: companyError } = await sb
+    .from("companies").select("id, name, max_additional_users").eq("id", companyId).maybeSingle();
+  if (companyError && isMissingRelation(companyError.message)) {
+    // قاعدة لم تُشغَّل عليها ترحيلة v25 بعد: الحد الافتراضي مستخدم واحد.
+    ({ data: company, error: companyError } = await sb
+      .from("companies").select("id, name").eq("id", companyId).maybeSingle());
+  }
   if (companyError) return bad(companyError.message, 500);
   if (!company) return bad("الشركة غير موجودة.", 404);
 
@@ -68,15 +105,32 @@ export async function POST(req: NextRequest) {
     const passwordCheck = checkPassword(password);
     if (!passwordCheck.ok) return bad(passwordCheck.message);
 
-    const { data: existing, error: existingError } = await sb
-      .from("profiles").select("id").eq("company_id", companyId).eq("role", "additional").maybeSingle();
+    // الحد لكل شركة (v25). العمود قد يكون غائباً قبل تشغيل الترحيلة، فنعود
+    // إلى القيمة القديمة (مستخدم واحد) بدل رفض العملية.
+    const limit = userLimit(company.max_additional_users);
+    const { count: usedCount, error: existingError } = await sb
+      .from("profiles").select("id", { count: "exact", head: true })
+      .eq("company_id", companyId).eq("role", "additional");
     if (existingError) return bad(existingError.message, 500);
-    if (existing) return bad("يوجد مستخدم إضافي لهذه الشركة بالفعل.", 409);
+    const used = usedCount ?? 0;
+    if (used >= limit) {
+      return bad(
+        limit === 0
+          ? "المستخدمون الإضافيون غير مسموح بهم لهذه الشركة."
+          : `بلغت هذه الشركة الحد المسموح به للمستخدمين الإضافيين (${limit}). ارفع الحد أولاً أو احذف حساباً قائماً.`,
+        409,
+      );
+    }
 
-    const { data: phoneOwner, error: phoneError } = await sb
-      .from("profiles").select("id").eq("phone", phone).maybeSingle();
+    // limit(1) بدل maybeSingle: لو وُجد أكثر من صف بنفس الهاتف (بيانات قديمة
+    // سابقة لحارس التفرّد) كانت maybeSingle تُرجع خطأ 500 غامضاً بدل رسالة
+    // واضحة. الوجود وحده كافٍ للرفض.
+    const { data: phoneOwners, error: phoneError } = await sb
+      .from("profiles").select("id").eq("phone", phone).limit(1);
     if (phoneError) return bad(phoneError.message, 500);
-    if (phoneOwner) return bad("رقم الهاتف مستخدم في حساب آخر.", 409);
+    if (phoneOwners && phoneOwners.length > 0) {
+      return bad("رقم الهاتف مستخدم في حساب آخر.", 409);
+    }
 
     // تذكرة إنشاء خادمية (v24): GoTrue تكتب app_metadata بعد الإدراج بـ UPDATE
     // منفصل، فلا يراها مشغّل BEFORE INSERT على auth.users ويطبّق تحققات المالك
@@ -130,19 +184,18 @@ export async function POST(req: NextRequest) {
     const { error: profileError } = await sb.from("profiles").insert(profile);
     if (profileError) {
       await sb.auth.admin.deleteUser(userId).catch(() => undefined);
-      return bad(profileError.code === "23505" ? "يوجد مستخدم إضافي لهذه الشركة بالفعل." : profileError.message, 409);
+      return bad(
+        profileError.code === "23505"
+          ? "البريد أو الهاتف مستخدم في حساب آخر."
+          : profileError.message,
+        409,
+      );
     }
 
-    const { error: featureError } = await sb.from("company_features").upsert({
-      company_id: companyId,
-      feature_key: "additional_user",
-      enabled: true,
-      updated_by: admin.id,
-      updated_at: new Date().toISOString(),
-    }, { onConflict: "company_id,feature_key" });
+    const featureError = await syncAdditionalFeature(sb, companyId, admin.id);
     if (featureError) {
       await sb.auth.admin.deleteUser(userId).catch(() => undefined);
-      return bad(featureError.message, 500);
+      return bad(featureError, 500);
     }
 
     await sb.from("activity_logs").insert({
@@ -174,16 +227,10 @@ export async function POST(req: NextRequest) {
     const { error: statusError } = await sb.from("profiles").update({ is_active: active }).eq("id", userId);
     if (statusError) return bad(statusError.message, 500);
 
-    const { error: featureError } = await sb.from("company_features").upsert({
-      company_id: companyId,
-      feature_key: "additional_user",
-      enabled: active,
-      updated_by: admin.id,
-      updated_at: new Date().toISOString(),
-    }, { onConflict: "company_id,feature_key" });
+    const featureError = await syncAdditionalFeature(sb, companyId, admin.id);
     if (featureError) {
       await sb.from("profiles").update({ is_active: oldActive }).eq("id", userId);
-      return bad(featureError.message, 500);
+      return bad(featureError, 500);
     }
 
     await sb.from("activity_logs").insert({
@@ -198,26 +245,13 @@ export async function POST(req: NextRequest) {
   }
 
   if (action === "delete") {
-    const { error: featureError } = await sb.from("company_features").upsert({
-      company_id: companyId,
-      feature_key: "additional_user",
-      enabled: false,
-      updated_by: admin.id,
-      updated_at: new Date().toISOString(),
-    }, { onConflict: "company_id,feature_key" });
-    if (featureError) return bad(featureError.message, 500);
-
+    // نحذف أولاً ثم نزامن الميزة: الإطفاء المسبق كان يقطع الوصول عن بقية
+    // المستخدمين الإضافيين للشركة نفسها.
     const { error: deleteError } = await sb.auth.admin.deleteUser(userId);
-    if (deleteError) {
-      await sb.from("company_features").upsert({
-        company_id: companyId,
-        feature_key: "additional_user",
-        enabled: profile.is_active !== false,
-        updated_by: admin.id,
-        updated_at: new Date().toISOString(),
-      }, { onConflict: "company_id,feature_key" });
-      return bad(friendlyAuthError(deleteError.message), 500);
-    }
+    if (deleteError) return bad(friendlyAuthError(deleteError.message), 500);
+
+    const featureError = await syncAdditionalFeature(sb, companyId, admin.id);
+    if (featureError) return bad(featureError, 500);
 
     await sb.from("activity_logs").insert({
       actor_id: admin.id,

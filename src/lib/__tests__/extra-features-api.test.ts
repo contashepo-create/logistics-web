@@ -44,6 +44,7 @@ function query(result: { data?: any; error?: any }) {
     select: () => q,
     eq: () => q,
     order: () => q,
+    limit: () => q,
     insert: () => q,
     update: () => q,
     upsert: () => q,
