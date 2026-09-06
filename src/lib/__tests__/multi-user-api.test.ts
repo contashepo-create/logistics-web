@@ -50,6 +50,7 @@ function query(result: { data?: any; error?: any; count?: number }) {
     select: () => q,
     eq: () => q,
     order: () => q,
+    limit: () => q,
     insert: () => q,
     update: () => q,
     upsert: () => q,

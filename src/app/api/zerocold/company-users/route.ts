@@ -122,10 +122,15 @@ export async function POST(req: NextRequest) {
       );
     }
 
-    const { data: phoneOwner, error: phoneError } = await sb
-      .from("profiles").select("id").eq("phone", phone).maybeSingle();
+    // limit(1) بدل maybeSingle: لو وُجد أكثر من صف بنفس الهاتف (بيانات قديمة
+    // سابقة لحارس التفرّد) كانت maybeSingle تُرجع خطأ 500 غامضاً بدل رسالة
+    // واضحة. الوجود وحده كافٍ للرفض.
+    const { data: phoneOwners, error: phoneError } = await sb
+      .from("profiles").select("id").eq("phone", phone).limit(1);
     if (phoneError) return bad(phoneError.message, 500);
-    if (phoneOwner) return bad("رقم الهاتف مستخدم في حساب آخر.", 409);
+    if (phoneOwners && phoneOwners.length > 0) {
+      return bad("رقم الهاتف مستخدم في حساب آخر.", 409);
+    }
 
     // تذكرة إنشاء خادمية (v24): GoTrue تكتب app_metadata بعد الإدراج بـ UPDATE
     // منفصل، فلا يراها مشغّل BEFORE INSERT على auth.users ويطبّق تحققات المالك

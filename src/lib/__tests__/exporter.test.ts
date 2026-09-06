@@ -4,9 +4,17 @@ import { esc, companyHeaderHtml, buildTableHtml, buildReportHtml, openPrintPrevi
 
 describe("esc — تعقيم XSS", () => {
   it("يعقّم الرموز الخطرة", () => {
-    expect(esc('<script>alert("x")</script>')).toBe("&lt;script&gt;alert(\"x\")&lt;/script&gt;");
+    expect(esc('<script>alert("x")</script>')).toBe("&lt;script&gt;alert(&quot;x&quot;)&lt;/script&gt;");
     expect(esc("a & b")).toBe("a &amp; b");
     expect(esc("1 < 2 > 0")).toBe("1 &lt; 2 &gt; 0");
+  });
+
+  // القيم تُحقن أحياناً داخل خصائص HTML (src/alt/style)، فلولا ترميز
+  // الاقتباسات لأمكن الخروج من الخاصية وحقن معالج أحداث.
+  it("يعقّم الاقتباسات فلا يمكن الخروج من خاصية HTML", () => {
+    expect(esc('" onerror="alert(1)')).toBe("&quot; onerror=&quot;alert(1)");
+    expect(esc("' onload='x")).toBe("&#39; onload=&#39;x");
+    expect(esc('a"b')).not.toContain('"');
   });
   it("يعيد فاصلاً بديلاً للقيم الفارغة", () => {
     expect(esc(null)).toBe("—");

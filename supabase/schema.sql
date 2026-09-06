@@ -61,6 +61,11 @@ alter table public.companies add column if not exists postal_code     text defau
 alter table public.companies add column if not exists additional_no   text default '';
 alter table public.companies add column if not exists address_note    text default '';
 alter table public.companies add column if not exists print_settings  jsonb not null default '{}'::jsonb;
+-- حد المستخدمين الإضافيين لكل شركة (v25). المالك غير محسوب ضمنه.
+alter table public.companies add column if not exists max_additional_users int not null default 1;
+alter table public.companies drop constraint if exists companies_max_additional_users_check;
+alter table public.companies add constraint companies_max_additional_users_check
+  check (max_additional_users between 0 and 10);
 
 alter table public.companies drop constraint if exists companies_entity_type_check;
 alter table public.companies add constraint companies_entity_type_check
@@ -70,7 +75,8 @@ alter table public.companies add constraint companies_tax_status_check
   check (tax_status in ('taxable', 'exempt', 'not_registered'));
 
 -- ---------------------------------------------------------------------------
--- الملفات الشخصية (رابط المستخدم ← شركته) مع مالك ومستخدم إضافي واحد
+-- الملفات الشخصية (رابط المستخدم ← شركته): مالك واحد + مستخدمون إضافيون
+-- بحدّ قابل للضبط لكل شركة عبر companies.max_additional_users (v25)
 -- ---------------------------------------------------------------------------
 create table if not exists public.profiles (
   id         uuid primary key references auth.users(id) on delete cascade,
@@ -85,8 +91,50 @@ create table if not exists public.profiles (
 );
 create unique index if not exists uq_profiles_one_owner_per_company
   on public.profiles(company_id) where company_id is not null and role = 'owner';
-create unique index if not exists uq_profiles_one_additional_per_company
-  on public.profiles(company_id) where company_id is not null and role = 'additional';
+-- ⚠️ لا فهرس فريد للمستخدم الإضافي: العدد محكوم بـ max_additional_users
+-- ويُفرض بالمشغّل trg_profiles_additional_limit أدناه (v25).
+drop index if exists public.uq_profiles_one_additional_per_company;
+create index if not exists ix_profiles_company_role
+  on public.profiles(company_id, role);
+
+-- فرض حد المستخدمين الإضافيين لكل شركة.
+create or replace function public.enforce_additional_user_limit()
+returns trigger language plpgsql set search_path = public, pg_temp as $$
+declare
+  v_limit int;
+  v_count int;
+begin
+  if new.role <> 'additional' or new.company_id is null then
+    return new;
+  end if;
+  if tg_op = 'UPDATE'
+     and old.role = 'additional'
+     and old.company_id is not distinct from new.company_id then
+    return new;
+  end if;
+
+  perform pg_advisory_xact_lock(hashtextextended('company-users:' || new.company_id::text, 0));
+
+  select coalesce(c.max_additional_users, 1) into v_limit
+    from public.companies c where c.id = new.company_id;
+  if v_limit is null then v_limit := 1; end if;
+
+  select count(*) into v_count
+    from public.profiles p
+   where p.company_id = new.company_id
+     and p.role = 'additional'
+     and p.id <> new.id;
+
+  if v_count >= v_limit then
+    raise exception 'بلغت هذه الشركة الحد المسموح به للمستخدمين الإضافيين (%).', v_limit;
+  end if;
+  return new;
+end $$;
+
+drop trigger if exists trg_profiles_additional_limit on public.profiles;
+create trigger trg_profiles_additional_limit
+  before insert or update of role, company_id on public.profiles
+  for each row execute function public.enforce_additional_user_limit();
 
 -- سجل المميزات: غياب صف الشركة يعني أن الميزة غير مفعّلة افتراضياً.
 create table if not exists public.feature_catalog (
@@ -97,7 +145,7 @@ create table if not exists public.feature_catalog (
 );
 insert into public.feature_catalog (feature_key, name_ar, description_ar) values
   ('tax_invoice', 'الفاتورة الضريبية', 'تفعيل خصائص الفاتورة الضريبية والتحقق وطباعة رمز QR.'),
-  ('additional_user', 'المستخدم الإضافي', 'السماح لحساب إضافي واحد بالدخول إلى بيانات الشركة نفسها.')
+  ('additional_user', 'المستخدمون الإضافيون', 'السماح لحسابات إضافية بالدخول إلى بيانات الشركة نفسها (العدد محكوم بـ max_additional_users).')
 on conflict (feature_key) do update set name_ar = excluded.name_ar, description_ar = excluded.description_ar;
 
 create table if not exists public.company_features (
@@ -1421,7 +1469,7 @@ create or replace function public.admin_get_company_extras_v18(p_company_id uuid
 returns jsonb
 language plpgsql security definer set search_path = public, pg_temp as $$
 declare
-  v_features jsonb; v_users jsonb;
+  v_features jsonb; v_users jsonb; v_limit int; v_used int; v_active int;
 begin
   if not public.is_admin() then raise exception 'غير مصرح لك بهذا الإجراء.'; end if;
   if not exists(select 1 from public.companies where id = p_company_id) then
@@ -1441,11 +1489,64 @@ begin
     from public.profiles p
    where p.company_id = p_company_id;
 
-  return jsonb_build_object('features', v_features, 'users', v_users);
+  select coalesce(max_additional_users, 1) into v_limit
+    from public.companies where id = p_company_id;
+
+  select count(*) filter (where p.role = 'additional'),
+         count(*) filter (where p.role = 'additional' and p.is_active)
+    into v_used, v_active
+    from public.profiles p
+   where p.company_id = p_company_id;
+
+  return jsonb_build_object(
+    'features', v_features,
+    'users', v_users,
+    'max_additional_users', coalesce(v_limit, 1),
+    'used_additional_users', coalesce(v_used, 0),
+    'active_additional_users', coalesce(v_active, 0)
+  );
 end $$;
 
 revoke all on function public.admin_get_company_extras_v18(uuid) from public, anon;
 grant execute on function public.admin_get_company_extras_v18(uuid) to authenticated, service_role;
+
+-- ضبط عدد المستخدمين الإضافيين المسموح بهم لشركة (v25).
+create or replace function public.admin_set_company_user_limit_v25(
+  p_company_id uuid, p_max int
+) returns jsonb
+language plpgsql security definer set search_path = public, pg_temp as $$
+declare
+  v_used int;
+begin
+  if not public.is_admin() then raise exception 'غير مصرح لك بهذا الإجراء.'; end if;
+  if p_company_id is null or not exists(select 1 from public.companies where id = p_company_id) then
+    raise exception 'الشركة غير موجودة.';
+  end if;
+  if p_max is null or p_max < 0 or p_max > 10 then
+    raise exception 'الحد المسموح به بين 0 و10 مستخدمين إضافيين.';
+  end if;
+
+  perform pg_advisory_xact_lock(hashtextextended('company-users:' || p_company_id::text, 0));
+
+  select count(*) into v_used
+    from public.profiles p
+   where p.company_id = p_company_id and p.role = 'additional';
+
+  if p_max < v_used then
+    raise exception 'يوجد % مستخدماً إضافياً بالفعل؛ احذف الزائد قبل خفض الحد إلى %.', v_used, p_max;
+  end if;
+
+  update public.companies set max_additional_users = p_max where id = p_company_id;
+
+  insert into public.activity_logs(actor_id, actor_email, action, entity, entity_id, detail)
+  values (auth.uid(), coalesce(auth.jwt() ->> 'email', ''), 'admin.set_company_user_limit',
+          'company', p_company_id::text, p_max::text);
+
+  return jsonb_build_object('max_additional_users', p_max, 'used', v_used);
+end $$;
+
+revoke all on function public.admin_set_company_user_limit_v25(uuid, int) from public, anon;
+grant execute on function public.admin_set_company_user_limit_v25(uuid, int) to authenticated, service_role;
 
 -- إعادة منح القراءة الأساسية؛ RLS ما زالت تمنع غير المطوّر من قراءة شركات الغير.
 grant select on public.companies, public.profiles, public.company_features to authenticated, service_role;

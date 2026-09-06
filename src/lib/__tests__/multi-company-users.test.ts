@@ -88,3 +88,54 @@ describe("ترحيلة تعدّد المستخدمين الإضافيين v25", 
     expect(sqlCode).not.toMatch(/create\s+(unique\s+)?index\s+concurrently/i);
   });
 });
+
+// ---------------------------------------------------------------------------
+// اتساق التثبيت الجديد مع القاعدة المُرحَّلة.
+// ثغرة حقيقية اكتُشفت في المراجعة: schema.sql (المستخدم للتثبيت الجديد) كان
+// ما زال ينشئ الفهرس الفريد القديم ولا يعرف v25 إطلاقاً، فأي نشر جديد كان
+// سيفقد الميزة صامتاً ويختلف سلوكه عن القواعد المُرحَّلة.
+// ---------------------------------------------------------------------------
+describe("اتساق schema.sql مع ترحيلة v25", () => {
+  const schema = readFileSync(join(process.cwd(), "supabase/schema.sql"), "utf8");
+  const schemaCode = schema.replace(/--.*$/gm, "");
+
+  it("ينشئ عمود الحد بنفس القيد", () => {
+    expect(schemaCode).toMatch(/max_additional_users int not null default 1/i);
+    expect(schemaCode).toMatch(/check \(max_additional_users between 0 and 10\)/i);
+  });
+
+  it("لا ينشئ الفهرس الفريد للمستخدم الإضافي بل يحذفه", () => {
+    expect(schemaCode).not.toMatch(
+      /create unique index[^;]*uq_profiles_one_additional_per_company/i,
+    );
+    expect(schemaCode).toMatch(/drop index if exists public\.uq_profiles_one_additional_per_company/i);
+  });
+
+  it("يشمل مشغّل فرض الحد ودالة ضبطه", () => {
+    expect(schemaCode).toMatch(/create or replace function public\.enforce_additional_user_limit/i);
+    expect(schemaCode).toMatch(/create trigger trg_profiles_additional_limit/i);
+    expect(schemaCode).toMatch(/create or replace function public\.admin_set_company_user_limit_v25/i);
+  });
+
+  it("تعيد لقطة الشركة الحد والاستهلاك كما في الترحيلة", () => {
+    expect(schemaCode).toMatch(/'max_additional_users'/);
+    expect(schemaCode).toMatch(/'used_additional_users'/);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// إعادة تشغيل v11 على قاعدة مُرحَّلة كانت ستعيد إنشاء الفهرس الفريد القديم
+// وتكسر تعدّد المستخدمين بصمت.
+// ---------------------------------------------------------------------------
+describe("توافق v11 القديمة مع v25", () => {
+  const v11 = readFileSync(
+    join(process.cwd(), "supabase/migration_extra_features_users_v11.sql"),
+    "utf8",
+  );
+
+  it("لا تعيد إنشاء قيد المستخدم الواحد إن كانت v25 مطبّقة", () => {
+    expect(v11).toMatch(/column_name = 'max_additional_users'/i);
+    // الإنشاء صار مشروطاً داخل كتلة do بدل أن يكون عبارة مباشرة.
+    expect(v11).toMatch(/if not exists \([\s\S]*max_additional_users[\s\S]*\) then/i);
+  });
+});

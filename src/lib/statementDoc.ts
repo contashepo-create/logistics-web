@@ -6,7 +6,13 @@ import type { CustomerStatementFull } from "@/lib/calc";
 import type { PrintSettings } from "@/lib/print";
 
 function esc(s: unknown): string {
-  return String(s ?? "").replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+  // الاقتباسات مشمولة: القيم تُحقن داخل خصائص HTML أيضاً (src/style).
+  return String(s ?? "")
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&#39;");
 }
 
 export interface StatementDocOptions {
