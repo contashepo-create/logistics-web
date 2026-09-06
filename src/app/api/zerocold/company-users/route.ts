@@ -13,6 +13,10 @@ function friendlyAuthError(message: string): string {
   const m = message.toLowerCase();
   if (m.includes("already") || m.includes("registered") || m.includes("exists")) return "البريد الإلكتروني مستخدم في حساب آخر.";
   if (m.includes("password")) return "كلمة المرور لا تحقق متطلبات الأمان.";
+  // GoTrue يخفي رسالة أي مشغّل على auth.users خلف رسالة عامة واحدة.
+  if (m.includes("database error")) {
+    return "تعذّر إنشاء الحساب بسبب قيود قاعدة البيانات (غالباً مشغّل تحقق التسجيل على auth.users). شغّل ملف migration_fix_additional_user_creation_v23.sql ثم أعد المحاولة.";
+  }
   return message || "تعذّر إنشاء حساب المستخدم.";
 }
 
