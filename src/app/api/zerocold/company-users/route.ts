@@ -9,13 +9,19 @@ export const runtime = "nodejs";
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 const bad = (message: string, status = 400) => NextResponse.json({ success: false, message }, { status });
 
+/** جدول/دالة غير موجودة في القاعدة — ترحيلة ناقصة وليست خطأ بيانات. */
+function isMissingRelation(message: string): boolean {
+  const m = message.toLowerCase();
+  return m.includes("does not exist") || m.includes("could not find the table") || m.includes("schema cache");
+}
+
 function friendlyAuthError(message: string): string {
   const m = message.toLowerCase();
   if (m.includes("already") || m.includes("registered") || m.includes("exists")) return "البريد الإلكتروني مستخدم في حساب آخر.";
   if (m.includes("password")) return "كلمة المرور لا تحقق متطلبات الأمان.";
   // GoTrue يخفي رسالة أي مشغّل على auth.users خلف رسالة عامة واحدة.
   if (m.includes("database error")) {
-    return "تعذّر إنشاء الحساب بسبب قيود قاعدة البيانات (غالباً مشغّل تحقق التسجيل على auth.users). شغّل ملف migration_fix_additional_user_creation_v23.sql ثم أعد المحاولة.";
+    return "تعذّر إنشاء الحساب بسبب قيود قاعدة البيانات (مشغّل تحقق التسجيل على auth.users). شغّل ملف supabase/migration_fix_additional_user_creation_v24.sql في Supabase SQL Editor ثم أعد المحاولة.";
   }
   return message || "تعذّر إنشاء حساب المستخدم.";
 }
@@ -72,15 +78,43 @@ export async function POST(req: NextRequest) {
     if (phoneError) return bad(phoneError.message, 500);
     if (phoneOwner) return bad("رقم الهاتف مستخدم في حساب آخر.", 409);
 
+    // تذكرة إنشاء خادمية (v24): GoTrue تكتب app_metadata بعد الإدراج بـ UPDATE
+    // منفصل، فلا يراها مشغّل BEFORE INSERT على auth.users ويطبّق تحققات المالك
+    // على المستخدم الإضافي فيفشل بـ «Database error creating new user».
+    // التذكرة تُقرأ بالبريد وقت الإدراج، وتُستهلك مرة واحدة، ولا يمكن تزويرها
+    // من المتصفح (RLS بلا سياسات + service_role فقط).
+    const ticket = {
+      email: emailCheck.email,
+      company_id: companyId,
+      requested_by: admin.id,
+      created_at: new Date().toISOString(),
+      expires_at: new Date(Date.now() + 15 * 60_000).toISOString(),
+      consumed_at: null,
+    };
+    const { error: ticketError } = await sb
+      .from("managed_signups").upsert(ticket, { onConflict: "email" });
+    if (ticketError) {
+      return bad(
+        isMissingRelation(ticketError.message)
+          ? "جدول تذاكر الإنشاء غير موجود. نفّذ ملف supabase/migration_fix_additional_user_creation_v24.sql في Supabase SQL Editor ثم أعد المحاولة."
+          : ticketError.message,
+        500,
+      );
+    }
+
     const { data: authData, error: authError } = await sb.auth.admin.createUser({
       email: emailCheck.email,
       password,
       email_confirm: true,
       user_metadata: { name, phone },
-      // raw_app_meta_data لا يستطيع المستخدم تزويرها، بعكس user_metadata.
+      // مسار احتياطي فقط؛ لا تصل إلى مشغّل الإدراج (انظر التذكرة أعلاه).
       app_metadata: { managed_by_developer: true },
     });
-    if (authError || !authData.user) return bad(friendlyAuthError(authError?.message ?? ""), 400);
+    if (authError || !authData.user) {
+      await sb.from("managed_signups").delete().eq("email", emailCheck.email);
+      return bad(friendlyAuthError(authError?.message ?? ""), 400);
+    }
+    await sb.from("managed_signups").delete().eq("email", emailCheck.email);
 
     const userId = authData.user.id;
     const profile = {
