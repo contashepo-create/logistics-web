@@ -47,6 +47,7 @@ function query(result: { data?: any; error?: any }) {
     insert: () => q,
     update: () => q,
     upsert: () => q,
+    delete: () => q,
     maybeSingle: async () => ({ data: result.data ?? null, error: result.error ?? null }),
     then: (ok: (v: any) => any, fail: (e: any) => any) =>
       Promise.resolve({ data: result.data ?? null, error: result.error ?? null }).then(ok, fail),
@@ -140,6 +141,66 @@ describe("API المستخدم الإضافي", () => {
       role: "additional",
       is_active: true,
     }));
+  });
+
+  it("يكتب تذكرة إنشاء خادمية قبل createUser ثم يستهلكها بعده", async () => {
+    const order: string[] = [];
+    const tickets: any[] = [];
+    const createUser = vi.fn(async () => {
+      order.push("createUser");
+      return { data: { user: { id: USER_ID } }, error: null };
+    });
+    const sb = {
+      auth: { admin: { createUser, deleteUser: vi.fn(async () => ({ error: null })) } },
+      from: vi.fn((table: string) => {
+        if (table === "companies") return query({ data: { id: COMPANY_ID, name: "شركة" } });
+        if (table === "managed_signups") {
+          const q = query({ data: null });
+          q.upsert = (payload: any) => { order.push("ticket"); tickets.push(payload); return query({ data: null }); };
+          q.delete = () => { order.push("consume"); return query({ data: null }); };
+          return q;
+        }
+        return query({ data: null });
+      }),
+    };
+    mocks.serviceClient.mockReturnValue(sb);
+
+    const res = await usersPost(req({
+      action: "create", company_id: COMPANY_ID, name: "مستخدم إضافي",
+      email: "extra.user@gmail.com", phone: "+201001234567", password: "Strong1234",
+    }));
+
+    expect(res.status).toBe(200);
+    // التذكرة يجب أن تسبق الإنشاء وإلا لم يرها مشغّل BEFORE INSERT.
+    expect(order).toEqual(["ticket", "createUser", "consume"]);
+    expect(tickets[0]).toEqual(expect.objectContaining({
+      email: "extra.user@gmail.com",
+      company_id: COMPANY_ID,
+    }));
+  });
+
+  it("يرشد إلى ترحيلة v24 عندما يكون جدول التذاكر مفقوداً", async () => {
+    const createUser = vi.fn();
+    mocks.serviceClient.mockReturnValue({
+      auth: { admin: { createUser, deleteUser: vi.fn() } },
+      from: (table: string) => {
+        if (table === "companies") return query({ data: { id: COMPANY_ID, name: "شركة" } });
+        if (table === "managed_signups") {
+          return query({ error: { message: 'relation "public.managed_signups" does not exist' } });
+        }
+        return query({ data: null });
+      },
+    });
+
+    const res = await usersPost(req({
+      action: "create", company_id: COMPANY_ID, name: "مستخدم إضافي",
+      email: "extra.user2@gmail.com", phone: "+201001234567", password: "Strong1234",
+    }));
+
+    expect(res.status).toBe(500);
+    expect((await res.json()).message).toContain("v24");
+    // لا يُنشأ حساب مصادقة يتيم بلا تذكرة.
+    expect(createUser).not.toHaveBeenCalled();
   });
 
   it("لا يحاول إنشاء المستخدم إذا كان مفتاح الخدمة غائباً", async () => {
