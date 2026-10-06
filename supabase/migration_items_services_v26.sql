@@ -10,6 +10,8 @@
 --   • إعادة تعريف public.save_invoice بنفس توقيعها الحالي (لا يتغير أي استدعاء)
 --     لتقرأ item_id وتتحقق أن الخدمة تخص شركة المستخدم.
 --   • تحديث فحص صحة قاعدة البيانات ودالة إعادة ضبط بيانات الشركة ليشملا items.
+--   • بوابة ميزة الفاتورة الضريبية (tax_invoice) على مستوى قاعدة البيانات:
+--     منع تعديل/حذف الفاتورة عند التفعيل، ومنع إنشاء إشعارات جديدة عند الإيقاف.
 --
 -- آمن التكرار: يمكن تنفيذه أكثر من مرة دون أثر مزدوج.
 -- ============================================================================
@@ -241,6 +243,11 @@ begin
   else
     select date into v_old_date from public.invoices where id = p_invoice_id and company_id = v_cid for update;
     if v_old_date is null then raise exception 'الفاتورة غير موجودة.'; end if;
+    -- الفاتورة الضريبية بالباركود لا تُعدَّل بعد الإصدار (طبقة ثانية بعد بوابة
+    -- الواجهة، وتمنع التجاوز باستدعاء الدالة مباشرة).
+    if public.has_company_feature('tax_invoice') then
+      raise exception 'الفاتورة الضريبية لا تقبل التعديل بعد إصدارها. أنشئ إشعاراً دائناً أو مديناً للتصحيح.';
+    end if;
     if not exists (select 1 from public.financial_years where company_id = v_cid and status = 'open' and date_from <= v_old_date and date_to >= v_old_date) then
       raise exception 'لا يمكن تعديل حركة بتاريخ قديم خارج السنة المالية المفتوحة.';
     end if;
@@ -538,7 +545,46 @@ revoke all on function public.admin_reset_company_data_v18(uuid) from public, an
 grant execute on function public.admin_reset_company_data_v18(uuid) to authenticated, service_role;
 
 -- ---------------------------------------------------------------------------
--- 9) تحقق سريع بعد التنفيذ (اختياري للقراءة فقط)
+-- 9) بوابة ميزة الفاتورة الضريبية (tax_invoice) على مستوى قاعدة البيانات
+--   • عند التفعيل: لا تُحذف الفاتورة بعد الإصدار، ولا تُعدَّل عبر save_invoice.
+--   • وعند عدم التفعيل: لا تُنشأ إشعارات مدين/دائن جديدة (القديم يبقى مؤثراً)،
+--     لأن التصحيح حينها يكون بتعديل الفاتورة أو حذفها.
+--   البوابة مطبَّقة في الواجهة أيضاً، وهذه طبقة ثانية تمنع تجاوزها باستدعاء
+--   الجدول أو الدالة مباشرة. الدالتان invoker كي يرى is_admin() الدور الحقيقي.
+-- ---------------------------------------------------------------------------
+create or replace function public.guard_invoice_tax_delete() returns trigger
+language plpgsql set search_path = public as $$
+begin
+  if public.is_admin() then return old; end if;
+  if public.has_company_feature('tax_invoice') then
+    raise exception 'لا يمكن حذف فاتورة ضريبية بعد إصدارها. استخدم إشعاراً دائناً أو مديناً للتصحيح.';
+  end if;
+  return old;
+end $$;
+
+drop trigger if exists trg_invoice_tax_delete on public.invoices;
+create trigger trg_invoice_tax_delete
+  before delete on public.invoices
+  for each row execute function public.guard_invoice_tax_delete();
+
+create or replace function public.guard_credit_note_tax_feature() returns trigger
+language plpgsql set search_path = public as $$
+begin
+  if public.is_admin() then return new; end if;
+  if not public.has_company_feature('tax_invoice') then
+    raise exception 'إشعارات المدين والدائن متاحة فقط عند تفعيل الفاتورة الضريبية بالباركود. عدّل الفاتورة أو احذفها للتصحيح.';
+  end if;
+  return new;
+end $$;
+
+drop trigger if exists trg_credit_note_tax_feature on public.credit_debit_notes;
+create trigger trg_credit_note_tax_feature
+  before insert on public.credit_debit_notes
+  for each row execute function public.guard_credit_note_tax_feature();
+
+-- ---------------------------------------------------------------------------
+-- 10) تحقق سريع بعد التنفيذ (اختياري للقراءة فقط)
 -- ---------------------------------------------------------------------------
 -- select count(*) as items from public.items;
 -- select count(*) as trips_without_item from public.invoice_trips where item_id is null;
+-- select tgname from pg_trigger where tgname in ('trg_invoice_tax_delete','trg_credit_note_tax_feature');

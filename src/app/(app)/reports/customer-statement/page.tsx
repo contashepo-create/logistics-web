@@ -1,8 +1,9 @@
 "use client";
 
 import { useMemo, useState } from "react";
+import { useRouter } from "next/navigation";
 import { useQuery, useQueryClient, keepPreviousData } from "@tanstack/react-query";
-import { PageFrame, Spinner, ExportBar, TotalsBar, FilterRow, DictSelect, Field, Input, AmountInput, Select } from "@/components/ui";
+import { PageFrame, Spinner, ExportBar, TotalsBar, FilterRow, DictSelect, Field, Input, AmountInput, Select, Button } from "@/components/ui";
 import { customerStatement, statementFiltersLabel, STATEMENT_DOC_TYPES, type StatementFilters, type StatementDocType } from "@/lib/calc";
 import { listCustomers } from "@/lib/repo";
 import { itemOptions } from "@/lib/items";
@@ -13,6 +14,7 @@ function yearStart(): string { return `${new Date().getFullYear()}-01-01`; }
 
 export default function CustomerStatementReportPage() {
   const qc = useQueryClient();
+  const router = useRouter();
   const [dFrom, setDFrom] = useState(yearStart());
   const [dTo, setDTo] = useState(todayIso());
   const [customerId, setCustomerId] = useState<number | null>(null);
@@ -89,6 +91,11 @@ export default function CustomerStatementReportPage() {
           <div><label className="field-label">العميل</label>
             <DictSelect value={customerId} onChange={setCustomerId} options={(customers ?? []).map((c) => ({ id: c.id, label: `${c.code} - ${c.name}` }))} />
           </div>
+          {customerId != null && (
+            <Button onClick={() => router.push(`/reports/customers/${customerId}`)} title="كل ما يخص العميل في تقرير واحد">
+              📊 التقرير الشامل
+            </Button>
+          )}
         </FilterRow>
       }
       exportBar={<ExportBar onExcel={() => doExport("excel")} onPdf={() => doExport("pdf")} onPrint={() => doExport("print")} />}>
