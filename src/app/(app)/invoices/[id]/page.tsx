@@ -67,8 +67,8 @@ export default function InvoiceViewPage() {
   const invoiceLines = [
     ...inv.trips.map((trip) => ({
       key: `trip-${trip.id}`,
-      description: `خدمة نقل: ${trip.from_loc || "—"} ← ${trip.to_loc || "—"}`,
-      detail: [trip.vehicle_name, trip.notes].filter(Boolean).join(" • "),
+      description: trip.item_name || "خدمة نقل",
+      detail: [`${trip.from_loc || "—"} ← ${trip.to_loc || "—"}`, trip.vehicle_name, trip.notes].filter(Boolean).join(" • "),
       containers: trip.container_numbers ?? [],
       quantity: Number(trip.qty ?? 1),
       unitAmount: Number(trip.unit_price || (trip.qty ? trip.price / trip.qty : trip.price)),
@@ -106,7 +106,7 @@ export default function InvoiceViewPage() {
           <Button variant="primary" onClick={() => printCustomerInvoice(id)} style={{ marginTop: 2 }}>🖨️ طباعة</Button>
           <Button onClick={() => exportCustomerInvoicePdf(id)} style={{ marginTop: 2 }}>📄 PDF</Button>
 
-          {notesMode ? (
+          {notesMode === undefined ? null : notesMode ? (
             <>
               <div style={{ display: "flex", flexDirection: "column", gap: 4, alignItems: "center" }}>
                 <Button onClick={() => setNoteDialog("debit")}>➕ إشعار مدين</Button>
@@ -139,13 +139,16 @@ export default function InvoiceViewPage() {
           {NOTES_REQUIRE_TAX_FEATURE_MESSAGE}
         </div>
       )}
-      {notesMode === true && notesRows.length > 0 && (
+      {notesMode === true && (
         <div style={{
           background: "var(--muted-light, #f1f5f9)", color: "var(--muted)",
           border: "1px solid var(--border, #e2e8f0)", borderRadius: 10,
           padding: "10px 14px", marginBottom: 12,
         }}>
           {INVOICE_LOCKED_MESSAGE}
+          {notesRows.length > 0
+            ? ` يوجد ${notesRows.length} إشعار مرتبط بهذه الفاتورة (مدين ${money(debitNotes)} / دائن ${money(creditNotes)}).`
+            : ""}
         </div>
       )}
       <section className="invoice-preview-card" aria-label="معاينة الفاتورة">
