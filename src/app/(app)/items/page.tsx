@@ -90,6 +90,13 @@ function ItemDialog({ id, onClose }: { id?: number; onClose: (saved?: boolean) =
           <Input value={f.to_loc} onChange={(e) => set("to_loc", e.target.value)} />
         </Field>
       </div>
+      {id && used != null && used > 0 && (
+        <div className="field-hint" style={{ marginBottom: 8 }}>
+          ⚠️ الخدمة مستخدمة في نقلات: لا يمكن تغيير «من/إلى» بعد الاستخدام (لأن الخط يُفرض على
+          النقلة ويُبنى منه تقارير الفواتير القديمة). للخط الجديد أنشئ خدمة جديدة وعطّل القديمة —
+          تعديل الاسم والسعر والوصف متاح دائماً.
+        </div>
+      )}
       <div className="field-hint" style={{ marginBottom: 8 }}>
         {route
           ? "خدمة خط: عند اختيارها في نقلات الفاتورة يُعبَّأ «من/إلى» منها تلقائياً ويُقفلان، وتُبنى تقارير الخط من هذه الخدمة."

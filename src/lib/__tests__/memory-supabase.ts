@@ -475,6 +475,10 @@ function rpcSaveInvoice(args: any): { data: any; error: any } {
     if (table("payment_vouchers").some((v) => v.voucher_type === "trip" && v.trip_id === t.id && v.source_expense_id == null)) {
       return err("لا يمكن حذف نقلة مرتبطة بسندات دفع يدوية. احذف السندات المرتبطة أولاً.");
     }
+    // نقلة مرتجعة (إشعار دائن): الحذف ممنوع لأن ربط credit_note_trips صارم
+    if (table("credit_note_trips").some((r) => r.trip_id === t.id)) {
+      return err("لا يمكن حذف نقلة صدر لها إشعار دائن (مرتجع). احذف الإشعار أولاً.");
+    }
   }
   for (const t of table("invoice_trips").filter((t) => t.invoice_id === invoiceId && !kept.has(t.id))) {
     for (const v of table("payment_vouchers").filter((v) => v.trip_id === t.id && v.source_expense_id != null)) {
@@ -503,18 +507,14 @@ function rpcSaveInvoice(args: any): { data: any; error: any } {
       const tr = table("invoice_trips").find((x) => x.id === tripId && x.invoice_id === invoiceId);
       if (!tr) return err("النقلة غير موجودة ضمن هذه الفاتورة.");
       Object.assign(tr, base);
-      for (const e of table("trip_expenses").filter((e) => e.trip_id === tripId)) {
-        // السندات التلقائية تتبع مصروفها (حذف تتابعي)
-        for (const v of table("payment_vouchers").filter((v) => v.source_expense_id === e.id)) {
-          table("payment_vouchers").splice(table("payment_vouchers").indexOf(v), 1);
-        }
-        table("trip_expenses").splice(table("trip_expenses").indexOf(e), 1);
-      }
     } else {
       tripId = nextId("invoice_trips");
       table("invoice_trips").push({ id: tripId, company_id: cid, invoice_id: invoiceId, ...base });
     }
 
+    // مصروفات النقلة: القادم بمعرّف يُحدَّث في مكانه (فيبقى سنده التلقائي برقمه)،
+    // وغيره يُنشأ، وما أُزيل من القائمة يُحذف مع سنده التلقائي (حذف تتابعي).
+    const keptExpenses: number[] = [];
     for (const e of t.expenses ?? []) {
       const eqty = Number(e.qty ?? 1) || 1;
       const eunit = Number(e.unit_amount ?? 0) > 0 ? Number(e.unit_amount) : Number(e.amount ?? 0) / eqty;
@@ -531,25 +531,57 @@ function rpcSaveInvoice(args: any): { data: any; error: any } {
       }
       if (source === "driver" && !base.driver_id) return err("حدّد السائق في النقلة قبل تسجيل مصروف من عهدته.");
 
-      const expId = nextId("trip_expenses");
-      table("trip_expenses").push({
-        id: expId, company_id: cid, trip_id: tripId, expense_type: e.expense_type ?? "other",
+      const expenseRow = {
+        expense_type: e.expense_type ?? "other",
         qty: eqty, unit_amount: eunit, amount, source,
         account_kind: source === "cash" ? e.account_kind : null,
         account_id: source === "cash" ? Number(e.account_id) : null,
         supplier_name: e.supplier_name ?? "", notes: e.notes ?? "",
-      });
+      };
+      let expId: number;
+      const existingExpense = e.id != null
+        ? table("trip_expenses").find((r) => r.id === Number(e.id) && r.trip_id === tripId)
+        : undefined;
+      if (e.id != null && !existingExpense) return err("مصروف النقلة غير موجود ضمن هذه النقلة.");
+      if (existingExpense) {
+        expId = existingExpense.id;
+        Object.assign(existingExpense, expenseRow);
+      } else {
+        expId = nextId("trip_expenses");
+        table("trip_expenses").push({ id: expId, company_id: cid, trip_id: tripId, ...expenseRow });
+      }
+      keptExpenses.push(expId);
 
       if (source === "cash") {
-        const pnum = table("payment_vouchers").filter((r) => r.company_id === cid).reduce((m, r) => Math.max(m, r.number ?? 0), 0) + 1;
-        table("payment_vouchers").push({
-          id: nextId("payment_vouchers"), company_id: cid, number: pnum, date: args.p_date,
-          account_kind: e.account_kind, account_id: Number(e.account_id), voucher_type: "trip",
-          trip_id: tripId, employee_id: base.driver_id, vehicle_id: base.vehicle_id,
-          amount, description: `مصروف نقلة (تلقائي): ${e.notes ?? e.expense_type ?? ""}`,
-          source_expense_id: expId,
-        });
+        const linked = table("payment_vouchers").find((r) => r.source_expense_id === expId);
+        if (linked) {
+          Object.assign(linked, {
+            date: args.p_date, account_kind: e.account_kind, account_id: Number(e.account_id),
+            voucher_type: "trip", trip_id: tripId, employee_id: base.driver_id, vehicle_id: base.vehicle_id,
+            amount, description: `مصروف نقلة (تلقائي): ${e.notes ?? e.expense_type ?? ""}`,
+          });
+        } else {
+          const pnum = table("payment_vouchers").filter((r) => r.company_id === cid).reduce((m, r) => Math.max(m, r.number ?? 0), 0) + 1;
+          table("payment_vouchers").push({
+            id: nextId("payment_vouchers"), company_id: cid, number: pnum, date: args.p_date,
+            account_kind: e.account_kind, account_id: Number(e.account_id), voucher_type: "trip",
+            trip_id: tripId, employee_id: base.driver_id, vehicle_id: base.vehicle_id,
+            amount, description: `مصروف نقلة (تلقائي): ${e.notes ?? e.expense_type ?? ""}`,
+            source_expense_id: expId,
+          });
+        }
+      } else {
+        // لم يعد نقدياً: يُزال السند التلقائي القديم إن وُجد
+        for (const v of table("payment_vouchers").filter((r) => r.source_expense_id === expId)) {
+          table("payment_vouchers").splice(table("payment_vouchers").indexOf(v), 1);
+        }
       }
+    }
+    for (const stale of table("trip_expenses").filter((r) => r.trip_id === tripId && !keptExpenses.includes(r.id))) {
+      for (const v of table("payment_vouchers").filter((r) => r.source_expense_id === stale.id)) {
+        table("payment_vouchers").splice(table("payment_vouchers").indexOf(v), 1);
+      }
+      table("trip_expenses").splice(table("trip_expenses").indexOf(stale), 1);
     }
   }
   return { data: invoiceId, error: null };
@@ -756,6 +788,12 @@ function rpcSaveItemV26(args: any): { data: any; error: any } {
   if (args.p_item_id != null) {
     const existing = table("items").find((i) => i.id === Number(args.p_item_id) && i.company_id === cid);
     if (!existing) return err("الصنف/الخدمة غير موجود.");
+    // تغيير خط خدمة مستخدمة في نقلات سابقة ممنوع (حماية مسارات الفواتير القديمة)
+    const routeChanged =
+      String(existing.from_loc ?? "").trim() !== fromLoc || String(existing.to_loc ?? "").trim() !== toLoc;
+    if (routeChanged && table("invoice_trips").some((t) => t.item_id === existing.id && t.company_id === cid)) {
+      return err("لا يمكن تغيير خط خدمة مستخدمة في نقلات سابقة (سيُغيّر مسارات فواتير قديمة). أنشئ خدمة جديدة بالخط المطلوب وعطّل القديمة.");
+    }
     Object.assign(existing, {
       name, item_type: itemType, unit, default_price: price, description, notes,
       from_loc: fromLoc, to_loc: toLoc,

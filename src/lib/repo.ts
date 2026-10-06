@@ -1100,6 +1100,9 @@ export async function saveInvoice(data: Record<string, any>, invoiceId?: number 
     container_numbers: t.container_numbers ?? [],
     notes: t.notes ?? "",
     expenses: (t.expenses ?? []).map((e: any) => ({
+      // المعرّف يجعل الخادم يُحدِّث المصروف في مكانه بدل حذفه وإعادة إنشائه،
+      // فتبقى سندات الصرف التلقائية المرتبطة به بأرقامها.
+      id: e.id ? Number(e.id) : null,
       expense_type: e.expense_type,
       qty: e.qty ?? 1,
       unit_amount: roundMoney(e.unit_amount ?? 0),

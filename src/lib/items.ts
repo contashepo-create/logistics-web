@@ -100,6 +100,24 @@ export function itemRouteLabel(item?: Pick<Item, "from_loc" | "to_loc"> | null, 
 export async function saveItem(data: Record<string, any>, itemId?: number | null): Promise<number> {
   const clean = validateItem(data);
   const id = itemId ? positiveId(itemId, "الصنف/الخدمة") : null;
+  // خط الخدمة يُفرض على النقلة عند الحفظ، فتغييره لخدمة مستخدمة يُعيد كتابة
+  // مسارات فواتير قديمة عند تعديلها. نمنعه في الواجهة أيضاً (والخادم يمنعه).
+  if (id != null) {
+    const current = await getItem(id);
+    if (!current) throw new RuleError("الصنف/الخدمة غير موجود.");
+    const routeChanged =
+      String(current.from_loc ?? "").trim() !== clean.from_loc ||
+      String(current.to_loc ?? "").trim() !== clean.to_loc;
+    if (routeChanged) {
+      const used = await itemUsageCount(id);
+      if (used > 0) {
+        throw new RuleError(
+          "لا يمكن تغيير خط خدمة مستخدمة في نقلات سابقة (سيُغيّر مسارات فواتير قديمة). " +
+            "أنشئ خدمة جديدة بالخط المطلوب وعطّل القديمة."
+        );
+      }
+    }
+  }
   const { data: savedId, error } = await supabase.rpc("save_item_v26", {
     p_item_id: id,
     p_name: clean.name,
@@ -153,14 +171,18 @@ export async function deleteItem(itemId: number): Promise<void> {
 // الخدمة الافتراضية (لتوافق الفواتير التي لا تحدد خدمة صراحةً)
 // ---------------------------------------------------------------------------
 /**
- * معرّف الخدمة الافتراضية للشركة، مع إنشائها تلقائياً عند الحاجة.
- * لا يوجد تخزين مؤقت عن قصد: التخزين كان يعيد معرّفاً لشركة/جلسة سابقة بعد
- * تبدّل الجلسة أو إعادة ضبط بيانات الشركة، فيفشل الحفظ بخطأ «غير موجود».
- * (استعلام واحد صغير لا يُقاس أمام حفظ الفاتورة نفسه.)
+ * معرّف خدمة الاستخدام العام للشركة (للنقلات التي لم تحدد خدمة صراحةً، مثل
+ * استدعاءات العملاء القدامى). التفضيل خدمة **عامة بلا خط** حتى لا يفرض خط خدمة
+ * مسارَه على نقلة قديمة كتب المستخدم مسارها بنفسه؛ فإن لم توجد خدمة بلا خط
+ * أُنشئت «خدمة نقل»، وإن تعذّر الإنشاء (الاسم محجوز لخدمة تحولت إلى خط) يُعاد
+ * أي خدمة متاحة. لا يوجد تخزين مؤقت عن قصد: التخزين كان يعيد معرّفاً لشركة أو
+ * جلسة سابقة بعد تبدّل الجلسة أو إعادة ضبط بيانات الشركة، فيفشل الحفظ بخطأ
+ * «غير موجود». (استعلام واحد صغير لا يُقاس أمام حفظ الفاتورة نفسه.)
  */
 export async function defaultServiceItemId(): Promise<number> {
-  const existing = await findDefaultService();
-  if (existing != null) return existing;
+  const rows = await listFallbackCandidates();
+  const generic = rows.find((row) => row.item_type === "service" && !isRouteItem(row));
+  if (generic) return generic.id;
   try {
     return await saveItem({
       name: DEFAULT_SERVICE_NAME,
@@ -170,23 +192,24 @@ export async function defaultServiceItemId(): Promise<number> {
     });
   } catch (error) {
     // طلبان متزامنان قد يحاولان الإنشاء معاً فيصطدم أحدهما بقيد تكرار الاسم
-    // داخل الشركة؛ في هذه الحالة نعيد قراءة الخدمة التي أنشأها الطلب الآخر.
-    const created = await findDefaultService();
-    if (created != null) return created;
+    // داخل الشركة؛ وفي هذه الحالة نعيد قائمة محدَّثة ثم نقع على أي خدمة متاحة.
+    const fresh = await listFallbackCandidates();
+    const fallback = fresh.find((row) => row.item_type === "service") ?? fresh[0];
+    if (fallback) return fallback.id;
     throw error;
   }
 }
 
-/** أول خدمة في كتالوج الشركة (الأقدم معرّفاً) أو null إن لم توجد خدمات بعد. */
-async function findDefaultService(): Promise<number | null> {
+/** أصناف/خدمات الشركة مرتّبة بالأقدم، لاختيار خدمة الاستخدام العام. */
+async function listFallbackCandidates(): Promise<
+  Pick<Item, "id" | "item_type" | "from_loc" | "to_loc">[]
+> {
   const { data, error } = await supabase
     .from("items")
-    .select("id")
-    .eq("item_type", "service")
-    .order("id")
-    .limit(1);
+    .select("id, item_type, from_loc, to_loc")
+    .order("id");
   if (error) throw new RuleError(translateDbError(error.message));
-  return data?.length ? Number(data[0].id) : null;
+  return (data ?? []) as Pick<Item, "id" | "item_type" | "from_loc" | "to_loc">[];
 }
 
 // ---------------------------------------------------------------------------

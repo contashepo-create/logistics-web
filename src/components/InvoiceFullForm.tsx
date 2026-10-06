@@ -13,6 +13,12 @@ import { money, todayIso } from "@/lib/format";
 import type { Item } from "@/lib/types";
 
 type TripRow = {
+  /** معرّف النقلة القائمة في وضع التعديل (null للنقلة الجديدة) — يمنع إعادة
+   *  إنشاء النقلة فيتغيّر معرّفها أو تُفقد سنداتها ومصروفاتها */
+  id: number | null;
+  /** مصروفات النقلة كما هي في قاعدة البيانات — تُرسل بمعرّفاتها حتى يحدّثها
+   *  الخادم في مكانها ولا يُعيد إنشاءها (فتحافظ على سندات الصرف التلقائية) */
+  expenses: TripExpenseInput[];
   /** الخدمة/الخط المختار لهذه النقلة (إلزامي) */
   item_id: string;
   vehicle_id: string;
@@ -25,7 +31,22 @@ type TripRow = {
   notes: string;
 };
 
+/** شكل مصروف النقلة كما يقرؤه/يكتبه الخادم (المعرّف اختياري: موجود = تحديث). */
+type TripExpenseInput = {
+  id?: number | null;
+  expense_type?: string;
+  qty?: number;
+  unit_amount?: number;
+  amount?: number;
+  source?: string;
+  account_kind?: string | null;
+  account_id?: number | null;
+  supplier_name?: string;
+  notes?: string;
+};
+
 const EMPTY_TRIP: TripRow = {
+  id: null, expenses: [],
   item_id: "", vehicle_id: "", driver_id: "", from_loc: "", to_loc: "",
   qty: "1", unit_price: "", container_numbers: [], notes: "",
 };
@@ -161,6 +182,19 @@ export default function InvoiceFullForm({ invoiceId }: { invoiceId?: number } = 
         });
         setAttachments(full.attachments ?? []);
         setTrips((full.trips ?? []).map((trip) => ({
+          id: Number(trip.id) || null,
+          expenses: (trip.expenses ?? []).map((e) => ({
+            id: e.id ?? null,
+            expense_type: e.expense_type,
+            qty: Number(e.qty ?? 1),
+            unit_amount: Number(e.unit_amount ?? 0),
+            amount: Number(e.amount ?? 0),
+            source: e.source ?? "cash",
+            account_kind: e.account_kind ?? null,
+            account_id: e.account_id ?? null,
+            supplier_name: e.supplier_name ?? "",
+            notes: e.notes ?? "",
+          })),
           item_id: trip.item_id ? String(trip.item_id) : "",
           vehicle_id: trip.vehicle_id ? String(trip.vehicle_id) : "",
           driver_id: trip.driver_id ? String(trip.driver_id) : "",
@@ -283,6 +317,7 @@ export default function InvoiceFullForm({ invoiceId }: { invoiceId?: number } = 
         trips: trips.map((t) => {
           const route = routeOf(t);
           return {
+            id: t.id,
             item_id: Number(t.item_id),
             vehicle_id: t.vehicle_id ? Number(t.vehicle_id) : null,
             driver_id: t.driver_id ? Number(t.driver_id) : null,
@@ -294,7 +329,9 @@ export default function InvoiceFullForm({ invoiceId }: { invoiceId?: number } = 
             price: tripLineTotal(t),
             container_numbers: t.container_numbers.map((number) => number.trim()),
             notes: t.notes,
-            expenses: [],
+            // المصروفات تُرسل كما هي (بمعرّفاتها) حتى لا تُفقد مصروفات الفاتورة
+            // القديمة عند تعديل الرأس أو السعر — وتُدار من شاشة سندات الدفع.
+            expenses: t.expenses.map((e) => ({ ...e })),
           };
         }),
       }, invoiceId ?? null);

@@ -47,7 +47,10 @@ describe("ترحيلة الأصناف والخدمات v26", () => {
   it("تعبّئ خدمة افتراضية وتربط النقلات القديمة بها", () => {
     expect(migration).toMatch(/insert into public\.items[\s\S]*?'ITM-0001'[\s\S]*?where not exists/i);
     expect(migration).toContain("'خدمة نقل'");
-    expect(migration).toMatch(/update public\.invoice_trips[\s\S]*?set item_id = \([\s\S]*?order by \(i\.item_type = 'service'\) desc, i\.id/i);
+    // التفضيل: خدمة عامة بلا خط أولاً (لا يُفرض خط على نقلة قديمة) ثم الخدمات ثم الأقدم
+    expect(migration).toMatch(
+      /update public\.invoice_trips[\s\S]*?set item_id = \([\s\S]*?order by \(coalesce\(i\.from_loc, ''\) = '' and coalesce\(i\.to_loc, ''\) = ''\) desc,[\s\S]*?\(i\.item_type = 'service'\) desc,[\s\S]*?i\.id/i
+    );
     expect(migration).toMatch(/where t\.item_id is null/i);
   });
 

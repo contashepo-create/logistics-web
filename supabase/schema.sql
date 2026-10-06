@@ -1069,6 +1069,8 @@ declare
   v_to   text := btrim(coalesce(p_to_loc, ''));
   v_code text;
   v_seq bigint;
+  v_old_from text;
+  v_old_to   text;
 begin
   if v_cid is null then raise exception 'لا توجد شركة مرتبطة بحسابك.'; end if;
   if not public.is_company_active() then raise exception 'الوصول غير متاح: اشتراك منتهي أو شركة موقوفة.'; end if;
@@ -1092,6 +1094,19 @@ begin
      where company_id = v_cid and lower(name) = lower(v_name) and (v_id is null or id <> v_id)
   ) then
     raise exception 'يوجد صنف/خدمة بنفس الاسم.';
+  end if;
+
+  -- تغيير خط خدمة مستخدمة في نقلات سابقة يُعيد كتابة مسارات فواتير قديمة عند
+  -- تعديلها (لأن خط الصنف يُفرض على النقلة)، لذلك يُمنع ويُطلب صنف جديد للخط.
+  if v_id is not null then
+    select from_loc, to_loc into v_old_from, v_old_to
+      from public.items where id = v_id and company_id = v_cid;
+    if not found then raise exception 'الصنف/الخدمة غير موجود.'; end if;
+    if coalesce(v_old_from, '') <> v_from or coalesce(v_old_to, '') <> v_to then
+      if exists (select 1 from public.invoice_trips where company_id = v_cid and item_id = v_id) then
+        raise exception 'لا يمكن تغيير خط خدمة مستخدمة في نقلات سابقة (سيُغيّر مسارات فواتير قديمة). أنشئ خدمة جديدة بالخط المطلوب وعطّل القديمة.';
+      end if;
+    end if;
   end if;
 
   perform 1 from public.companies where id = v_cid for update;
@@ -1156,6 +1171,7 @@ declare
   v_from text; v_to text;
   v_containers jsonb; v_container jsonb; v_container_text text;
   v_normalized_containers jsonb; v_seen_containers text[] := '{}'::text[];
+  v_kept_expenses bigint[] := '{}'::bigint[];
   v_eqty double precision; v_eunit double precision; v_eamount double precision;
   v_source text; v_kind text; v_acc bigint; v_exp_id bigint; v_pnum int;
 begin
@@ -1204,6 +1220,10 @@ begin
     select count(*) into v_linked from public.payment_vouchers
      where voucher_type = 'trip' and trip_id = v_trip_id and source_expense_id is null;
     if v_linked > 0 then raise exception 'لا يمكن حذف نقلة مرتبطة بسندات دفع يدوية. احذف السندات المرتبطة أولاً.'; end if;
+    -- نقلة مرتجعة (إشعار دائن): رابط credit_note_trips لا يقبل الحذف التتابعي،
+    -- فنمنعه برسالة مفهومة بدل خطأ مفتاح أجنبي غامض.
+    select count(*) into v_linked from public.credit_note_trips where trip_id = v_trip_id;
+    if v_linked > 0 then raise exception 'لا يمكن حذف نقلة صدر لها إشعار دائن (مرتجع). احذف الإشعار أولاً.'; end if;
     delete from public.payment_vouchers where trip_id = v_trip_id and source_expense_id is not null;
     delete from public.invoice_trips where id = v_trip_id;
   end loop;
@@ -1270,7 +1290,6 @@ begin
         notes              = coalesce(v_trip->>'notes', '')
       where id = v_trip_id and invoice_id = v_invoice_id;
       if not found then raise exception 'النقلة غير موجودة ضمن هذه الفاتورة.'; end if;
-      delete from public.trip_expenses where trip_id = v_trip_id;
     else
       insert into public.invoice_trips
         (company_id, invoice_id, vehicle_id, driver_id, item_id, from_loc, to_loc, qty, unit_price, price, container_numbers, notes)
@@ -1280,6 +1299,9 @@ begin
       returning id into v_trip_id;
     end if;
 
+    -- مصروفات النقلة: المصروف القادم بمعرّف يُحدَّث في مكانه (فتبقى سندات
+    -- الصرف التلقائية المرتبطة به بأرقامها)، والمصروفات غير المذكورة تُحذف.
+    v_kept_expenses := '{}'::bigint[];
     for v_exp in select * from jsonb_array_elements(coalesce(v_trip->'expenses', '[]'::jsonb)) loop
       v_eqty  := greatest(coalesce((v_exp->>'qty')::double precision, 1), 0.0001);
       v_eunit := coalesce((v_exp->>'unit_amount')::double precision, 0);
@@ -1314,28 +1336,62 @@ begin
         raise exception 'حدّد السائق في النقلة قبل تسجيل مصروف من عهدته.';
       end if;
 
-      insert into public.trip_expenses
-        (company_id, trip_id, expense_type, qty, unit_amount, amount, source, account_kind, account_id, supplier_name, notes)
-      values
-        (v_cid, v_trip_id, coalesce(v_exp->>'expense_type', 'other'), v_eqty, v_eunit, v_eamount, v_source,
-         case when v_source = 'cash' then v_kind else null end,
-         case when v_source = 'cash' then v_acc else null end,
-         coalesce(v_exp->>'supplier_name', ''), coalesce(v_exp->>'notes', ''))
-      returning id into v_exp_id;
+      v_exp_id := nullif(v_exp->>'id', '')::bigint;
+      if v_exp_id is not null then
+        update public.trip_expenses set
+          expense_type  = coalesce(v_exp->>'expense_type', 'other'),
+          qty           = v_eqty,
+          unit_amount   = v_eunit,
+          amount        = v_eamount,
+          source        = v_source,
+          account_kind  = case when v_source = 'cash' then v_kind else null end,
+          account_id    = case when v_source = 'cash' then v_acc else null end,
+          supplier_name = coalesce(v_exp->>'supplier_name', ''),
+          notes         = coalesce(v_exp->>'notes', '')
+        where id = v_exp_id and trip_id = v_trip_id and company_id = v_cid;
+        if not found then raise exception 'مصروف النقلة غير موجود ضمن هذه النقلة.'; end if;
+      else
+        insert into public.trip_expenses
+          (company_id, trip_id, expense_type, qty, unit_amount, amount, source, account_kind, account_id, supplier_name, notes)
+        values
+          (v_cid, v_trip_id, coalesce(v_exp->>'expense_type', 'other'), v_eqty, v_eunit, v_eamount, v_source,
+           case when v_source = 'cash' then v_kind else null end,
+           case when v_source = 'cash' then v_acc else null end,
+           coalesce(v_exp->>'supplier_name', ''), coalesce(v_exp->>'notes', ''))
+        returning id into v_exp_id;
+      end if;
+      v_kept_expenses := array_append(v_kept_expenses, v_exp_id);
 
       if v_source = 'cash' then
-        select coalesce(max(number), 0) + 1 into v_pnum from public.payment_vouchers where company_id = v_cid;
-        insert into public.payment_vouchers
-          (company_id, number, date, account_kind, account_id, voucher_type, trip_id, employee_id, vehicle_id,
-           amount, description, source_expense_id)
-        values
-          (v_cid, v_pnum, p_date, v_kind, v_acc, 'trip', v_trip_id,
-           nullif(v_trip->>'driver_id', '')::bigint, nullif(v_trip->>'vehicle_id', '')::bigint,
-           v_eamount,
-           'مصروف نقلة (تلقائي): ' || coalesce(v_exp->>'notes', coalesce(v_exp->>'expense_type', '')),
-           v_exp_id);
+        if exists (select 1 from public.payment_vouchers where source_expense_id = v_exp_id) then
+          -- السند التلقائي يبقى برقمه ويتحدّث بمبلغ/حساب المصروف الجديد
+          update public.payment_vouchers set
+            date = p_date, account_kind = v_kind, account_id = v_acc,
+            voucher_type = 'trip', trip_id = v_trip_id,
+            employee_id = nullif(v_trip->>'driver_id', '')::bigint,
+            vehicle_id  = nullif(v_trip->>'vehicle_id', '')::bigint,
+            amount = v_eamount,
+            description = 'مصروف نقلة (تلقائي): ' || coalesce(v_exp->>'notes', coalesce(v_exp->>'expense_type', ''))
+          where source_expense_id = v_exp_id;
+        else
+          select coalesce(max(number), 0) + 1 into v_pnum from public.payment_vouchers where company_id = v_cid;
+          insert into public.payment_vouchers
+            (company_id, number, date, account_kind, account_id, voucher_type, trip_id, employee_id, vehicle_id,
+             amount, description, source_expense_id)
+          values
+            (v_cid, v_pnum, p_date, v_kind, v_acc, 'trip', v_trip_id,
+             nullif(v_trip->>'driver_id', '')::bigint, nullif(v_trip->>'vehicle_id', '')::bigint,
+             v_eamount,
+             'مصروف نقلة (تلقائي): ' || coalesce(v_exp->>'notes', coalesce(v_exp->>'expense_type', '')),
+             v_exp_id);
+        end if;
+      else
+        -- لم يعد نقدياً: يُزال السند التلقائي القديم إن وُجد
+        delete from public.payment_vouchers where source_expense_id = v_exp_id;
       end if;
     end loop;
+    delete from public.trip_expenses
+     where trip_id = v_trip_id and company_id = v_cid and not (id = any(v_kept_expenses));
   end loop;
 
   perform public.log_activity('invoice.save', 'invoice', v_invoice_id::text, '');
