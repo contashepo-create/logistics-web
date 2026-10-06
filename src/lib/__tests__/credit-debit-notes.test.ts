@@ -10,12 +10,18 @@ vi.mock("@/lib/supabase", async () => {
 import { resetDb, setUser, seedTable, table } from "./memory-supabase";
 import * as repo from "@/lib/repo";
 import * as calc from "@/lib/calc";
+import {
+  clearFeatureCache, usesCreditDebitNotes, NOTES_REQUIRE_TAX_FEATURE_MESSAGE, INVOICE_LOCKED_MESSAGE,
+} from "@/lib/features";
 
 function setup(): void {
   resetDb();
   setUser({ id: "u1", email: "owner@test.com" });
   seedTable("profiles", [{ id: "u1", company_id: "c1", email: "owner@test.com", name: "مالك" }]);
   seedTable("companies", [{ id: "c1", name: "شركة", vat_rate: 15, plan_type: "open", is_active: true }]);
+  // إشعارات المدين/الدائن تعمل عند تفعيل الفاتورة الضريبية بالباركود فقط
+  seedTable("company_features", [{ company_id: "c1", feature_key: "tax_invoice", enabled: true }]);
+  clearFeatureCache();
 }
 
 async function seedInvoice() {
@@ -205,5 +211,69 @@ describe("إشعارات الدين/الدائن", () => {
     const invNotes = await repo.listCreditDebitNotesForInvoice(inv);
     expect(invNotes).toHaveLength(1);
     expect(invNotes[0].note_type).toBe("debit");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// سياسة العميل: الإشعارات بديل التعديل/الحذف عند تفعيل الباركود فقط
+// ---------------------------------------------------------------------------
+describe("سياسة الإشعارات حسب ميزة الفاتورة الضريبية بالباركود", () => {
+  beforeEach(() => {
+    setup();
+    seedTable("company_features", []);
+    clearFeatureCache();
+  });
+
+  it("عند إيقاف الميزة: يُمنع إصدار إشعار جديد برسالة واضحة توجّه لتعديل الفاتورة أو حذفها", async () => {
+    await repo.saveYear({ year: 2026, date_from: "2026-01-01", date_to: "2026-12-31" });
+    const { cust, inv } = await seedInvoice();
+    const featureOn = await usesCreditDebitNotes();
+
+    await expect(repo.saveCreditDebitNote({
+      note_type: "debit", invoice_id: inv, customer_id: cust,
+      date: "2026-05-06", amount: 100, vat_rate: 15, reason: "تصحيح",
+    })).rejects.toThrow(/تفعيل الفاتورة الضريبية بالباركود/);
+
+    await expect(repo.saveCreditDebitNote({
+      note_type: "credit", invoice_id: inv, customer_id: cust,
+      date: "2026-05-06", reason: "مرتجع", trip_ids: [table("invoice_trips")[0].id],
+    })).rejects.toThrow(/تفعيل الفاتورة الضريبية بالباركود/);
+
+    expect(table("credit_debit_notes")).toHaveLength(0);
+    expect(featureOn).toBe(false);
+    expect(NOTES_REQUIRE_TAX_FEATURE_MESSAGE).toContain("بتعديل الفاتورة أو حذفها");
+    expect(INVOICE_LOCKED_MESSAGE).toContain("إشعار مدين أو دائن");
+  });
+
+  it("الإشعارات القديمة تبقى معروضة وتؤثر في الأرصدة والكشف بعد إيقاف الميزة", async () => {
+    seedTable("company_features", [{ company_id: "c1", feature_key: "tax_invoice", enabled: true }]);
+    clearFeatureCache();
+    await repo.saveYear({ year: 2026, date_from: "2026-01-01", date_to: "2026-12-31" });
+    const { cust, inv } = await seedInvoice();
+    const noteId = await repo.saveCreditDebitNote({
+      note_type: "debit", invoice_id: inv, customer_id: cust,
+      date: "2026-05-06", amount: 100, vat_rate: 15, reason: "زيادة كمية",
+    });
+    const balanceWithNote = await calc.customerBalance(cust);
+    expect(balanceWithNote).toBeCloseTo(1250 + 115, 2);
+    expect(await usesCreditDebitNotes()).toBe(true);
+
+    // إيقاف الميزة بعد الإنشاء: لا حذف للأثر ولا إخفاء للمستند
+    seedTable("company_features", []);
+    clearFeatureCache();
+    expect(await usesCreditDebitNotes()).toBe(false);
+
+    const listed = await repo.listCreditDebitNotes("2026-01-01", "2026-12-31");
+    expect(listed).toHaveLength(1);
+    expect(listed[0].id).toBe(noteId);
+    expect(listed[0].total).toBeCloseTo(115, 2);
+
+    expect(await calc.customerBalance(cust)).toBeCloseTo(balanceWithNote, 2);
+    const st = await calc.customerStatement(cust, "2026-01-01", "2026-12-31");
+    expect(st.notes_debit).toBeCloseTo(115, 2);
+    // ويبقى حذف الإشعار القديم ممكناً لتنظيف الفاتورة قبل حذفها
+    await repo.deleteCreditDebitNote(noteId);
+    expect(table("credit_debit_notes")).toHaveLength(0);
+    expect(await calc.customerBalance(cust)).toBeCloseTo(1250, 2);
   });
 });

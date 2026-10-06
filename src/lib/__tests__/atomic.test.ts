@@ -57,7 +57,7 @@ describe("الحفظ الذري للفواتير عبر save_invoice", () => {
     ).rejects.toThrow("العميل المحدد غير موجود");
   });
 
-  it("يرفض حذف نقلة مرتبطة بسند دفع (مصروف رحلة)", async () => {
+  it("يرفض حذف نقلة مرتبطة بسند دفع يدوي، ويسمح به بعد حذف السند", async () => {
     setup();
     const { cust, cb } = await seedBasics();
     const invId = await repo.saveInvoice({
@@ -65,16 +65,19 @@ describe("الحفظ الذري للفواتير عبر save_invoice", () => {
       trips: [{ from_loc: "أ", to_loc: "ب", price: 1000, expenses: [] }],
     });
     const tripId = table("invoice_trips").find((t) => t.invoice_id === invId)!.id;
-    await repo.savePayment({ date: "2026-03-02", account_kind: "cashbox", account_id: cb, voucher_type: "trip", trip_id: tripId, amount: 50, description: "وقود" });
+    const payId = await repo.savePayment({ date: "2026-03-02", account_kind: "cashbox", account_id: cb, voucher_type: "trip", trip_id: tripId, amount: 50, description: "وقود" });
 
-    // تعديل الفاتورة بحذف النقلة المرتبطة
+    // تعديل الفاتورة بحذف النقلة المرتبطة بسند يدوي — مرفوض من الدالة الذرية
     await expect(
-      repo.saveInvoice({ date: "2026-03-01", customer_id: cust, attachments: [], trips: [] }, invId)
-    ).rejects.toThrow("لا تقبل التعديل");
-    // محاولة أخرى: إبقاء نقلة أخرى لكن حذف المرتبطة
-    await expect(
-      repo.saveInvoice({ date: "2026-03-01", customer_id: cust, attachments: [], trips: [{ id: 999, from_loc: "س", to_loc: "ص", price: 100, expenses: [] }] }, invId)
-    ).rejects.toThrow();
+      repo.saveInvoice({ date: "2026-03-01", customer_id: cust, attachments: [], trips: [{ from_loc: "س", to_loc: "ص", price: 100, expenses: [] }] }, invId)
+    ).rejects.toThrow(/سندات دفع يدوية/);
+
+    // بعد حذف السند اليدوي يُسمح بالحذف والاستبدال
+    await repo.deletePayment(payId);
+    await repo.saveInvoice({ date: "2026-03-01", customer_id: cust, attachments: [], trips: [{ from_loc: "س", to_loc: "ص", price: 100, expenses: [] }] }, invId);
+    const trips = table("invoice_trips").filter((t) => t.invoice_id === invId);
+    expect(trips).toHaveLength(1);
+    expect(trips[0].to_loc).toBe("ص");
   });
 });
 

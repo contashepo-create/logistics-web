@@ -2,7 +2,7 @@
 // مكافئ حرفي لـ app/core/calc.py — الأرصدة تُحسب دائماً من الحركات.
 
 import { supabase } from "./supabase";
-import { PAYMENT_TYPES, EXPENSE_TYPES, PURCHASE_EXPENSE_CATEGORIES, money, periodLabel } from "./format";
+import { PAYMENT_TYPES, EXPENSE_TYPES, PURCHASE_EXPENSE_CATEGORIES, money, periodLabel, normalizeDigits } from "./format";
 import type {
   Bank,
   Cashbox,
@@ -589,10 +589,11 @@ export async function getInvoiceFull(invoiceId: number): Promise<InvoiceFull | n
   const tripIds = trips.map((t) => t.id);
   const vehicleIds = trips.map((t) => t.vehicle_id).filter((x): x is number => x != null);
   const driverIds = trips.map((t) => t.driver_id).filter((x): x is number => x != null);
+  const itemIds = trips.map((t) => t.item_id).filter((x): x is number => x != null);
 
   // كل البيانات التابعة تُجلب بالتوازي. وكانت invoiceTotals تعيد قراءة النقلات
   // والمصروفات مرة ثانية، لذلك نحسب الإجماليات هنا من النتائج نفسها.
-  const [expRes, vehRes, empRes, payRes] = await Promise.all([
+  const [expRes, vehRes, empRes, payRes, itemRes] = await Promise.all([
     tripIds.length
       ? supabase.from("trip_expenses").select("*").in("trip_id", tripIds).order("id")
       : Promise.resolve({ data: [] }),
@@ -604,6 +605,9 @@ export async function getInvoiceFull(invoiceId: number): Promise<InvoiceFull | n
       : Promise.resolve({ data: [] }),
     tripIds.length
       ? supabase.from("payment_vouchers").select("amount").eq("voucher_type", "trip").is("source_expense_id", null).in("trip_id", tripIds)
+      : Promise.resolve({ data: [] }),
+    itemIds.length
+      ? supabase.from("items").select("id, name, unit").in("id", itemIds)
       : Promise.resolve({ data: [] }),
   ]);
 
@@ -622,11 +626,13 @@ export async function getInvoiceFull(invoiceId: number): Promise<InvoiceFull | n
 
   const vehMap = new Map(((vehRes.data ?? []) as { id: number; plate_number: string }[]).map((v) => [v.id, v.plate_number]));
   const empMap = new Map(((empRes.data ?? []) as { id: number; name: string }[]).map((e) => [e.id, e.name]));
+  const itemMap = new Map(((itemRes.data ?? []) as { id: number; name: string }[]).map((i) => [i.id, i.name]));
   const tripList: InvoiceTrip[] = trips.map((t) => ({
     ...t,
     container_numbers: Array.isArray(t.container_numbers) ? t.container_numbers : [],
     vehicle_name: vehMap.get(t.vehicle_id ?? 0) ?? null,
     driver_name: empMap.get(t.driver_id ?? 0) ?? null,
+    item_name: t.item_id != null ? itemMap.get(t.item_id) ?? null : null,
     expenses: expByTrip.get(t.id) ?? [],
   }));
 
@@ -808,33 +814,215 @@ export async function tripsOptions(): Promise<{ id: number; label: string }[]> {
 // ---------------------------------------------------------------------------
 // كشوف الحساب
 // ---------------------------------------------------------------------------
+// ---------------------------------------------------------------------------
+// كشف حساب العميل — فلترة ذكية
+// (المسار: من/إلى، القيمة، رقم أو اسم الفاتورة، نوع المستند: بيع/مرتجع/إشعار/سند،
+//  والخدمة المستخدمة) مع الحفاظ على الرصيد الجاري محسوباً من كامل الحركات.
+// ---------------------------------------------------------------------------
+/** نوع المستند الموحّد المستخدم في الفلترة الذكية لكشف الحساب. */
+export type StatementDocType = "sale" | "return" | "debit_note" | "credit_note" | "receipt";
+
+export const STATEMENT_DOC_TYPES: { value: StatementDocType; label: string }[] = [
+  { value: "sale", label: "فاتورة بيع" },
+  { value: "return", label: "مرتجع نقلة (إشعار دائن)" },
+  { value: "debit_note", label: "إشعار مدين" },
+  { value: "credit_note", label: "إشعار دائن بدون مرتجع" },
+  { value: "receipt", label: "سند قبض" },
+];
+
+export const STATEMENT_KIND_LABEL: Record<StatementDocType, string> = {
+  sale: "فاتورة بيع",
+  return: "مرتجع نقلة",
+  debit_note: "إشعار مدين",
+  credit_note: "إشعار دائن",
+  receipt: "سند قبض",
+};
+
+/** فلاتر الكشف الذكي — كلها اختيارية وتُجمع بـ AND. */
+export interface StatementFilters {
+  /** بحث نصي في رقم المستند/الفاتورة وبيانها ومسارها (يقبل الأرقام العربية). */
+  q?: string;
+  /** مكان الانطلاق (يطابق نقلات الفواتير والمرتجعات). */
+  fromLoc?: string;
+  /** مكان الوصول (يطابق نقلات الفواتير والمرتجعات). */
+  toLoc?: string;
+  /** أقل قيمة مالية للحركة (بعد الضريبة). */
+  amountMin?: number | null;
+  /** أكبر قيمة مالية للحركة (بعد الضريبة). */
+  amountMax?: number | null;
+  /** نوع المستند: فاتورة بيع / مرتجع / إشعار مدين / إشعار دائن / سند قبض. */
+  docType?: StatementDocType | "";
+  /** قصر النتائج على خدمة محددة من كتالوج الأصناف. */
+  itemId?: number | null;
+}
+
+export interface StmtRow {
+  date: string;
+  doc: string;
+  desc: string;
+  detail?: string;
+  debit: number;
+  credit: number;
+  kind: string;
+  balance?: number;
+  /** نوع المستند الموحّد (للفلترة الذكية) */
+  doc_type?: StatementDocType;
+  /** رقم المستند نفسه */
+  number?: number | null;
+  /** رقم الفاتورة المرتبطة (للفواتير والإشعارات) */
+  invoice_number?: number | null;
+  /** أماكن الانطلاق/الوصول في الحركة (نقلات الفاتورة أو المرتجع) */
+  from_locs?: string[];
+  to_locs?: string[];
+  /** الخدمات المستخدمة في الحركة */
+  item_ids?: number[];
+  /** القيمة المطلقة للحركة (مدين أو دائن) — أساس فلتر «القيمة» */
+  amount?: number;
+}
+
+export interface CustomerStatementResult {
+  opening: number;
+  /** الصفوف المعروضة بعد الفلترة (والرصيد الجاري محسوب من كامل الحركات) */
+  rows: StmtRow[];
+  closing: number;
+  /** إجماليات الصفوف المعروضة */
+  invoiced: number;
+  collected: number;
+  notes_debit: number;
+  notes_credit: number;
+  matched_debit: number;
+  matched_credit: number;
+  /** عدد الحركات كلها قبل الفلترة وعدد المطابق بعدها */
+  all_rows_count: number;
+  matched_count: number;
+  /** وصف الفلاتر المطبَّقة (يظهر في الطباعة/التصدير) */
+  applied: string;
+}
+
+function normText(value: unknown): string {
+  return normalizeDigits(String(value ?? "")).trim().toLowerCase();
+}
+
+/** وصف مقروء للفلاتر المطبَّقة — يُستخدم في الترويسة والتصدير. */
+export function statementFiltersLabel(filters?: StatementFilters): string {
+  if (!filters) return "";
+  const parts: string[] = [];
+  if (filters.docType) {
+    parts.push(`النوع: ${STATEMENT_KIND_LABEL[filters.docType] ?? filters.docType}`);
+  }
+  if (String(filters.q ?? "").trim()) parts.push(`بحث: ${String(filters.q).trim()}`);
+  if (String(filters.fromLoc ?? "").trim()) parts.push(`من: ${String(filters.fromLoc).trim()}`);
+  if (String(filters.toLoc ?? "").trim()) parts.push(`إلى: ${String(filters.toLoc).trim()}`);
+  if (filters.amountMin != null && Number.isFinite(filters.amountMin)) parts.push(`القيمة من ${filters.amountMin}`);
+  if (filters.amountMax != null && Number.isFinite(filters.amountMax)) parts.push(`القيمة إلى ${filters.amountMax}`);
+  if (filters.itemId != null) parts.push(`خدمة رقم ${filters.itemId}`);
+  return parts.join(" • ");
+}
+
+/** تطبيق الفلاتر على صفوف الكشف (دالة نقية — قابلة للاختبار مباشرة). */
+export function applyStatementFilters(rows: StmtRow[], filters?: StatementFilters): StmtRow[] {
+  if (!filters) return rows;
+  const q = normText(filters.q);
+  const from = normText(filters.fromLoc);
+  const to = normText(filters.toLoc);
+  const min = filters.amountMin != null && Number.isFinite(filters.amountMin) ? Number(filters.amountMin) : null;
+  const max = filters.amountMax != null && Number.isFinite(filters.amountMax) ? Number(filters.amountMax) : null;
+  const docType = filters.docType || "";
+  const itemId = filters.itemId ?? null;
+
+  return rows.filter((row) => {
+    const amount = num(row.amount ?? Math.max(row.debit, row.credit));
+    if (docType && row.doc_type !== docType) return false;
+    if (min != null && amount < min - 0.0001) return false;
+    if (max != null && amount > max + 0.0001) return false;
+    if (itemId != null && !(row.item_ids ?? []).includes(itemId)) return false;
+    // فلتر المسار يُطبَّق على الحركات التي لها نقلات (فواتير ومرتجعات)؛
+    // السندات والإشعارات اليدوية بلا مسار فلا تظهر عند تحديد مسار.
+    if (from && !(row.from_locs ?? []).some((v) => normText(v).includes(from))) return false;
+    if (to && !(row.to_locs ?? []).some((v) => normText(v).includes(to))) return false;
+    if (q) {
+      const invoiceLabel = row.invoice_number != null ? `INV-${String(row.invoice_number).padStart(5, "0")}` : "";
+      const haystack = [
+        row.doc,
+        row.desc,
+        row.detail ?? "",
+        invoiceLabel,
+        row.invoice_number != null ? String(row.invoice_number) : "",
+        ...(row.from_locs ?? []),
+        ...(row.to_locs ?? []),
+      ]
+        .join(" ")
+        .toLowerCase();
+      if (!normText(haystack).includes(q)) return false;
+    }
+    return true;
+  });
+}
+
 export async function customerStatement(
   customerId: number,
   dFrom: string,
-  dTo: string
-): Promise<{ opening: number; rows: StmtRow[]; closing: number; invoiced: number; collected: number; notes_debit: number; notes_credit: number }> {
+  dTo: string,
+  filters?: StatementFilters
+): Promise<CustomerStatementResult> {
   const opening = await customerBalance(customerId, dFrom);
 
-  const { data: invs } = await supabase
+  const { data: invRows } = await supabase
     .from("invoices")
-    .select("id, number, date")
+    .select("id, number, date, vat_rate")
     .eq("customer_id", customerId)
     .gte("date", dFrom)
     .lte("date", dTo)
     .order("date")
     .order("id");
+  const invoices = (invRows ?? []) as { id: number; number: number; date: string; vat_rate: number }[];
+  const invIds = invoices.map((i) => i.id);
+
+  // نقلات كل فاتورة (لبيان المسار والخدمة في الكشف والفلترة)
+  const tripsByInvoice = new Map<
+    number,
+    { from_loc: string; to_loc: string; item_id: number | null; qty: number }[]
+  >();
+  if (invIds.length) {
+    const { data: tripRows } = await supabase
+      .from("invoice_trips")
+      .select("invoice_id, from_loc, to_loc, item_id, qty")
+      .in("invoice_id", invIds)
+      .order("id");
+    for (const t of tripRows ?? []) {
+      const list = tripsByInvoice.get(t.invoice_id) ?? [];
+      list.push({
+        from_loc: String(t.from_loc ?? ""),
+        to_loc: String(t.to_loc ?? ""),
+        item_id: t.item_id == null ? null : Number(t.item_id),
+        qty: num(t.qty) || 1,
+      });
+      tripsByInvoice.set(t.invoice_id, list);
+    }
+  }
 
   const rows: StmtRow[] = [];
-  const totalsMap = await invoiceTotalsBatch((invs ?? []).map((i) => i.id));
-  for (const inv of invs ?? []) {
+  const totalsMap = await invoiceTotalsBatch(invIds);
+  for (const inv of invoices) {
     const totals = totalsMap.get(inv.id) ?? { customer_total: 0 };
+    const trips = tripsByInvoice.get(inv.id) ?? [];
+    const legs = trips
+      .map((t) => `${t.from_loc || "—"} ← ${t.to_loc || "—"}`)
+      .join("، ");
     rows.push({
       date: inv.date,
       doc: `فاتورة نقل ${invoiceNumberLabel(inv.number)}`,
-      desc: "نقلات مسجلة على العميل",
+      desc: legs ? `نقلات: ${legs}` : "نقلات مسجلة على العميل",
       debit: totals.customer_total,
       credit: 0,
       kind: "invoice",
+      doc_type: "sale",
+      number: inv.number,
+      invoice_number: inv.number,
+      from_locs: trips.map((t) => t.from_loc).filter(Boolean),
+      to_locs: trips.map((t) => t.to_loc).filter(Boolean),
+      item_ids: [...new Set(trips.map((t) => t.item_id).filter((x): x is number => x != null))],
+      amount: totals.customer_total,
     });
   }
 
@@ -848,36 +1036,102 @@ export async function customerStatement(
     .order("date")
     .order("id");
 
+  // تخصيص السدادات على الفواتير: يظهر في البيان ويتيح البحث برقم الفاتورة.
+  const receiptAllocations = new Map<number, AllocationPart[]>();
+  if ((recs ?? []).length) {
+    try {
+      const alloc = await customerAllocations(customerId);
+      for (const r of recs ?? []) receiptAllocations.set(r.id, alloc.byReceipt.get(r.id) ?? []);
+    } catch {
+      // التخصيص للعرض فقط؛ تعذّره لا يمنع عرض الكشف
+    }
+  }
   for (const r of recs ?? []) {
+    const parts = receiptAllocations.get(r.id) ?? [];
     rows.push({
       date: r.date,
       doc: `سند قبض ${voucherNumberLabel("RV", r.number)}`,
       desc: r.description || "تحصيل من العميل",
+      detail: parts.length
+        ? "سداد: " + parts.map((part) => `${invoiceNumberLabel(part.number)} (${part.amount.toFixed(2)})`).join("، ")
+        : "دفعة تحت الحساب",
       debit: 0,
       credit: num(r.amount),
       kind: "receipt",
+      doc_type: "receipt",
+      number: r.number,
+      invoice_number: null,
+      amount: num(r.amount),
     });
   }
 
-  // إشعارات الدائن والمدين — مدين يزيد المستحق، دائن يحسمه
+  // إشعارات المدين والدائن (مع تحديد المرتجعات المرتبطة بنقلات بعينها)
   const { data: notes } = await supabase
     .from("credit_debit_notes")
-    .select("id, number, note_type, date, amount, vat_rate, reason")
+    .select("id, number, note_type, date, amount, vat_rate, reason, invoice_id")
     .eq("customer_id", customerId)
     .gte("date", dFrom)
     .lte("date", dTo)
     .order("date")
     .order("id");
+
+  const noteIds = (notes ?? []).map((n) => Number(n.id));
+  const returnTripsByNote = new Map<
+    number,
+    { from_loc: string; to_loc: string; item_id: number | null }[]
+  >();
+  if (noteIds.length) {
+    const { data: links } = await supabase
+      .from("credit_note_trips")
+      .select("credit_note_id, trip_id")
+      .in("credit_note_id", noteIds);
+    const tripIds = [...new Set((links ?? []).map((l) => Number(l.trip_id)))];
+    const tripInfo = new Map<number, { from_loc: string; to_loc: string; item_id: number | null }>();
+    if (tripIds.length) {
+      const { data: trips } = await supabase
+        .from("invoice_trips")
+        .select("id, from_loc, to_loc, item_id")
+        .in("id", tripIds);
+      for (const t of trips ?? []) {
+        tripInfo.set(Number(t.id), {
+          from_loc: String(t.from_loc ?? ""),
+          to_loc: String(t.to_loc ?? ""),
+          item_id: t.item_id == null ? null : Number(t.item_id),
+        });
+      }
+    }
+    for (const link of links ?? []) {
+      const info = tripInfo.get(Number(link.trip_id));
+      if (!info) continue;
+      const noteId = Number(link.credit_note_id);
+      const list = returnTripsByNote.get(noteId) ?? [];
+      list.push(info);
+      returnTripsByNote.set(noteId, list);
+    }
+  }
+
+  const invoiceNumberById = new Map(invoices.map((i) => [i.id, i.number]));
   for (const n of notes ?? []) {
     const total = num(n.amount) + round2((num(n.amount) * num(n.vat_rate)) / 100);
     const isDebit = n.note_type === "debit";
+    const returns = returnTripsByNote.get(Number(n.id)) ?? [];
+    const isReturn = !isDebit && returns.length > 0;
+    const legs = returns.map((t) => `${t.from_loc || "—"} ← ${t.to_loc || "—"}`).join("، ");
     rows.push({
       date: n.date,
       doc: `${isDebit ? "إشعار مدين" : "إشعار دائن"} ${voucherNumberLabel(isDebit ? "DN" : "CN", n.number)}`,
-      desc: n.reason || (isDebit ? "مبلغ إضافي على العميل" : "تخفيض أو حسم للعميل"),
+      desc: n.reason || (isDebit ? "مبلغ إضافي على العميل" : isReturn ? "مرتجع نقلة" : "تخفيض أو حسم للعميل"),
+      detail: isReturn && legs ? `مرتجع نقلة: ${legs}` : undefined,
       debit: isDebit ? total : 0,
       credit: isDebit ? 0 : total,
       kind: isDebit ? "note_debit" : "note_credit",
+      doc_type: isDebit ? "debit_note" : isReturn ? "return" : "credit_note",
+      number: n.number,
+      invoice_number: n.invoice_id ? invoiceNumberById.get(Number(n.invoice_id)) ?? null : null,
+      from_locs: returns.map((t) => t.from_loc).filter(Boolean),
+      to_locs: returns.map((t) => t.to_loc).filter(Boolean),
+      item_ids: [...new Set(returns.map((t) => t.item_id).filter((x): x is number => x != null))],
+      amount: total,
     });
   }
 
@@ -886,31 +1140,35 @@ export async function customerStatement(
     const order: Record<string, number> = { invoice: 0, note_debit: 1, note_credit: 1, receipt: 2 };
     return (order[a.kind] ?? 0) - (order[b.kind] ?? 0);
   });
+
+  // الرصيد الجاري يُحسب دائماً من كامل الحركات، والفلترة تُطبَّق بعد ذلك فقط
+  // على العرض — فيبقى رصيد كل سطر صحيحاً محاسبياً حتى مع الفلاتر.
   let balance = opening;
   for (const r of rows) {
     balance = round2(balance + r.debit - r.credit);
     r.balance = balance;
   }
+
+  const displayed = applyStatementFilters(rows, filters);
+  const sumWhere = (kind: string, field: "debit" | "credit") =>
+    round2(displayed.filter((r) => r.kind === kind).reduce((a, r) => a + r[field], 0));
+
   return {
     opening: round2(opening),
-    rows,
+    rows: displayed,
     closing: round2(balance),
-    invoiced: round2(rows.filter((r) => r.kind === "invoice").reduce((a, r) => a + r.debit, 0)),
-    collected: round2(rows.filter((r) => r.kind === "receipt").reduce((a, r) => a + r.credit, 0)),
-    notes_debit: round2(rows.filter((r) => r.kind === "note_debit").reduce((a, r) => a + r.debit, 0)),
-    notes_credit: round2(rows.filter((r) => r.kind === "note_credit").reduce((a, r) => a + r.credit, 0)),
+    invoiced: sumWhere("invoice", "debit"),
+    collected: sumWhere("receipt", "credit"),
+    notes_debit: sumWhere("note_debit", "debit"),
+    notes_credit: sumWhere("note_credit", "credit"),
+    matched_debit: round2(displayed.reduce((a, r) => a + r.debit, 0)),
+    matched_credit: round2(displayed.reduce((a, r) => a + r.credit, 0)),
+    all_rows_count: rows.length,
+    matched_count: displayed.length,
+    applied: statementFiltersLabel(filters),
   };
 }
 
-export interface StmtRow {
-  date: string;
-  doc: string;
-  desc: string;
-  debit: number;
-  credit: number;
-  kind: string;
-  balance?: number;
-}
 
 // ---------------------------------------------------------------------------
 // تخصيص تحصيلات العميل على فواتيره بالأقدمية (FIFO)

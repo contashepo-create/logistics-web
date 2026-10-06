@@ -132,9 +132,41 @@ export interface Invoice {
   created_at?: string;
 }
 
+/**
+ * صنف/خدمة في كتالوج الشركة.
+ * النوع «service» لا يحمل مخزوناً فعلياً: لا تُتتبَّع له كميات مخزنية، وإنما
+ * يُربط بنقلات الفواتير وتُبنى منه تقارير الخدمات (عدد النقلات والإيراد).
+ *
+ * وكل خدمة يمكن أن تكون **خط سير** كامل: «نقل الرياض ← الدمام» — عندئذ يكون
+ * `from_loc`/`to_loc` مخزَّنين داخل الصنف نفسه، وعند اختياره في نقلة الفاتورة
+ * يُعبَّأ المسار منه ويُقفل (ويفرضه الخادم)، فتصبح النقلة هي الصنف والصنف هو الخط.
+ * والخدمات العامة (بلا خط) تبقى يكتب فيها المستخدم «من/إلى» يدوياً لكل نقلة.
+ */
+export interface Item {
+  id: number;
+  company_id?: string;
+  code: string;
+  name: string;
+  name_en?: string;
+  item_type: "service" | "product";
+  unit: string;
+  default_price: number;
+  description: string;
+  is_active: boolean;
+  notes: string;
+  /** مكان انطلاق الخط — فارغ في الخدمات العامة */
+  from_loc?: string;
+  /** مكان وصول الخط — فارغ في الخدمات العامة */
+  to_loc?: string;
+  created_at?: string;
+}
+
 export interface InvoiceTrip {
   id?: number;
   invoice_id?: number;
+  /** الخدمة/الصنف المنفَّذ في هذه النقلة (v26) */
+  item_id?: number | null;
+  item_name?: string | null;
   vehicle_id: number | null;
   driver_id: number | null;
   from_loc: string;

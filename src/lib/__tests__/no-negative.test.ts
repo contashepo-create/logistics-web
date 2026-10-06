@@ -6,9 +6,10 @@ vi.mock("@/lib/supabase", async () => {
   return { supabase: mem.supabaseMock };
 });
 
-import { resetDb, setUser, seedTable } from "./memory-supabase";
+import { resetDb, setUser, seedTable, table } from "./memory-supabase";
 import * as repo from "@/lib/repo";
 import * as calc from "@/lib/calc";
+import { clearFeatureCache } from "@/lib/features";
 
 async function seed(opening = 1000) {
   resetDb();
@@ -20,6 +21,9 @@ async function seed(opening = 1000) {
   const emp = await repo.saveEmployee({ name: "موظف", emp_type: "admin" });
   const cb = await repo.saveAccount("cashbox", { name: "الخزينة", created_date: "2026-01-01", opening_balance: opening });
   const bnk = await repo.saveAccount("bank", { name: "البنك", created_date: "2026-01-01", opening_balance: 0 });
+  // كل اختبار يبدأ والفاتورة الضريبية بالباركود غير مفعّلة (الافتراضي الآمن)
+  seedTable("company_features", []);
+  clearFeatureCache();
   return { cust, emp, cb, bnk };
 }
 
@@ -97,11 +101,25 @@ describe("منع الرصيد السالب", () => {
     })).rejects.toThrow(/الرصيد لا يكفي/);
   });
 
-  it("تعديل الفاتورة ممنوع بعد الإصدار", async () => {
-    const s = await seed();
+  it("تعديل الفاتورة ممنوع عند تفعيل الفاتورة الضريبية بالباركود", async () => {
+    const invId = await repo.saveInvoice({ date: "2026-03-01", customer_id: s.cust, attachments: [],
+      trips: [{ from_loc: "أ", to_loc: "ب", qty: 1, unit_price: 1000, expenses: [] }] });
+    seedTable("company_features", [{ company_id: "c1", feature_key: "tax_invoice", enabled: true }]);
+    clearFeatureCache();
     await expect(repo.saveInvoice({ date: "2026-02-01", customer_id: s.cust, attachments: [],
-      trips: [{ from_loc: "أ", to_loc: "ب", qty: 1, unit_price: 5000, expenses: [] }] }, 1))
+      trips: [{ from_loc: "أ", to_loc: "ب", qty: 1, unit_price: 5000, expenses: [] }] }, invId))
       .rejects.toThrow(/لا تقبل التعديل/);
+  });
+
+  it("تعديل الفاتورة مسموح ومستقل عند عدم تفعيل الفاتورة الضريبية", async () => {
+    const invId = await repo.saveInvoice({ date: "2026-03-01", customer_id: s.cust, attachments: [],
+      trips: [{ from_loc: "أ", to_loc: "ب", qty: 1, unit_price: 1000, expenses: [] }] });
+    await repo.saveInvoice({ date: "2026-03-05", customer_id: s.cust, attachments: [],
+      trips: [{ from_loc: "أ", to_loc: "ج", qty: 2, unit_price: 1500, expenses: [] }] }, invId);
+    const trips = table("invoice_trips").filter((t) => t.invoice_id === invId);
+    expect(trips).toHaveLength(1);
+    expect(trips[0].price).toBeCloseTo(3000, 2);
+    expect(trips[0].to_loc).toBe("ج");
   });
 
   it("مسير الراتب أكبر من الرصيد مرفوض", async () => {

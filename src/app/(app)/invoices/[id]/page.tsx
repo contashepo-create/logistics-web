@@ -5,9 +5,13 @@ import { useParams, useRouter } from "next/navigation";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { PageFrame, Spinner, Button, Balance } from "@/components/ui";
 import { getInvoiceFull } from "@/lib/calc";
-import { listCreditDebitNotesForInvoice } from "@/lib/repo";
+import { deleteInvoice, listCreditDebitNotesForInvoice } from "@/lib/repo";
 import { printCustomerInvoice, exportCustomerInvoicePdf } from "@/components/dialogs/operations";
 import CreditDebitNoteDialog from "@/components/CreditDebitNoteDialog";
+import {
+  usesCreditDebitNotes, INVOICE_LOCKED_MESSAGE, NOTES_REQUIRE_TAX_FEATURE_MESSAGE,
+} from "@/lib/features";
+import { notify } from "@/components/toast";
 import { money, EXPENSE_TYPES } from "@/lib/format";
 
 export default function InvoiceViewPage() {
@@ -27,6 +31,24 @@ export default function InvoiceViewPage() {
     queryFn: () => listCreditDebitNotesForInvoice(id),
     enabled: Number.isFinite(id) && id > 0,
   });
+  // سياسة التصحيح: الباركود مفعّل ⇒ منع التعديل/الحذف والإصلاح بإشعار؛
+  // متوقف ⇒ تعديل/حذف متاحان ومنع إصدار إشعارات جديدة (القديمة تبقى معروضة).
+  const { data: notesMode } = useQuery({
+    queryKey: ["feature-tax-invoice"],
+    queryFn: () => usesCreditDebitNotes(true),
+  });
+
+  const onDelete = async () => {
+    if (!window.confirm("هل أنت متأكد من حذف هذه الفاتورة؟ سيُعاد حساب أرصدة العميل والتقارير تلقائياً.")) return;
+    try {
+      await deleteInvoice(id);
+      notify("تم حذف الفاتورة.", "success");
+      qc.invalidateQueries();
+      router.push("/invoices");
+    } catch (e) {
+      notify(e instanceof Error ? e.message : String(e), "error");
+    }
+  };
 
   if (isLoading) return <PageFrame title="عرض الفاتورة"><Spinner /></PageFrame>;
   if (!inv) {
@@ -75,27 +97,57 @@ export default function InvoiceViewPage() {
   return (
     <PageFrame
       title={`فاتورة ${number}`}
-      subtitle="معاينة واضحة للفاتورة الصادرة — التصحيح يتم بإشعار مدين أو دائن"
+      subtitle={notesMode
+        ? "الفاتورة الضريبية بالباركود مفعّلة — التصحيح يتم بإشعار مدين أو دائن"
+        : "الفاتورة قابلة للتعديل والحذف — التصحيح يتم بتعديل الفاتورة أو حذفها"}
       toolbar={
         <div style={{ display: "flex", gap: 12, flexWrap: "wrap", alignItems: "flex-start" }}>
           <Button onClick={() => router.push("/invoices")} style={{ marginTop: 2 }}>→ عودة للفواتير</Button>
           <Button variant="primary" onClick={() => printCustomerInvoice(id)} style={{ marginTop: 2 }}>🖨️ طباعة</Button>
           <Button onClick={() => exportCustomerInvoicePdf(id)} style={{ marginTop: 2 }}>📄 PDF</Button>
-          <div style={{ display: "flex", flexDirection: "column", gap: 4, alignItems: "center" }}>
-            <Button onClick={() => setNoteDialog("debit")}>➕ إشعار مدين</Button>
-            <small style={{ fontSize: 10, color: "var(--muted)", maxWidth: 120, textAlign: "center", lineHeight: 1.2 }}>
-              يُزيد من قيمة الفاتورة ومستحقاتك على العميل
-            </small>
-          </div>
-          <div style={{ display: "flex", flexDirection: "column", gap: 4, alignItems: "center" }}>
-            <Button onClick={() => setNoteDialog("credit")}>➖ إشعار دائن</Button>
-            <small style={{ fontSize: 10, color: "var(--muted)", maxWidth: 120, textAlign: "center", lineHeight: 1.2 }}>
-              يُخفض قيمة الفاتورة ويخصم من مستحقاتك على العميل
-            </small>
-          </div>
+
+          {notesMode ? (
+            <>
+              <div style={{ display: "flex", flexDirection: "column", gap: 4, alignItems: "center" }}>
+                <Button onClick={() => setNoteDialog("debit")}>➕ إشعار مدين</Button>
+                <small style={{ fontSize: 10, color: "var(--muted)", maxWidth: 120, textAlign: "center", lineHeight: 1.2 }}>
+                  يُزيد من قيمة الفاتورة ومستحقاتك على العميل
+                </small>
+              </div>
+              <div style={{ display: "flex", flexDirection: "column", gap: 4, alignItems: "center" }}>
+                <Button onClick={() => setNoteDialog("credit")}>➖ إشعار دائن</Button>
+                <small style={{ fontSize: 10, color: "var(--muted)", maxWidth: 120, textAlign: "center", lineHeight: 1.2 }}>
+                  يُخفض قيمة الفاتورة ويخصم من مستحقاتك على العميل
+                </small>
+              </div>
+            </>
+          ) : (
+            <>
+              <Button onClick={() => router.push(`/invoices/${id}/edit`)} style={{ marginTop: 2 }}>✏️ تعديل الفاتورة</Button>
+              <Button variant="danger" onClick={onDelete} style={{ marginTop: 2 }}>🗑️ حذف الفاتورة</Button>
+            </>
+          )}
         </div>
       }
     >
+      {notesMode === false && (
+        <div style={{
+          background: "var(--info-light, #eff6ff)", color: "var(--info-dark, #1e3a8a)",
+          border: "1px solid var(--info, #93c5fd)", borderRadius: 10,
+          padding: "10px 14px", marginBottom: 12, fontWeight: 600,
+        }}>
+          {NOTES_REQUIRE_TAX_FEATURE_MESSAGE}
+        </div>
+      )}
+      {notesMode === true && notesRows.length > 0 && (
+        <div style={{
+          background: "var(--muted-light, #f1f5f9)", color: "var(--muted)",
+          border: "1px solid var(--border, #e2e8f0)", borderRadius: 10,
+          padding: "10px 14px", marginBottom: 12,
+        }}>
+          {INVOICE_LOCKED_MESSAGE}
+        </div>
+      )}
       <section className="invoice-preview-card" aria-label="معاينة الفاتورة">
         {creditNotes > 0 && (
           <div style={{ background: "var(--warning-light)", color: "var(--warning-dark)", padding: "8px 16px", borderRadius: "10px", marginBottom: "16px", fontWeight: "bold", textAlign: "center", border: "1px solid var(--warning)" }} className="print-only-stamp">

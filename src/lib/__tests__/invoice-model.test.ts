@@ -9,6 +9,7 @@ vi.mock("@/lib/supabase", async () => {
 import { resetDb, setUser, seedTable, table } from "./memory-supabase";
 import * as calc from "@/lib/calc";
 import * as repo from "@/lib/repo";
+import { clearFeatureCache } from "@/lib/features";
 
 function setupCompany(vatRate = 0): void {
   resetDb();
@@ -186,11 +187,23 @@ describe("مصادر تمويل مصروف النقلة", () => {
     expect(await calc.customerBalance(s.cust)).toBeCloseTo(2400, 2);
   });
 
-  it("الفاتورة الضريبية لا تقبل التعديل", async () => {
+  it("الفاتورة الضريبية لا تقبل التعديل (وعند عدم تفعيلها تُعدَّل بحرية)", async () => {
     const id = await repo.saveInvoice({ date: "2026-03-01", customer_id: s.cust, attachments: [],
       trips: [{ from_loc: "أ", to_loc: "ب", qty: 1, unit_price: 2000, expenses: [] }] });
+
+    // 1) عند تفعيل المطوّر للفاتورة الضريبية: التعديل ممنوع
+    seedTable("company_features", [{ company_id: "c1", feature_key: "tax_invoice", enabled: true }]);
+    clearFeatureCache();
     await expect(repo.saveInvoice({ date: "2026-03-01", customer_id: s.cust, attachments: [],
       trips: [{ from_loc: "أ", to_loc: "ب", qty: 1, unit_price: 2500, expenses: [] }] }, id))
       .rejects.toThrow(/لا تقبل التعديل/);
+
+    // 2) وعند إيقافها: التعديل متاح ويُعيد حساب قيم الفاتورة
+    seedTable("company_features", [{ company_id: "c1", feature_key: "tax_invoice", enabled: false }]);
+    clearFeatureCache();
+    await repo.saveInvoice({ date: "2026-03-01", customer_id: s.cust, attachments: [],
+      trips: [{ from_loc: "أ", to_loc: "ب", qty: 1, unit_price: 2500, expenses: [] }] }, id);
+    const totals = await calc.invoiceTotals(id);
+    expect(totals.trips_total).toBeCloseTo(2500, 2);
   });
 });

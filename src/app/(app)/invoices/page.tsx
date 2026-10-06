@@ -7,7 +7,9 @@ import { DataTable } from "@/components/DataTable";
 import { PageFrame, Spinner, ExportBar, TotalsBar, FilterRow, DictSelect } from "@/components/ui";
 import { exportCustomerInvoicePdf, printCustomerInvoice } from "@/components/dialogs/operations";
 import { invoiceList } from "@/lib/calc";
-import { listCustomers } from "@/lib/repo";
+import { deleteInvoice, listCustomers } from "@/lib/repo";
+import { usesCreditDebitNotes } from "@/lib/features";
+import { notify } from "@/components/toast";
 import { money, todayIso } from "@/lib/format";
 import { exportPage } from "@/lib/exportHelper";
 
@@ -21,6 +23,22 @@ export default function InvoicesPage() {
   const [customerId, setCustomerId] = useState<number | null>(null);
 
   const { data: customers } = useQuery({ queryKey: ["customers"], queryFn: listCustomers });
+  // الباركود مفعّل ⇒ لا تعديل/حذف (التصحيح بالإشعارات من صفحة الفاتورة)
+  const { data: notesMode } = useQuery({
+    queryKey: ["feature-tax-invoice"],
+    queryFn: () => usesCreditDebitNotes(true),
+  });
+
+  const onDelete = async (id: number) => {
+    if (!window.confirm("هل أنت متأكد من حذف هذه الفاتورة؟ سيُعاد حساب أرصدة العميل والتقارير تلقائياً.")) return;
+    try {
+      await deleteInvoice(id);
+      notify("تم حذف الفاتورة.", "success");
+      qc.invalidateQueries();
+    } catch (e) {
+      notify(e instanceof Error ? e.message : String(e), "error");
+    }
+  };
   const { data, isLoading } = useQuery({
     queryKey: ["invoices", dFrom, dTo, customerId],
     queryFn: () => invoiceList(dFrom, dTo, customerId),
@@ -94,11 +112,19 @@ export default function InvoicesPage() {
             extra={[
               { key: "print", label: "🖨️", title: "طباعة فاتورة العميل" },
               { key: "pdf", label: "📄", title: "حفظ فاتورة العميل PDF" },
+              ...(notesMode === false
+                ? [
+                    { key: "edit", label: "✏️", title: "تعديل الفاتورة" },
+                    { key: "delete", label: "🗑️", title: "حذف الفاتورة", danger: true },
+                  ]
+                : []),
             ]}
             onAction={(id, key) => {
               if (key === "view") router.push(`/invoices/${Number(id)}`);
               else if (key === "print") printCustomerInvoice(Number(id));
               else if (key === "pdf") exportCustomerInvoicePdf(Number(id));
+              else if (key === "edit") router.push(`/invoices/${Number(id)}/edit`);
+              else if (key === "delete") onDelete(Number(id));
             }} />
           </div>
           <div style={{ marginTop: 12 }}>
