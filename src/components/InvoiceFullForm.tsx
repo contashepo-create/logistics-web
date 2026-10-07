@@ -3,12 +3,24 @@
 import { useEffect, useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
 import { useQueryClient } from "@tanstack/react-query";
-import { Field, Input, Select, Textarea, AmountInput, DateInput, Button } from "@/components/ui";
+import { Field, Input, Select, Textarea, AmountInput, DateInput, Button, Modal, Spinner } from "@/components/ui";
 import { notify } from "@/components/toast";
 import { listCustomers, listEmployees, listVehicles, saveInvoice, currentVatRate, getCustomer, companyInfo } from "@/lib/repo";
+import { getInvoiceFull } from "@/lib/calc";
+import { listItems, itemRouteLabel, isRouteItem, saveItem, ITEM_TYPES } from "@/lib/items";
+import { INVOICE_LOCKED_MESSAGE, usesCreditDebitNotes } from "@/lib/features";
 import { money, todayIso } from "@/lib/format";
+import type { Item } from "@/lib/types";
 
 type TripRow = {
+  /** معرّف النقلة القائمة في وضع التعديل (null للنقلة الجديدة) — يمنع إعادة
+   *  إنشاء النقلة فيتغيّر معرّفها أو تُفقد سنداتها ومصروفاتها */
+  id: number | null;
+  /** مصروفات النقلة كما هي في قاعدة البيانات — تُرسل بمعرّفاتها حتى يحدّثها
+   *  الخادم في مكانها ولا يُعيد إنشاءها (فتحافظ على سندات الصرف التلقائية) */
+  expenses: TripExpenseInput[];
+  /** الخدمة/الخط المختار لهذه النقلة (إلزامي) */
+  item_id: string;
   vehicle_id: string;
   driver_id: string;
   from_loc: string;
@@ -19,31 +31,187 @@ type TripRow = {
   notes: string;
 };
 
+/** شكل مصروف النقلة كما يقرؤه/يكتبه الخادم (المعرّف اختياري: موجود = تحديث). */
+type TripExpenseInput = {
+  id?: number | null;
+  expense_type?: string;
+  qty?: number;
+  unit_amount?: number;
+  amount?: number;
+  source?: string;
+  account_kind?: string | null;
+  account_id?: number | null;
+  supplier_name?: string;
+  notes?: string;
+};
+
+const EMPTY_TRIP: TripRow = {
+  id: null, expenses: [],
+  item_id: "", vehicle_id: "", driver_id: "", from_loc: "", to_loc: "",
+  qty: "1", unit_price: "", container_numbers: [], notes: "",
+};
+
+/** اسم الخدمة كما يظهر في القائمة: الاسم + الخط إن لم يكن مذكوراً فيه + الوحدة. */
+function serviceLabel(item: Item): string {
+  const parts = [item.name];
+  const route = itemRouteLabel(item, "");
+  if (route && !item.name.includes(String(item.from_loc ?? ""))) parts.push(`(${route})`);
+  if (item.unit) parts.push(`— ${item.unit}`);
+  return parts.join(" ");
+}
+
+/** نافذة إنشاء خدمة/خط جديد من نفس شاشة الفاتورة (إنشاء سريع). */
+function QuickServiceDialog({ onClose, onCreated }: {
+  onClose: () => void;
+  onCreated: (itemId: number) => void;
+}) {
+  const [f, setF] = useState({
+    name: "", from_loc: "", to_loc: "", unit: "نقلة", default_price: "", item_type: "service",
+  });
+  const [saving, setSaving] = useState(false);
+  const isRoute = Boolean(f.from_loc.trim() || f.to_loc.trim());
+
+  const create = async () => {
+    setSaving(true);
+    try {
+      const id = await saveItem({
+        name: f.name,
+        item_type: f.item_type,
+        unit: f.unit,
+        default_price: parseFloat(f.default_price || "0") || 0,
+        // «خدمة الخط» تُحدَّد بمكاني الانطلاق والوصول، والفراغ يعني خدمة عامة
+        from_loc: isRoute ? f.from_loc : "",
+        to_loc: isRoute ? f.to_loc : "",
+      });
+      notify("تم إنشاء الخدمة وربطها بهذه النقلة.", "success");
+      onCreated(id);
+    } catch (e) {
+      notify(e instanceof Error ? e.message : String(e), "error");
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  return (
+    <Modal title="خدمة/خط جديد" onClose={onClose} width={720}>
+      <div className="form-grid-2">
+        <Field label="اسم الخدمة" required hint="مثال: نقل الرياض ← الدمام">
+          <Input value={f.name} onChange={(e) => setF({ ...f, name: e.target.value })} />
+        </Field>
+        <Field label="النوع">
+          <Select value={f.item_type} onChange={(e) => setF({ ...f, item_type: e.target.value })}>
+            {Object.entries(ITEM_TYPES).map(([value, label]) => <option key={value} value={value}>{label}</option>)}
+          </Select>
+        </Field>
+      </div>
+      <div className="form-grid-2">
+        <Field label="من (مكان الانطلاق)" hint="اتركه فارغاً إن كانت الخدمة عامة بلا خط">
+          <Input value={f.from_loc} onChange={(e) => setF({ ...f, from_loc: e.target.value })} />
+        </Field>
+        <Field label="إلى (مكان الوصول)">
+          <Input value={f.to_loc} onChange={(e) => setF({ ...f, to_loc: e.target.value })} />
+        </Field>
+      </div>
+      <div className="form-grid-2">
+        <Field label="الوحدة"><Input value={f.unit} onChange={(e) => setF({ ...f, unit: e.target.value })} /></Field>
+        <Field label="السعر الافتراضي"><AmountInput value={f.default_price} onChange={(v) => setF({ ...f, default_price: v })} /></Field>
+      </div>
+      <div className="field-hint" style={{ marginBottom: 10 }}>
+        {isRoute
+          ? "خدمة خط: عند اختيارها في النقلة يُعبَّأ «من/إلى» من الخط تلقائياً ويُقفلان."
+          : "خدمة عامة بلا خط: يُكتب «من/إلى» يدوياً في كل نقلة."}
+      </div>
+      <div style={{ display: "flex", gap: 10 }}>
+        <Button variant="primary" onClick={create} disabled={saving || !f.name.trim()}>💾 إنشاء</Button>
+        <Button onClick={onClose}>إلغاء</Button>
+      </div>
+    </Modal>
+  );
+}
+
 const n = (v: string) => parseFloat(String(v).replace(/,/g, "")) || 0;
 const tripLineTotal = (t: { qty: string; unit_price: string }) =>
   Math.round(Math.max(1, n(t.qty) || 1) * n(t.unit_price) * 100) / 100;
 
-export default function InvoiceFullForm() {
+/** نموذج الفاتورة: إنشاء فاتورة جديدة، أو تعديل فاتورة قائمة عند إيقاف الباركود. */
+export default function InvoiceFullForm({ invoiceId }: { invoiceId?: number } = {}) {
   const router = useRouter();
   const qc = useQueryClient();
+  const editMode = Boolean(invoiceId);
   const [customers, setCustomers] = useState<{ id: number; name: string }[]>([]);
   const [vehicles, setVehicles] = useState<{ id: number; plate_number: string }[]>([]);
   const [drivers, setDrivers] = useState<{ id: number; name: string }[]>([]);
+  const [items, setItems] = useState<Item[]>([]);
   const [f, setF] = useState({ customer_id: "", date: todayIso(), vat_rate: "15", notes: "" });
-  const [trips, setTrips] = useState<TripRow[]>([{
-    vehicle_id: "", driver_id: "", from_loc: "", to_loc: "", qty: "1",
-    unit_price: "", container_numbers: [], notes: "",
-  }]);
+  const [trips, setTrips] = useState<TripRow[]>([{ ...EMPTY_TRIP }]);
   const [attachments, setAttachments] = useState<string[]>([]);
   const [saving, setSaving] = useState(false);
+  const [quickFor, setQuickFor] = useState<number | null>(null);
+  const [loadingInvoice, setLoadingInvoice] = useState(editMode);
+  const [notesMode, setNotesMode] = useState<boolean | null>(null);
+
+  // كل الخدمات (بما فيها المعطّلة) حتى لا تختفي خدمة مستخدمة في فاتورة قديمة
+  const reloadItems = async () => setItems(await listItems({ includeInactive: true }));
 
   useEffect(() => {
     (async () => {
       const [cs, vs, ds, vatRate] = await Promise.all([listCustomers(), listVehicles(), listEmployees("driver"), currentVatRate()]);
       setCustomers(cs); setVehicles(vs); setDrivers(ds);
       setF((old) => ({ ...old, vat_rate: String(vatRate) }));
+      await reloadItems();
+      setNotesMode(await usesCreditDebitNotes());
     })();
   }, []);
+
+  // وضع التعديل: تحميل الفاتورة القائمة (رأس + نقلات + مصروفات) لتعبئة النموذج
+  useEffect(() => {
+    if (!invoiceId) return;
+    (async () => {
+      try {
+        const full = await getInvoiceFull(invoiceId);
+        if (!full) {
+          notify("الفاتورة غير موجودة.", "error");
+          router.push("/invoices");
+          return;
+        }
+        setF({
+          customer_id: String(full.customer_id),
+          date: full.date,
+          vat_rate: String(full.vat_rate ?? 15),
+          notes: full.notes ?? "",
+        });
+        setAttachments(full.attachments ?? []);
+        setTrips((full.trips ?? []).map((trip) => ({
+          id: Number(trip.id) || null,
+          expenses: (trip.expenses ?? []).map((e) => ({
+            id: e.id ?? null,
+            expense_type: e.expense_type,
+            qty: Number(e.qty ?? 1),
+            unit_amount: Number(e.unit_amount ?? 0),
+            amount: Number(e.amount ?? 0),
+            source: e.source ?? "cash",
+            account_kind: e.account_kind ?? null,
+            account_id: e.account_id ?? null,
+            supplier_name: e.supplier_name ?? "",
+            notes: e.notes ?? "",
+          })),
+          item_id: trip.item_id ? String(trip.item_id) : "",
+          vehicle_id: trip.vehicle_id ? String(trip.vehicle_id) : "",
+          driver_id: trip.driver_id ? String(trip.driver_id) : "",
+          from_loc: trip.from_loc ?? "",
+          to_loc: trip.to_loc ?? "",
+          qty: String(trip.qty ?? 1),
+          unit_price: String(trip.unit_price ?? ""),
+          container_numbers: trip.container_numbers ?? [],
+          notes: trip.notes ?? "",
+        })));
+      } catch (e) {
+        notify(e instanceof Error ? e.message : String(e), "error");
+      } finally {
+        setLoadingInvoice(false);
+      }
+    })();
+  }, [invoiceId, router]);
 
   const totals = useMemo(() => {
     const tripsTotal = trips.reduce((a, t) => a + tripLineTotal(t), 0);
@@ -55,6 +223,35 @@ export default function InvoiceFullForm() {
 
   const upd = (i: number, patch: Partial<TripRow>) =>
     setTrips((p) => p.map((t, x) => (x === i ? { ...t, ...patch } : t)));
+
+  const itemById = useMemo(() => new Map(items.map((it) => [Number(it.id), it])), [items]);
+
+  /** خدمة الخط المختارة لهذه النقلة (إن كانت خطاً مخزَّناً داخله). */
+  const routeOf = (trip: TripRow): Item | null => {
+    const item = trip.item_id ? itemById.get(Number(trip.item_id)) : undefined;
+    return item && isRouteItem(item) ? item : null;
+  };
+
+  /**
+   * اختيار الخدمة: خدمة الخط تفرض مسارها وتُقفل حقلي «من/إلى»، والخدمة العامة
+   * تتركهما يدويين. (الخادم يفرض خط الصنف أيضاً، فلا يمكن تجاوزه.)
+   */
+  const selectItem = (i: number, itemId: string) => {
+    setTrips((rows) => rows.map((trip, index) => {
+      if (index !== i) return trip;
+      const item = itemId ? itemById.get(Number(itemId)) : undefined;
+      const next: TripRow = { ...trip, item_id: itemId };
+      if (item && isRouteItem(item)) {
+        next.from_loc = String(item.from_loc ?? "");
+        next.to_loc = String(item.to_loc ?? "");
+      }
+      // تعبئة السعر الافتراضي تلقائياً ما دام السعر فارغاً
+      if (item && !n(trip.unit_price) && Number(item.default_price) > 0) {
+        next.unit_price = String(item.default_price);
+      }
+      return next;
+    }));
+  };
 
   const updateTripQty = (i: number, value: string) => {
     const parsedQty = n(value);
@@ -94,6 +291,8 @@ export default function InvoiceFullForm() {
     if (!trips.length) return notify("أضف نقلة واحدة على الأقل.", "error");
     const seenContainers = new Set<string>();
     for (const [index, t] of trips.entries()) {
+      // الخدمة/الخط إلزامي لكل نقلة، وهو الذي يُقفل المسار أو يفتحه للكتابة
+      if (!t.item_id) return notify(`اختر الخدمة/الخط للنقلة ${index + 1}.`, "error");
       if (!t.from_loc.trim() || !t.to_loc.trim()) return notify("أكمل أماكن الانطلاق والوصول لكل نقلة.", "error");
       const qty = Math.trunc(n(t.qty));
       if (!(qty >= 1)) return notify("عدد النقلات يجب أن يكون 1 على الأقل.", "error");
@@ -111,22 +310,31 @@ export default function InvoiceFullForm() {
     }
     setSaving(true);
     try {
-      await saveInvoice({
+      const savedId = await saveInvoice({
         customer_id: Number(f.customer_id), date: f.date, notes: f.notes,
         vat_rate: parseFloat(f.vat_rate || "15") || 15,
         attachments,
-        trips: trips.map((t) => ({
-          vehicle_id: t.vehicle_id ? Number(t.vehicle_id) : null,
-          driver_id: t.driver_id ? Number(t.driver_id) : null,
-          from_loc: t.from_loc, to_loc: t.to_loc,
-          qty: Math.max(1, Math.trunc(n(t.qty) || 1)),
-          unit_price: n(t.unit_price),
-          price: tripLineTotal(t),
-          container_numbers: t.container_numbers.map((number) => number.trim()),
-          notes: t.notes,
-          expenses: [],
-        })),
-      });
+        trips: trips.map((t) => {
+          const route = routeOf(t);
+          return {
+            id: t.id,
+            item_id: Number(t.item_id),
+            vehicle_id: t.vehicle_id ? Number(t.vehicle_id) : null,
+            driver_id: t.driver_id ? Number(t.driver_id) : null,
+            // خدمة الخط: المسار من الصنف نفسه؛ الخدمة العامة: ما كتبه المستخدم
+            from_loc: route ? String(route.from_loc ?? "") : t.from_loc,
+            to_loc: route ? String(route.to_loc ?? "") : t.to_loc,
+            qty: Math.max(1, Math.trunc(n(t.qty) || 1)),
+            unit_price: n(t.unit_price),
+            price: tripLineTotal(t),
+            container_numbers: t.container_numbers.map((number) => number.trim()),
+            notes: t.notes,
+            // المصروفات تُرسل كما هي (بمعرّفاتها) حتى لا تُفقد مصروفات الفاتورة
+            // القديمة عند تعديل الرأس أو السعر — وتُدار من شاشة سندات الدفع.
+            expenses: t.expenses.map((e) => ({ ...e })),
+          };
+        }),
+      }, invoiceId ?? null);
       // عند تفعيل المطوّر للفاتورة الضريبية فقط: ننبه إلى البيانات الناقصة
       // اللازمة للباركود. عند توقف الميزة يظهر تحذير عدم مطابقة زاتكا وقت الطباعة.
       let warn = "";
@@ -152,11 +360,14 @@ export default function InvoiceFullForm() {
           if (missing.length) warn = ` — ⚠️ بيانات الفاتورة ناقصة (${missing.join("، ")}) ولن يُنشأ/يُطبع الباركود حتى استكمالها.`;
         }
       } catch { /* تحذير فقط؛ لا يمنع حفظ الفاتورة */ }
-      notify(warn ? `تم حفظ الفاتورة بنجاح.${warn}` : "تم حفظ الفاتورة بنجاح.", warn ? "warning" : "success");
+      notify(
+        (editMode ? "تم تعديل الفاتورة بنجاح." : "تم حفظ الفاتورة بنجاح.") + warn,
+        warn ? "warning" : "success"
+      );
       // إبطال كاش شاشة الفواتير والبيانات المرتبطة حتى تظهر الفاتورة الجديدة
       // فوراً دون الحاجة لتحديث الصفحة يدوياً (router.refresh() لا يمسّ كاش React Query).
       qc.invalidateQueries();
-      router.push("/invoices");
+      router.push(editMode ? `/invoices/${savedId}` : "/invoices");
     } catch (e) {
       notify(e instanceof Error ? e.message : String(e), "error");
     } finally {
@@ -164,17 +375,47 @@ export default function InvoiceFullForm() {
     }
   };
 
+  if (editMode && notesMode && loadingInvoice) {
+    return <div className="inv-form"><Spinner /></div>;
+  }
+  if (editMode && notesMode) {
+    return (
+      <div className="inv-form">
+        <div className="page-head">
+          <div><Button variant="row" onClick={() => router.push(`/invoices/${invoiceId}`)}>→ عودة للفاتورة</Button></div>
+          <div className="page-head-title">تعديل فاتورة نقل</div>
+        </div>
+        <div style={{
+          background: "var(--warning-light)", color: "var(--warning-dark)",
+          border: "1px solid var(--warning)", borderRadius: 10, padding: "14px 16px", fontWeight: 600,
+        }}>
+          {INVOICE_LOCKED_MESSAGE}
+        </div>
+      </div>
+    );
+  }
+
   return (
     <div className="inv-form">
       <div className="page-head">
         <div>
-          <Button variant="row" onClick={() => router.push("/invoices")}>→ عودة للفواتير</Button>
+          <Button variant="row" onClick={() => router.push(editMode ? `/invoices/${invoiceId}` : "/invoices")}>→ عودة للفواتير</Button>
         </div>
-        <div className="page-head-title">فاتورة نقل جديدة — صفحة كاملة</div>
+        <div className="page-head-title">{editMode ? "تعديل فاتورة نقل" : "فاتورة نقل جديدة — صفحة كاملة"}</div>
         <div style={{ color: "var(--muted)", fontSize: 13 }}>
           المصروفات لا تُسجَّل هنا؛ تُسجَّل من «سندات الدفع» مع اختيار الفاتورة/الرحلة.
         </div>
       </div>
+
+      {editMode && notesMode && (
+        <div className="trip-head-spacer" style={{
+          background: "var(--warning-light)", color: "var(--warning-dark)",
+          border: "1px solid var(--warning)", borderRadius: 10, padding: "10px 14px",
+          margin: "10px 0", fontWeight: 600,
+        }}>
+          {INVOICE_LOCKED_MESSAGE}
+        </div>
+      )}
 
       <div className="inv-head-card">
         <Field label="العميل" required>
@@ -198,10 +439,7 @@ export default function InvoiceFullForm() {
       <div>
         <div className="inv-sec-title">
           <span>بنود النقل</span>
-          <button className="btn btn-primary" onClick={() => setTrips((p) => [...p, {
-            vehicle_id: "", driver_id: "", from_loc: "", to_loc: "", qty: "1",
-            unit_price: "", container_numbers: [], notes: "",
-          }])}>＋ إضافة نقلة</button>
+          <button className="btn btn-primary" onClick={() => setTrips((p) => [...p, { ...EMPTY_TRIP }])}>＋ إضافة نقلة</button>
         </div>
 
         {trips.map((t, i) => (
@@ -209,6 +447,9 @@ export default function InvoiceFullForm() {
             <div className="trip-card-head">
               <span className="trip-badge">{i + 1}</span>
               <span className="trip-route">
+                {t.item_id && itemById.get(Number(t.item_id))
+                  ? <b style={{ marginInlineEnd: 6 }}>{itemById.get(Number(t.item_id))!.name}</b>
+                  : <span className="muted">بلا خدمة — </span>}
                 {t.from_loc || <span className="muted">من …</span>}
                 <span className="muted"> ← </span>
                 {t.to_loc || <span className="muted">إلى …</span>}
@@ -219,8 +460,35 @@ export default function InvoiceFullForm() {
             </div>
             <div className="trip-card-body">
               <div className="trip-grid-4">
-                <Field label="من" required><Input value={t.from_loc} onChange={(e) => upd(i, { from_loc: e.target.value })} /></Field>
-                <Field label="إلى" required><Input value={t.to_loc} onChange={(e) => upd(i, { to_loc: e.target.value })} /></Field>
+                <Field label="الخدمة / الخط" required hint="خدمة الخط تُعبّئ «من/إلى» تلقائياً وتقفلهما">
+                  <div style={{ display: "flex", gap: 6 }}>
+                    <Select value={t.item_id} onChange={(e) => selectItem(i, e.target.value)}>
+                      <option value="">— اختر الخدمة —</option>
+                      {items.map((it) => (
+                        <option key={it.id} value={it.id} disabled={!it.is_active && String(it.id) !== t.item_id}>
+                          {serviceLabel(it)}{it.is_active ? "" : " (معطّلة)"}
+                        </option>
+                      ))}
+                    </Select>
+                    <Button type="button" onClick={() => setQuickFor(i)} title="إنشاء خدمة/خط جديد">＋ جديد</Button>
+                  </div>
+                </Field>
+                <Field label="من" required>
+                  <Input
+                    value={t.from_loc}
+                    readOnly={Boolean(routeOf(t))}
+                    onChange={(e) => upd(i, { from_loc: e.target.value })}
+                    title={routeOf(t) ? "يُعبَّأ من خط الخدمة المختارة" : undefined}
+                  />
+                </Field>
+                <Field label="إلى" required>
+                  <Input
+                    value={t.to_loc}
+                    readOnly={Boolean(routeOf(t))}
+                    onChange={(e) => upd(i, { to_loc: e.target.value })}
+                    title={routeOf(t) ? "يُعبَّأ من خط الخدمة المختارة" : undefined}
+                  />
+                </Field>
                 <Field label="السيارة">
                   <Select value={t.vehicle_id} onChange={(e) => upd(i, { vehicle_id: e.target.value })}>
                     <option value="">—</option>
@@ -331,9 +599,26 @@ export default function InvoiceFullForm() {
       </Field>
 
       <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
-        <Button variant="primary" onClick={save} disabled={saving}>💾 حفظ الفاتورة</Button>
-        <Button onClick={() => router.push("/invoices")}>إلغاء</Button>
+        <Button variant="primary" onClick={save} disabled={saving || (editMode && notesMode === true)}>
+          💾 {editMode ? "حفظ التعديلات" : "حفظ الفاتورة"}
+        </Button>
+        <Button onClick={() => router.push(editMode ? `/invoices/${invoiceId}` : "/invoices")}>إلغاء</Button>
       </div>
+
+      {quickFor !== null && (
+        <QuickServiceDialog
+          onClose={() => setQuickFor(null)}
+          onCreated={async (itemId) => {
+            await reloadItems();
+            setTrips((rows) => rows.map((trip, index) => {
+              if (index !== quickFor) return trip;
+              const next = { ...trip, item_id: String(itemId) };
+              return next;
+            }));
+            setQuickFor(null);
+          }}
+        />
+      )}
     </div>
   );
 }

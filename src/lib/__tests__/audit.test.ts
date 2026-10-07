@@ -16,6 +16,7 @@ vi.mock("@/lib/supabase", async () => {
 import { resetDb, setUser, seedTable, table } from "./memory-supabase";
 import * as calc from "@/lib/calc";
 import * as repo from "@/lib/repo";
+import { clearFeatureCache } from "@/lib/features";
 
 const r2 = (n: number): number => Math.round(n * 100) / 100;
 
@@ -140,8 +141,21 @@ function ledgerGroup(L: Entry[], prefix: string): number {
 // ---------------------------------------------------------------------------
 // سيناريو تشغيلي كامل يغطي كل أنواع الحركات
 // ---------------------------------------------------------------------------
+/** تفعيل الفاتورة الضريبية بالباركود (يقفل تعديل/حذف الفواتير ويشغّل الإشعارات). */
+function enableTaxInvoice(): void {
+  seedTable("company_features", [{ company_id: "c1", feature_key: "tax_invoice", enabled: true }]);
+  clearFeatureCache();
+}
+
+/** الحالة الافتراضية: الميزة غير مفعّلة (الفاتورة قابلة للتعديل والحذف). */
+function disableTaxInvoice(): void {
+  seedTable("company_features", []);
+  clearFeatureCache();
+}
+
 async function seedFullScenario(vatRate = 14) {
   setupCompany(vatRate);
+  disableTaxInvoice();
   await repo.saveYear({ year: 2026, date_from: "2026-01-01", date_to: "2026-12-31", notes: "" });
 
   const custA = await repo.saveCustomer({ name: "شركة الدلتا", opening_balance: 5000, notes: "" });
@@ -409,13 +423,15 @@ describe("تدقيق محاسبي: كشوف الحسابات والتقارير"
 
 // ---------------------------------------------------------------------------
 describe("تدقيق محاسبي: عكس القيود عند التعديل والحذف", () => {
-  it("الفاتورة الضريبية غير قابلة للحذف", async () => {
+  it("الفاتورة الضريبية غير قابلة للحذف عند تفعيل الباركود", async () => {
     const s = await seedFullScenario(0);
+    enableTaxInvoice();
     await expect(repo.deleteInvoice(s.inv1)).rejects.toThrow(/لا يمكن حذف فاتورة ضريبية/);
   });
 
-  it("الفاتورة الضريبية غير قابلة للتعديل", async () => {
+  it("الفاتورة الضريبية غير قابلة للتعديل عند تفعيل الباركود", async () => {
     const s = await seedFullScenario(0);
+    enableTaxInvoice();
     await expect(repo.saveInvoice({ date: "2026-02-01", customer_id: s.custA, attachments: [], trips: [] }, s.inv1))
       .rejects.toThrow(/لا تقبل التعديل/);
   });
@@ -556,7 +572,12 @@ describe("تدقيق محاسبي: الدورة المالية وحماية سل
 
   it("لا يمكن حذف فاتورة عليها سند صرف يدوي (حماية من فقد المصروف)", async () => {
     const s = await seedFullScenario(0);
-    await expect(repo.deleteInvoice(s.inv1)).rejects.toThrow(/لا يمكن حذف فاتورة ضريبية/);
+    await expect(repo.deleteInvoice(s.inv1)).rejects.toThrow(/سند دفع يدوي/);
+    // بعد حذف السند اليدوي تُحذف الفاتورة (الميزة غير مفعّلة ⇒ الحذف متاح)
+    const manual = table("payment_vouchers").find((x) => x.description === "غرامة وزن")!;
+    await repo.deletePayment(manual.id);
+    await expect(repo.deleteInvoice(s.inv1)).resolves.toBeUndefined();
+    expect(table("invoices").some((x) => x.id === s.inv1)).toBe(false);
   });
 
   it("أرقام المستندات متسلسلة وفريدة داخل كل دفتر", async () => {

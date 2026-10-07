@@ -282,6 +282,14 @@ async function count(
 // ---------------------------------------------------------------------------
 // إشعارات الدائن والمدين — لا تعديل للفواتير بعد إصدارها
 export async function saveCreditDebitNote(data: Record<string, any>): Promise<number> {
+  // إشعارات المدين/الدائن أداة تصحيح خاصة بالفاتورة الضريبية بالباركود: إن لم
+  // تكن الميزة مفعّلة فالفاتورة قابلة للتعديل والحذف، فلا تُستخدم الإشعارات.
+  const { hasFeature } = await import("./features");
+  if (!(await hasFeature("tax_invoice"))) {
+    throw new RuleError(
+      "إشعارات المدين والدائن متاحة فقط عند تفعيل الفاتورة الضريبية بالباركود. عدّل الفاتورة أو احذفها للتصحيح."
+    );
+  }
   if (data.note_type !== "credit" && data.note_type !== "debit") throw new RuleError("نوع الإشعار غير صالح.");
   const invoiceId = positiveId(data.invoice_id, "الفاتورة");
   const customerId = positiveId(data.customer_id, "العميل");
@@ -952,7 +960,13 @@ export async function listInvoicesRaw(): Promise<(Invoice & { customer_name: str
 
 export async function saveInvoice(data: Record<string, any>, invoiceId?: number | null): Promise<number> {
   if (invoiceId) {
-    throw new RuleError("الفاتورة الضريبية لا تقبل التعديل بعد إصدارها. أنشئ إشعاراً دائناً أو مديناً للتصحيح.");
+    // الفاتورة الضريبية بالباركود (زاتكا) غير قابلة للتعديل بعد الإصدار،
+    // والتصحيح يكون بإشعار مدين/دائن. أما إذا لم تكن الميزة مفعّلة لهذه الشركة
+    // فالفاتورة قابلة للتعديل بحرية (وهذا هو المقصود من طلب العميل).
+    const { hasFeature } = await import("./features");
+    if (await hasFeature("tax_invoice")) {
+      throw new RuleError("الفاتورة الضريبية لا تقبل التعديل بعد إصدارها. أنشئ إشعاراً دائناً أو مديناً للتصحيح.");
+    }
   }
   const date = safeIsoDate(data.date, "تاريخ الفاتورة");
   const customerId = positiveId(data.customer_id, "العميل");
@@ -962,9 +976,32 @@ export async function saveInvoice(data: Record<string, any>, invoiceId?: number 
   const containerNumber = txt(data.container_number ?? "", "رقم الحاوية");
 
   if (trips.length > 1000) throw new RuleError("عدد بنود النقل في الفاتورة أكبر من الحد المسموح.");
+
+  // خطوط الخدمات: الصنف قد يكون خط سير مخزَّناً داخله (الرياض ← الدمام)، فيكون
+  // هو المصدر الوحيد للمسار ويُفرض على النقلة. والخدمة العامة بلا خط تترك
+  // «من/إلى» يدويين. (نفس الفرض مطبَّق في الدالة الذرية على الخادم.)
+  const requestedItemIds = [...new Set(
+    trips
+      .map((t) => (t.item_id != null && t.item_id !== "" ? Number(t.item_id) : null))
+      .filter((x): x is number => x != null && Number.isFinite(x))
+  )];
+  const itemRoutes = new Map<number, { from_loc: string; to_loc: string }>();
+  if (requestedItemIds.length) {
+    const { data: itemRows } = await supabase
+      .from("items")
+      .select("id, from_loc, to_loc")
+      .in("id", requestedItemIds);
+    for (const row of itemRows ?? []) {
+      const from = String((row as Record<string, unknown>).from_loc ?? "").trim();
+      const to = String((row as Record<string, unknown>).to_loc ?? "").trim();
+      if (from && to) itemRoutes.set(Number(row.id), { from_loc: from, to_loc: to });
+    }
+  }
+
   for (const t of trips) {
-    t.from_loc = txt(t.from_loc ?? "", "مكان الانطلاق", 200);
-    t.to_loc = txt(t.to_loc ?? "", "مكان الوصول", 200);
+    const route = t.item_id != null && t.item_id !== "" ? itemRoutes.get(Number(t.item_id)) : undefined;
+    t.from_loc = route ? route.from_loc : txt(t.from_loc ?? "", "مكان الانطلاق", 200);
+    t.to_loc = route ? route.to_loc : txt(t.to_loc ?? "", "مكان الوصول", 200);
     ensureNotBlank(t.from_loc, "مكان الانطلاق");
     ensureNotBlank(t.to_loc, "مكان الوصول");
     t.notes = txt(t.notes ?? "", "ملاحظات النقلة", 2000);
@@ -972,6 +1009,10 @@ export async function saveInvoice(data: Record<string, any>, invoiceId?: number 
     else t.vehicle_id = null;
     if (t.driver_id != null && t.driver_id !== "") t.driver_id = positiveId(t.driver_id, "السائق");
     else t.driver_id = null;
+    // الخدمة/الصنف: تُحدَّد لكل نقلة (إلزامية في الواجهة، ويرد المتصفح على أي
+    // استدعاء قديم بخدمة الشركة الافتراضية قبل الإرسال للخادم).
+    if (t.item_id != null && t.item_id !== "") t.item_id = positiveId(t.item_id, "الصنف/الخدمة");
+    else t.item_id = null;
     if (!Array.isArray(t.expenses)) t.expenses = [];
     if (t.expenses.length > 1000) throw new RuleError("عدد مصروفات النقلة أكبر من الحد المسموح.");
     for (const e of t.expenses) {
@@ -1037,9 +1078,18 @@ export async function saveInvoice(data: Record<string, any>, invoiceId?: number 
     await ensureDateInOpenYear(date);
   }
 
+  // الخدمة الافتراضية: تُستخدم فقط للنقلات التي لم تُحدَّد لها خدمة (استدعاءات
+  // قديمة أو فواتير أُنشئت قبل ترحيلة الأصناف) حتى لا يتعطّل أي مسار قائم.
+  let fallbackItemId: number | null = null;
+  if (trips.some((t) => t.item_id == null)) {
+    const { defaultServiceItemId } = await import("./items");
+    fallbackItemId = await defaultServiceItemId();
+  }
+
   // حفظ ذرّي (رأس + نقلات + مصروفات + ترقيم مُقفَل) في معاملة واحدة
   const tripsPayload = trips.map((t) => ({
     id: t.id ? Number(t.id) : null,
+    item_id: t.item_id ?? fallbackItemId,
     vehicle_id: t.vehicle_id ?? null,
     driver_id: t.driver_id ?? null,
     from_loc: t.from_loc ?? "",
@@ -1050,6 +1100,9 @@ export async function saveInvoice(data: Record<string, any>, invoiceId?: number 
     container_numbers: t.container_numbers ?? [],
     notes: t.notes ?? "",
     expenses: (t.expenses ?? []).map((e: any) => ({
+      // المعرّف يجعل الخادم يُحدِّث المصروف في مكانه بدل حذفه وإعادة إنشائه،
+      // فتبقى سندات الصرف التلقائية المرتبطة به بأرقامها.
+      id: e.id ? Number(e.id) : null,
       expense_type: e.expense_type,
       qty: e.qty ?? 1,
       unit_amount: roundMoney(e.unit_amount ?? 0),
@@ -1102,8 +1155,49 @@ export async function saveInvoice(data: Record<string, any>, invoiceId?: number 
   return savedId as number;
 }
 
-export async function deleteInvoice(_invoiceId: number): Promise<void> {
-  throw new RuleError("لا يمكن حذف فاتورة ضريبية بعد إصدارها. استخدم إشعاراً دائناً أو مديناً للتصحيح.");
+export async function deleteInvoice(invoiceId: number): Promise<void> {
+  const id = positiveId(invoiceId, "الفاتورة");
+  // الفاتورة الضريبية بالباركود لا تُحذف بعد الإصدار — التصحيح بإشعار دائن/مدين.
+  const { hasFeature } = await import("./features");
+  if (await hasFeature("tax_invoice")) {
+    throw new RuleError("لا يمكن حذف فاتورة ضريبية بعد إصدارها. استخدم إشعاراً دائناً أو مديناً للتصحيح.");
+  }
+
+  const { data: inv } = await supabase.from("invoices").select("id, date").eq("id", id).maybeSingle();
+  if (!inv) throw new RuleError("الفاتورة غير موجودة.");
+  await ensureMovementEditable(inv.date);
+
+  // إشعارات مرتبطة بالفاتورة تمنع الحذف (مرجع صارم في قاعدة البيانات)
+  const { count: notesCount } = await supabase
+    .from("credit_debit_notes")
+    .select("id", { count: "exact", head: true })
+    .eq("invoice_id", id);
+  if ((notesCount ?? 0) > 0) {
+    throw new RuleError(
+      `لا يمكن حذف الفاتورة لوجود ${notesCount} إشعار مدين/دائن مرتبط بها. احذف الإشعارات من شاشة الإشعارات أولاً.`
+    );
+  }
+
+  // سندات الصرف اليدوية المرتبطة بنقلات الفاتورة تمنع الحذف (تُترك بلا مرجع
+  // عند حذف النقلة) — أما السندات التلقائية لمصروفات النقل فتُحذف تتابعياً.
+  const { data: tripRows } = await supabase.from("invoice_trips").select("id").eq("invoice_id", id);
+  const tripIds = (tripRows ?? []).map((t) => Number(t.id));
+  if (tripIds.length) {
+    const { count: manual } = await supabase
+      .from("payment_vouchers")
+      .select("id", { count: "exact", head: true })
+      .eq("voucher_type", "trip")
+      .is("source_expense_id", null)
+      .in("trip_id", tripIds);
+    if ((manual ?? 0) > 0) {
+      throw new RuleError(
+        `لا يمكن حذف الفاتورة لوجود ${manual} سند دفع يدوي مرتبط بنقلاتها. احذف السندات المرتبطة أولاً.`
+      );
+    }
+  }
+
+  const { error } = await supabase.from("invoices").delete().eq("id", id);
+  if (error) throw new RuleError(translateDbError(error.message));
 }
 
 async function ensureAccountExists(kind: string, accountId: number): Promise<void> {

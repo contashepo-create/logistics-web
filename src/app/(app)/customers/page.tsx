@@ -1,6 +1,7 @@
 "use client";
 
 import { useMemo, useState } from "react";
+import { useRouter } from "next/navigation";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { DataTable } from "@/components/DataTable";
 import { PageFrame, Spinner, ExportBar, Balance } from "@/components/ui";
@@ -15,6 +16,7 @@ import { matchesSearch } from "@/components/ui";
 
 export default function CustomersPage() {
   const qc = useQueryClient();
+  const router = useRouter();
   const [search, setSearch] = useState("");
   const [dialog, setDialog] = useState<{ mode: string; id?: number } | null>(null);
   const [statementId, setStatementId] = useState<number | null>(null);
@@ -71,12 +73,16 @@ export default function CustomersPage() {
           headers={headers}
           rows={filtered.rows}
           ids={filtered.ids}
-          extra={[{ key: "statement", label: "📄", title: "كشف حساب العميل" }]}
+          extra={[
+            { key: "statement", label: "📄", title: "كشف حساب العميل" },
+            { key: "full-report", label: "📊", title: "التقرير الشامل عن العميل" },
+          ]}
           onAction={(id, key) => {
             if (key === "view") setDialog({ mode: "view", id: Number(id) });
             else if (key === "edit") setDialog({ mode: "edit", id: Number(id) });
             else if (key === "delete") onDelete(Number(id));
             else if (key === "statement") setStatementId(Number(id));
+            else if (key === "full-report") router.push(`/reports/customers/${id}`);
           }}
         />
       )}

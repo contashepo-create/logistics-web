@@ -6,6 +6,7 @@ import { useQuery, useQueryClient, keepPreviousData } from "@tanstack/react-quer
 import { PageFrame, Spinner, ExportBar, TotalsBar, FilterRow, Select, Button } from "@/components/ui";
 import { DataTable } from "@/components/DataTable";
 import { listCreditDebitNotes, deleteCreditDebitNote } from "@/lib/repo";
+import { usesCreditDebitNotes, NOTES_REQUIRE_TAX_FEATURE_MESSAGE } from "@/lib/features";
 import { notify } from "@/components/toast";
 import { money, todayIso } from "@/lib/format";
 import { exportPage } from "@/lib/exportHelper";
@@ -23,6 +24,11 @@ export default function NotesPage() {
     queryKey: ["notes", dFrom, dTo, type],
     queryFn: () => listCreditDebitNotes(dFrom, dTo, type || null),
     placeholderData: keepPreviousData,
+  });
+  // عند إيقاف الباركود: الإشعارات القديمة تبقى معروضة ويمكن حذفها، لكن لا تُصدر جديدة
+  const { data: notesMode } = useQuery({
+    queryKey: ["feature-tax-invoice"],
+    queryFn: () => usesCreditDebitNotes(true),
   });
 
   const headers = ["رقم الإشعار", "النوع", "الفاتورة", "العميل", "التاريخ", "المبلغ قبل الضريبة", "الضريبة %", "الإجمالي", "السبب"];
@@ -69,7 +75,9 @@ export default function NotesPage() {
   return (
     <PageFrame
       title="إشعارات الدائن والمدين"
-      subtitle="تصحيحات الفواتير الصادرة — المدين يزيد المستحق على العميل، والدائن يخصمه"
+      subtitle={notesMode === false
+        ? "سجل الإشعارات القديمة للمراجعة — إصدار إشعارات جديدة متاح عند تفعيل الفاتورة الضريبية بالباركود"
+        : "تصحيحات الفواتير الصادرة — المدين يزيد المستحق على العميل، والدائن يخصمه"}
       toolbar={
         <FilterRow dFrom={dFrom} dTo={dTo} onFrom={setDFrom} onTo={setDTo} onRefresh={() => qc.invalidateQueries({ queryKey: ["notes"] })}>
           <div>
@@ -88,6 +96,15 @@ export default function NotesPage() {
         onPrint={() => exportPage({ title: "إشعارات الدائن والمدين", subtitle, headers, rows, summaryLines: summary, mode: "print" })}
       />}
     >
+      {notesMode === false && (
+        <div style={{
+          background: "var(--info-light, #eff6ff)", color: "var(--info-dark, #1e3a8a)",
+          border: "1px solid var(--info, #93c5fd)", borderRadius: 10,
+          padding: "10px 14px", marginBottom: 12, fontWeight: 600,
+        }}>
+          {NOTES_REQUIRE_TAX_FEATURE_MESSAGE} — الإشعارات القديمة تبقى معروضة أدناه ويمكن حذفها.
+        </div>
+      )}
       {isLoading ? <Spinner /> : (
         <>
           <DataTable

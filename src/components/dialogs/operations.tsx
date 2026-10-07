@@ -400,9 +400,12 @@ export async function customerInvoiceHtml(invoiceId: number): Promise<{ html: st
 
   // بنود العميل فقط: لا تمر أي تكلفة داخلية أو اسم مورد أو مصدر تمويل إلى القالب.
   const lines: InvoiceTemplateLine[] = [
+    // النقلة هي الخدمة/الصنف: يُعرض اسم الخدمة المخزَّن في الكتالوج (وهو غالباً
+    // «نقل الرياض ← الدمام») ويُدرج الخط وسياق النقلة في التفاصيل، مع بديل
+    // «خدمة نقل» للنقلات القديمة قبل ربط الأصناف.
     ...inv.trips.map((t) => toLine(
-      `خدمة نقل: ${t.from_loc || "—"} ← ${t.to_loc || "—"}`,
-      t.notes || "",
+      t.item_name || "خدمة نقل",
+      [`${t.from_loc || "—"} ← ${t.to_loc || "—"}`, t.notes || ""].filter(Boolean).join(" • "),
       Number(t.qty ?? 1),
       Number(t.unit_price || t.price) || 0,
       Number(t.price) || 0,

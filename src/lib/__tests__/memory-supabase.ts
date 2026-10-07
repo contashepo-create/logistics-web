@@ -39,7 +39,7 @@ const TENANT_TABLES = new Set([
   "invoices", "invoice_trips", "trip_expenses", "receipt_vouchers",
   "payment_vouchers", "payrolls", "advance_settlements", "year_snapshots", "activation_requests",
   "credit_debit_notes", "credit_note_trips", "company_features", "suppliers", "purchase_invoices", "purchase_items",
-  "employee_deductions", "deduction_settlements",
+  "employee_deductions", "deduction_settlements", "items",
 ]);
 
 // ---------------------------------------------------------------------------
@@ -335,6 +335,7 @@ const CASCADE_RULES: Record<string, { table: string; column: string; action: "ca
   ],
   employee_deductions: [{ table: "deduction_settlements", column: "employee_deduction_id", action: "cascade" }],
   credit_debit_notes: [{ table: "credit_note_trips", column: "credit_note_id", action: "cascade" }],
+  items: [{ table: "invoice_trips", column: "item_id", action: "set null" }],
   financial_years: [{ table: "year_snapshots", column: "year_id", action: "cascade" }],
 };
 
@@ -413,6 +414,25 @@ function rpcSaveInvoice(args: any): { data: any; error: any } {
   if (!table("customers").some((c) => c.id === args.p_customer_id && c.company_id === cid)) {
     return err("العميل المحدد غير موجود.");
   }
+  for (const trip of trips) {
+    const itemId = trip.item_id == null || trip.item_id === "" ? null : Number(trip.item_id);
+    if (itemId == null) return err("اختر الصنف/الخدمة لكل نقلة.");
+    const item = table("items").find((i) => i.id === itemId && i.company_id === cid);
+    if (!item) return err("الصنف/الخدمة المحدد غير موجود.");
+    trip.item_id = itemId;
+
+    // خط الصنف المخزَّن (من ← إلى) يفرض مساره على النقلة
+    const itemFrom = String(item.from_loc ?? "").trim();
+    const itemTo = String(item.to_loc ?? "").trim();
+    if (itemFrom && itemTo) {
+      trip.from_loc = itemFrom;
+      trip.to_loc = itemTo;
+    } else {
+      trip.from_loc = String(trip.from_loc ?? "").trim();
+      trip.to_loc = String(trip.to_loc ?? "").trim();
+      if (!trip.from_loc || !trip.to_loc) return err("أكمل أماكن الانطلاق والوصول لكل نقلة.");
+    }
+  }
 
   // تحقق مسبق حتى تحاكي الأخطاء ذرّية RPC الحقيقية ولا يبقى رأس فاتورة جزئي.
   const seenContainers = new Set<string>();
@@ -455,6 +475,10 @@ function rpcSaveInvoice(args: any): { data: any; error: any } {
     if (table("payment_vouchers").some((v) => v.voucher_type === "trip" && v.trip_id === t.id && v.source_expense_id == null)) {
       return err("لا يمكن حذف نقلة مرتبطة بسندات دفع يدوية. احذف السندات المرتبطة أولاً.");
     }
+    // نقلة مرتجعة (إشعار دائن): الحذف ممنوع لأن ربط credit_note_trips صارم
+    if (table("credit_note_trips").some((r) => r.trip_id === t.id)) {
+      return err("لا يمكن حذف نقلة صدر لها إشعار دائن (مرتجع). احذف الإشعار أولاً.");
+    }
   }
   for (const t of table("invoice_trips").filter((t) => t.invoice_id === invoiceId && !kept.has(t.id))) {
     for (const v of table("payment_vouchers").filter((v) => v.trip_id === t.id && v.source_expense_id != null)) {
@@ -473,6 +497,7 @@ function rpcSaveInvoice(args: any): { data: any; error: any } {
     let tripId: number;
     const base = {
       vehicle_id: t.vehicle_id ?? null, driver_id: t.driver_id ?? null,
+      item_id: t.item_id ?? null,
       from_loc: t.from_loc ?? "", to_loc: t.to_loc ?? "",
       qty, unit_price: unit, price: line,
       container_numbers: t.container_numbers ?? [], notes: t.notes ?? "",
@@ -482,18 +507,14 @@ function rpcSaveInvoice(args: any): { data: any; error: any } {
       const tr = table("invoice_trips").find((x) => x.id === tripId && x.invoice_id === invoiceId);
       if (!tr) return err("النقلة غير موجودة ضمن هذه الفاتورة.");
       Object.assign(tr, base);
-      for (const e of table("trip_expenses").filter((e) => e.trip_id === tripId)) {
-        // السندات التلقائية تتبع مصروفها (حذف تتابعي)
-        for (const v of table("payment_vouchers").filter((v) => v.source_expense_id === e.id)) {
-          table("payment_vouchers").splice(table("payment_vouchers").indexOf(v), 1);
-        }
-        table("trip_expenses").splice(table("trip_expenses").indexOf(e), 1);
-      }
     } else {
       tripId = nextId("invoice_trips");
       table("invoice_trips").push({ id: tripId, company_id: cid, invoice_id: invoiceId, ...base });
     }
 
+    // مصروفات النقلة: القادم بمعرّف يُحدَّث في مكانه (فيبقى سنده التلقائي برقمه)،
+    // وغيره يُنشأ، وما أُزيل من القائمة يُحذف مع سنده التلقائي (حذف تتابعي).
+    const keptExpenses: number[] = [];
     for (const e of t.expenses ?? []) {
       const eqty = Number(e.qty ?? 1) || 1;
       const eunit = Number(e.unit_amount ?? 0) > 0 ? Number(e.unit_amount) : Number(e.amount ?? 0) / eqty;
@@ -510,25 +531,57 @@ function rpcSaveInvoice(args: any): { data: any; error: any } {
       }
       if (source === "driver" && !base.driver_id) return err("حدّد السائق في النقلة قبل تسجيل مصروف من عهدته.");
 
-      const expId = nextId("trip_expenses");
-      table("trip_expenses").push({
-        id: expId, company_id: cid, trip_id: tripId, expense_type: e.expense_type ?? "other",
+      const expenseRow = {
+        expense_type: e.expense_type ?? "other",
         qty: eqty, unit_amount: eunit, amount, source,
         account_kind: source === "cash" ? e.account_kind : null,
         account_id: source === "cash" ? Number(e.account_id) : null,
         supplier_name: e.supplier_name ?? "", notes: e.notes ?? "",
-      });
+      };
+      let expId: number;
+      const existingExpense = e.id != null
+        ? table("trip_expenses").find((r) => r.id === Number(e.id) && r.trip_id === tripId)
+        : undefined;
+      if (e.id != null && !existingExpense) return err("مصروف النقلة غير موجود ضمن هذه النقلة.");
+      if (existingExpense) {
+        expId = existingExpense.id;
+        Object.assign(existingExpense, expenseRow);
+      } else {
+        expId = nextId("trip_expenses");
+        table("trip_expenses").push({ id: expId, company_id: cid, trip_id: tripId, ...expenseRow });
+      }
+      keptExpenses.push(expId);
 
       if (source === "cash") {
-        const pnum = table("payment_vouchers").filter((r) => r.company_id === cid).reduce((m, r) => Math.max(m, r.number ?? 0), 0) + 1;
-        table("payment_vouchers").push({
-          id: nextId("payment_vouchers"), company_id: cid, number: pnum, date: args.p_date,
-          account_kind: e.account_kind, account_id: Number(e.account_id), voucher_type: "trip",
-          trip_id: tripId, employee_id: base.driver_id, vehicle_id: base.vehicle_id,
-          amount, description: `مصروف نقلة (تلقائي): ${e.notes ?? e.expense_type ?? ""}`,
-          source_expense_id: expId,
-        });
+        const linked = table("payment_vouchers").find((r) => r.source_expense_id === expId);
+        if (linked) {
+          Object.assign(linked, {
+            date: args.p_date, account_kind: e.account_kind, account_id: Number(e.account_id),
+            voucher_type: "trip", trip_id: tripId, employee_id: base.driver_id, vehicle_id: base.vehicle_id,
+            amount, description: `مصروف نقلة (تلقائي): ${e.notes ?? e.expense_type ?? ""}`,
+          });
+        } else {
+          const pnum = table("payment_vouchers").filter((r) => r.company_id === cid).reduce((m, r) => Math.max(m, r.number ?? 0), 0) + 1;
+          table("payment_vouchers").push({
+            id: nextId("payment_vouchers"), company_id: cid, number: pnum, date: args.p_date,
+            account_kind: e.account_kind, account_id: Number(e.account_id), voucher_type: "trip",
+            trip_id: tripId, employee_id: base.driver_id, vehicle_id: base.vehicle_id,
+            amount, description: `مصروف نقلة (تلقائي): ${e.notes ?? e.expense_type ?? ""}`,
+            source_expense_id: expId,
+          });
+        }
+      } else {
+        // لم يعد نقدياً: يُزال السند التلقائي القديم إن وُجد
+        for (const v of table("payment_vouchers").filter((r) => r.source_expense_id === expId)) {
+          table("payment_vouchers").splice(table("payment_vouchers").indexOf(v), 1);
+        }
       }
+    }
+    for (const stale of table("trip_expenses").filter((r) => r.trip_id === tripId && !keptExpenses.includes(r.id))) {
+      for (const v of table("payment_vouchers").filter((r) => r.source_expense_id === stale.id)) {
+        table("payment_vouchers").splice(table("payment_vouchers").indexOf(v), 1);
+      }
+      table("trip_expenses").splice(table("trip_expenses").indexOf(stale), 1);
     }
   }
   return { data: invoiceId, error: null };
@@ -702,6 +755,71 @@ function rpcDeletePurchaseV14(args: any): { data: any; error: any } {
   return { data: null, error: null };
 }
 
+// محاكاة save_item_v26: إنشاء/تعديل صنف أو خدمة مع منع تكرار الاسم داخل الشركة.
+function rpcSaveItemV26(args: any): { data: any; error: any } {
+  const cid = companyOfUser();
+  if (!cid) return err("لا توجد شركة مرتبطة بحسابك.");
+  const name = String(args.p_name ?? "").trim();
+  if (!name) return err("يجب إدخال اسم الصنف/الخدمة.");
+  if (name.length > 160) return err("اسم الصنف/الخدمة أطول من الحد المسموح.");
+  const itemType = ["service", "product"].includes(String(args.p_item_type)) ? String(args.p_item_type) : "service";
+  const price = Number(args.p_default_price ?? 0) || 0;
+  if (price < 0) return err("السعر الافتراضي لا يمكن أن يكون سالباً.");
+  if (price > 999999999999) return err("السعر الافتراضي خارج النطاق المسموح.");
+  const unit = String(args.p_unit ?? "");
+  if (unit.length > 40) return err("وحدة الصنف أطول من الحد المسموح (40 حرفاً).");
+  const description = String(args.p_description ?? "");
+  if (description.length > 1000) return err("وصف الصنف أطول من الحد المسموح (1000 حرف).");
+  const notes = String(args.p_notes ?? "");
+  if (notes.length > 1000) return err("ملاحظات الصنف أطول من الحد المسموح (1000 حرف).");
+  const fromLoc = String(args.p_from_loc ?? "").trim();
+  const toLoc = String(args.p_to_loc ?? "").trim();
+  if (fromLoc.length > 200 || toLoc.length > 200) {
+    return err("مكان الانطلاق أو الوصول للخط أطول من الحد المسموح (200 حرف).");
+  }
+  if ((fromLoc === "") !== (toLoc === "")) {
+    return err("أكمل مكان الانطلاق والوصول للخط، أو اتركهما فارغين لخدمة عامة بلا خط.");
+  }
+  const duplicate = table("items").some(
+    (i) => i.company_id === cid && String(i.name ?? "").trim().toLowerCase() === name.toLowerCase()
+      && (args.p_item_id == null || i.id !== Number(args.p_item_id))
+  );
+  if (duplicate) return err("يوجد صنف/خدمة بنفس الاسم.");
+  if (args.p_item_id != null) {
+    const existing = table("items").find((i) => i.id === Number(args.p_item_id) && i.company_id === cid);
+    if (!existing) return err("الصنف/الخدمة غير موجود.");
+    // تغيير خط خدمة مستخدمة في نقلات سابقة ممنوع (حماية مسارات الفواتير القديمة)
+    const routeChanged =
+      String(existing.from_loc ?? "").trim() !== fromLoc || String(existing.to_loc ?? "").trim() !== toLoc;
+    if (routeChanged && table("invoice_trips").some((t) => t.item_id === existing.id && t.company_id === cid)) {
+      return err("لا يمكن تغيير خط خدمة مستخدمة في نقلات سابقة (سيُغيّر مسارات فواتير قديمة). أنشئ خدمة جديدة بالخط المطلوب وعطّل القديمة.");
+    }
+    Object.assign(existing, {
+      name, item_type: itemType, unit, default_price: price, description, notes,
+      from_loc: fromLoc, to_loc: toLoc,
+    });
+    return { data: existing.id, error: null };
+  }
+  // ترقيم الصنف: أكبر رقم مستخدم + 1 مع حلقة تأكيد ضد تصادم الأكواد
+  // (مطابق لـ save_item_v26 في قاعدة البيانات)
+  const numbered = table("items")
+    .filter((i) => i.company_id === cid && /^ITM-\d+$/.test(String(i.code ?? "")))
+    .map((i) => Number(String(i.code).replace(/\D/g, "")) || 0);
+  let seq = (numbered.length ? Math.max(...numbered) : 0) + 1;
+  let code = `ITM-${String(seq).padStart(4, "0")}`;
+  while (table("items").some((i) => i.company_id === cid && i.code === code)) {
+    seq += 1;
+    code = `ITM-${String(seq).padStart(4, "0")}`;
+  }
+  const id = nextId("items");
+  table("items").push({
+    id, company_id: cid, code, name, item_type: itemType, unit,
+    default_price: price, description, notes, from_loc: fromLoc, to_loc: toLoc,
+    is_active: true,
+  });
+  return { data: id, error: null };
+}
+
 const rpc = async (fn: string, args?: any) => {
   if (fn === "register_company") {
     throw new Error("rpc register_company not implemented in memory mock");
@@ -709,6 +827,7 @@ const rpc = async (fn: string, args?: any) => {
   if (fn === "save_invoice") return rpcSaveInvoice(args);
   if (fn === "save_payroll") return rpcSavePayroll(args);
   if (fn === "save_credit_note_for_trips_v16") return rpcSaveCreditNoteTripsV16(args);
+  if (fn === "save_item_v26") return rpcSaveItemV26(args);
   if (fn === "save_purchase_invoice_v14") return rpcSavePurchaseV14(args);
   if (fn === "delete_purchase_invoice_v14") return rpcDeletePurchaseV14(args);
   return { data: null, error: { message: `rpc ${fn} not mocked` } };

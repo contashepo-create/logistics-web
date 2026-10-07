@@ -55,6 +55,24 @@ export function isCompanyOwner(profile: { role?: string } | null | undefined): b
   return Boolean(profile) && profile?.role !== "additional";
 }
 
+/**
+ * هل تُستخدم إشعارات المدين/الدائن في هذه الشركة؟
+ * القاعدة: الإشعارات بديل التعديل والحذف، ولا معنى لها إلا مع الفاتورة الضريبية
+ * بالباركود؛ فعند إيقاف الميزة تُمنع الإشعارات (وتبقى القديمة للعرض) ويُتاح
+ * للمستخدم تعديل الفاتورة أو حذفها.
+ */
+export async function usesCreditDebitNotes(force = false): Promise<boolean> {
+  return hasFeature("tax_invoice", force);
+}
+
+/** رسالة موحدة تُعرض للمستخدم عند تعطّل مسار الإشعارات. */
+export const NOTES_REQUIRE_TAX_FEATURE_MESSAGE =
+  "إشعارات المدين والدائن متاحة فقط عند تفعيل الفاتورة الضريبية بالباركود — التصحيح حالياً يكون بتعديل الفاتورة أو حذفها.";
+
+/** رسالة موحدة تُعرض عند تعطّل تعديل/حذف الفاتورة. */
+export const INVOICE_LOCKED_MESSAGE =
+  "الفاتورة الضريبية بالباركود مفعّلة لهذه الشركة: لا يُسمح بتعديل الفاتورة أو حذفها بعد الإصدار، والتصحيح يكون بإشعار مدين أو دائن.";
+
 /** هل يلزم عرض تحذير عدم مطابقة زاتكا لهذا المستخدم؟ */
 export function shouldWarnTaxInvoice(input: {
   featureEnabled: boolean;

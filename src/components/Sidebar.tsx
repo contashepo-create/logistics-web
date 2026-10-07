@@ -36,6 +36,7 @@ const NAV_SECTIONS: NavSection[] = [
     accent: "#2563eb",
     items: [
       { label: "العملاء", href: "/customers", icon: "👥" },
+      { label: "الخدمات والأصناف", href: "/items", icon: "🧰" },
       { label: "الموردون", href: "/suppliers", icon: "🏭" },
       { label: "الموظفون والسائقون", href: "/employees", icon: "🧑‍✈️" },
       { label: "السيارات", href: "/vehicles", icon: "🚚" },
@@ -84,6 +85,8 @@ const NAV_SECTIONS: NavSection[] = [
     items: [
       { label: "أرباح وخسائر كل رحلة", href: "/reports/trips", icon: "📈" },
       { label: "كشف حساب عميل", href: "/reports/customer-statement", icon: "📄" },
+      { label: "التقرير الشامل للعميل", href: "/reports/customers", icon: "🧑‍💼" },
+      { label: "تقرير الخدمات والأصناف", href: "/reports/items", icon: "🚏" },
       { label: "كشف حساب مورّد", href: "/reports/supplier-statement", icon: "📑" },
       { label: "أعمار الديون", href: "/reports/aging", icon: "⏳" },
       { label: "كشف حساب موظف/سائق", href: "/reports/employee-statement", icon: "🧾" },
