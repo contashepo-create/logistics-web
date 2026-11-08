@@ -3,7 +3,7 @@
 
 import { buildReportHtml, buildTableHtml, exportPdfHtml, printHtml } from "./exporter";
 import { docOptions, exportPage, printMeta, type ExportMode } from "./exportHelper";
-import { getPrintSettings, printCss } from "./print";
+import { getPrintSettings, pdfDocOptions, printCss } from "./print";
 import { companyInfo } from "./repo";
 import { money } from "./format";
 import { invoiceNumberLabel } from "./calc";
@@ -340,8 +340,12 @@ export async function exportCustomerReportExcel(rep: CustomerFullReport): Promis
 }
 
 export async function exportCustomerReportPdf(rep: CustomerFullReport): Promise<void> {
-  const html = await customerReportHtml(rep);
-  await exportPdfHtml(html, `${safeName(rep)}.pdf`);
+  const [html, ps, meta] = await Promise.all([customerReportHtml(rep), getPrintSettings(), printMeta()]);
+  await exportPdfHtml(html, `${safeName(rep)}.pdf`, pdfDocOptions(ps, {
+    title: `التقرير الشامل عن العميل - ${rep.customer?.name ?? ""}`,
+    printedBy: meta.printedBy,
+    printedAt: meta.printedAt,
+  }));
 }
 
 export async function printCustomerReport(rep: CustomerFullReport): Promise<void> {

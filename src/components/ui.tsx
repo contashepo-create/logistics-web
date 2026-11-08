@@ -276,6 +276,11 @@ export function FilterRow({
       </div>
       {children}
       <Button variant="primary" onClick={onRefresh}>🔄 عرض</Button>
+      {!!dFrom && !!dTo && dFrom > dTo && (
+        <div style={{ color: "var(--danger)", fontSize: 12.5, alignSelf: "center", fontWeight: 600 }}>
+          ⚠️ تاريخ البداية بعد تاريخ النهاية — لن تظهر أي حركة
+        </div>
+      )}
     </div>
   );
 }

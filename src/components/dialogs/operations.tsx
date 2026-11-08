@@ -512,6 +512,14 @@ export async function exportCustomerInvoicePdf(invoiceId: number): Promise<void>
   const res = await customerInvoiceHtml(invoiceId);
   if (!res) return notify("الفاتورة غير موجودة.", "error");
   showTaxInvoiceWarning(res.warnTaxInvoice);
-  const { exportPdfHtml } = await import("@/lib/exporter");
-  await exportPdfHtml(res.html, `فاتورة-${res.number}.pdf`);
+  const [{ exportPdfHtml }, { pdfDocOptions }] = await Promise.all([
+    import("@/lib/exporter"),
+    import("@/lib/print"),
+  ]);
+  // نفس ورقة/هوامش/ألوان قالب الفاتورة المختار حتى يطابق ملف PDF معاينة الطباعة.
+  await exportPdfHtml(
+    res.html,
+    `فاتورة-${res.number}.pdf`,
+    pdfDocOptions(res.settings, { title: `فاتورة ${res.number}` })
+  );
 }

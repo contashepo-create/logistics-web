@@ -1,6 +1,8 @@
 // اختبارات محرك التصدير/الطباعة (الدوال الخالصة): تعقيم XSS وبناء HTML.
 import { describe, it, expect, vi } from "vitest";
-import { esc, companyHeaderHtml, buildTableHtml, buildReportHtml, openPrintPreview } from "@/lib/exporter";
+import {
+  esc, companyHeaderHtml, buildTableHtml, buildReportHtml, openPrintPreview, isNumericCell,
+} from "@/lib/exporter";
 
 describe("esc — تعقيم XSS", () => {
   it("يعقّم الرموز الخطرة", () => {
@@ -59,6 +61,30 @@ describe("buildTableHtml", () => {
     const html = buildTableHtml(["a"], [["v"]]);
     expect(html).toContain("align='right'");
   });
+
+  it("يضع الرأس في thead كي يتكرر في كل صفحة مطبوعة", () => {
+    const html = buildTableHtml(["البيان", "المبلغ"], [["نقل", "1,150.00"]]);
+    expect(html).toContain("<thead><tr>");
+    expect(html).toContain("</thead><tbody>");
+    expect(html).toContain("<th align='center'");
+  });
+
+  it("يميّز الأعمدة الرقمية ويحاذيها وسطاً بأرقام متساوية العرض", () => {
+    const html = buildTableHtml(["البيان", "المبلغ"], [["نقل", "1,150.00"], ["تحصيل", "٠٠٠"]]);
+    expect(html).toContain("class='doc-cell-num'");
+    expect(html).toContain("class='doc-cell-text'");
+    // عمود النص يميناً وعمود المبلغ وسطاً
+    expect(html).toContain("align='right' class='doc-cell-text'");
+    expect(html).toContain("align='center' class='doc-cell-num'");
+  });
+
+  it("لا يعتبر النص الفارغ أو الحر رقمياً", () => {
+    expect(isNumericCell("1,150.00")).toBe(true);
+    expect(isNumericCell("2026-01-05")).toBe(true);
+    expect(isNumericCell("١٥٠٠")).toBe(true);
+    expect(isNumericCell("")).toBe(false);
+    expect(isNumericCell("نقل معدات")).toBe(false);
+  });
 });
 
 describe("معاينة الطباعة الفورية", () => {
@@ -113,6 +139,17 @@ describe("buildReportHtml", () => {
     expect(html).toContain("المدير المالي");
     expect(html).not.toContain("عدد السجلات");
   });
+  it("يعرض الملخص كبطاقات قيم احترافية بدل جدول صغير", () => {
+    const html = buildReportHtml({
+      info, title: "كشف", headers: ["البيان"], rows: [["x"]],
+      summaryLines: [["الرصيد الافتتاحي", "1,000.00"], ["الرصيد الحالي", "2,500.00"]],
+    });
+    expect(html).toContain("class='doc-summary'");
+    expect(html).toContain("doc-summary-item");
+    expect(html).toContain("<span class='k'>الرصيد الافتتاحي</span>");
+    expect(html).toContain("<span class='v'>2,500.00</span>");
+  });
+
   it("يتجاهل الجدول والملخص عند غيابهما", () => {
     const html = buildReportHtml({ info, title: "ت" });
     expect(html).not.toContain("<table");

@@ -9,7 +9,7 @@ import type { CustomerStatementFull } from "@/lib/calc";
 import { customerStatementHtml } from "@/lib/statementDoc";
 import { getCustomer, getAccount, companyInfo } from "@/lib/repo";
 import { buildReportHtml, exportExcel, exportPdfHtml, printHtml } from "@/lib/exporter";
-import { getPrintSettings, printCss } from "@/lib/print";
+import { getPrintSettings, pdfDocOptions, printCss } from "@/lib/print";
 import { docOptions, printMeta } from "@/lib/exportHelper";
 
 function yearStart(): string {
@@ -51,8 +51,12 @@ export function CustomerStatementDialog({ customerId, onClose }: {
       await exportExcel({ info, title, headers, rows: textRows, summaryLines: summary, defaultName: `${title}.xlsx` });
       return;
     }
-    const html = customerStatementHtml({ info, ps, st });
-    if (mode === "pdf") await exportPdfHtml(html, `${title}.pdf`);
+    const html = customerStatementHtml({ info, ps, st, printedBy: meta.printedBy, printedAt: meta.printedAt });
+    if (mode === "pdf") {
+      await exportPdfHtml(html, `${title}.pdf`, pdfDocOptions(ps, {
+        title, printedBy: meta.printedBy, printedAt: meta.printedAt,
+      }));
+    }
     else printHtml(html, title, { css: printCss(ps), watermark: ps.watermark });
   };
 
@@ -166,8 +170,12 @@ export function AccountStatementDialog({ kind, accountId, onClose }: {
     if (mode === "excel") {
       await exportExcel({ info, title, headers, rows, summaryLines: summary, defaultName: `${title}.xlsx` });
     } else {
-      const html = buildReportHtml({ info, title, subtitle: `${owner} | الفترة: من ${dFrom} إلى ${dTo}`, headers, rows, summaryLines: summary, centerFrom: 1, doc: docOptions(ps, meta.printedBy, meta.printedAt) });
-      if (mode === "pdf") await exportPdfHtml(html, `${title}.pdf`);
+      const html = buildReportHtml({ info, title, subtitle: `${owner} | الفترة: من ${dFrom} إلى ${dTo}`, headers, rows, summaryLines: summary, doc: docOptions(ps, meta.printedBy, meta.printedAt) });
+      if (mode === "pdf") {
+        await exportPdfHtml(html, `${title}.pdf`, pdfDocOptions(ps, {
+          title, printedBy: meta.printedBy, printedAt: meta.printedAt,
+        }));
+      }
       else printHtml(html, title, { css: printCss(ps), watermark: ps.watermark });
     }
   };

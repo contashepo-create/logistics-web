@@ -1,7 +1,7 @@
 import { companyInfo } from "./repo";
 import { getProfile } from "./auth";
 import { buildReportHtml, exportExcel, exportPdfHtml, printHtml, type DocOptions } from "./exporter";
-import { getPrintSettings, printCss, type PrintSettings } from "./print";
+import { getPrintSettings, pdfDocOptions, printCss, type PrintSettings } from "./print";
 
 export type ExportMode = "excel" | "pdf" | "print";
 
@@ -104,14 +104,30 @@ export async function exportPage(opts: {
   rows: (string | number)[][];
   summaryLines?: [string, string | number][];
   mode: ExportMode;
+  /** محاذاة يدوية بديلة (افتراضياً تُستنتج من نوع الأعمدة). */
+  centerFrom?: number | null;
+  footerNote?: string;
 }): Promise<void> {
   const [info, ps, meta] = await Promise.all([companyInfo(), getPrintSettings(), printMeta()]);
-  const { title, subtitle = "", headers, rows, summaryLines, mode } = opts;
+  const { title, subtitle = "", headers, rows, summaryLines, mode, centerFrom, footerNote } = opts;
   if (mode === "excel") {
     await exportExcel({ info, title, headers, rows, summaryLines, defaultName: `${title}.xlsx` });
     return;
   }
-  const html = buildReportHtml({ info, title, subtitle, headers, rows, summaryLines, centerFrom: 1, doc: docOptions(ps, meta.printedBy, meta.printedAt) });
-  if (mode === "pdf") await exportPdfHtml(html, `${title}.pdf`);
-  else printHtml(html, title, { css: printCss(ps), watermark: ps.watermark });
+  const html = buildReportHtml({
+    info, title, subtitle, headers, rows, summaryLines,
+    centerFrom,
+    footerNote,
+    doc: docOptions(ps, meta.printedBy, meta.printedAt),
+  });
+  if (mode === "pdf") {
+    await exportPdfHtml(html, `${title}.pdf`, pdfDocOptions(ps, {
+      title,
+      printedBy: meta.printedBy,
+      printedAt: meta.printedAt,
+      footerText: ps.footer_text || info.company_vat_note || "",
+    }));
+    return;
+  }
+  printHtml(html, title, { css: printCss(ps), watermark: ps.watermark });
 }

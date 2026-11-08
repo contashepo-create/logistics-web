@@ -232,13 +232,13 @@ export default function CustomerFullReportPage() {
                 <tbody>
                   {rep.statement.rows.map((r, i) => (
                     <tr key={i}>
-                      <td>{r.date}</td>
+                      <td className="num">{r.date}</td>
                       <td>{r.doc}</td>
-                      <td>{r.number != null ? r.number : "—"}</td>
-                      <td>{r.desc}{r.detail ? ` — ${r.detail}` : ""}</td>
-                      <td>{r.debit ? money(r.debit) : ""}</td>
-                      <td>{r.credit ? money(r.credit) : ""}</td>
-                      <td>{r.balance != null ? money(r.balance) : "—"}</td>
+                      <td className="num">{r.number != null ? r.number : "—"}</td>
+                      <td className="data-cell-wrap">{r.desc}{r.detail ? ` — ${r.detail}` : ""}</td>
+                      <td className="num">{r.debit ? money(r.debit) : "—"}</td>
+                      <td className="num">{r.credit ? money(r.credit) : "—"}</td>
+                      <td className="num">{r.balance != null ? money(r.balance) : "—"}</td>
                     </tr>
                   ))}
                   {!rep.statement.rows.length && <tr><td colSpan={7} style={{ color: "var(--muted)" }}>لا توجد حركات مطابقة للفلاتر.</td></tr>}
@@ -278,14 +278,14 @@ export default function CustomerFullReportPage() {
                       <td>
                         <button className="btn btn-sm" onClick={() => router.push(`/invoices/${v.id}`)}>{invoiceNumberLabel(v.number)}</button>
                       </td>
-                      <td>{v.date}</td>
-                      <td>{v.trips_count}</td>
-                      <td>{v.legs.length ? v.legs.join(" ، ") : "—"}</td>
-                      <td>{money(v.subtotal)}</td>
-                      <td>{money(v.vat_amount)}</td>
-                      <td>{money(v.total)}</td>
-                      <td>{money(v.paid)}</td>
-                      <td>{money(v.remaining)}</td>
+                      <td className="num">{v.date}</td>
+                      <td className="num">{v.trips_count}</td>
+                      <td className="data-cell-wrap">{v.legs.length ? v.legs.join(" ، ") : "—"}</td>
+                      <td className="num">{money(v.subtotal)}</td>
+                      <td className="num">{money(v.vat_amount)}</td>
+                      <td className="num">{money(v.total)}</td>
+                      <td className="num">{money(v.paid)}</td>
+                      <td className="num">{money(v.remaining)}</td>
                       <td>{STATUS_LABEL[v.status] ?? v.status}{v.in_range ? "" : " (خارج الفترة)"}</td>
                     </tr>
                   ))}
@@ -332,13 +332,13 @@ export default function CustomerFullReportPage() {
                   {rep.trips.map((t) => (
                     <tr key={t.trip_id}>
                       <td>{t.invoice_label}</td>
-                      <td>{t.date}</td>
-                      <td>{t.item_name}</td>
+                      <td className="num">{t.date}</td>
+                      <td className="data-cell-wrap">{t.item_name}</td>
                       <td>{t.from_loc || "—"}</td>
                       <td>{t.to_loc || "—"}</td>
-                      <td>{t.qty}</td>
-                      <td>{money(t.unit_price)}</td>
-                      <td>{money(t.amount)}</td>
+                      <td className="num">{t.qty}</td>
+                      <td className="num">{money(t.unit_price)}</td>
+                      <td className="num">{money(t.amount)}</td>
                       <td>{t.containers.length ? t.containers.join("، ") : "—"}</td>
                       <td>{t.vehicle_name || "—"}</td>
                       <td>{t.driver_name || "—"}</td>

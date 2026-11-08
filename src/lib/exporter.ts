@@ -42,29 +42,66 @@ export function companyHeaderHtml(info: Record<string, string>, o: DocOptions = 
   return parts.join("");
 }
 
+const ARABIC_DIGITS = "٠١٢٣٤٥٦٧٨٩";
+const PERSIAN_DIGITS = "۰۱۲۳۴۵۶۷۸۹";
+
+/** توحيد الأرقام العربية/الفارسية إلى لاتينية لمقارنة نوع الخلية فقط. */
+function asciiDigits(value: unknown): string {
+  return String(value ?? "")
+    .replace(/[٠-٩]/g, (d) => String(ARABIC_DIGITS.indexOf(d)))
+    .replace(/[۰-۹]/g, (d) => String(PERSIAN_DIGITS.indexOf(d)))
+    .trim();
+}
+
+/** هل الخلية رقمية (مبلغ/تاريخ/نسبة)؟ تُستخدم لمحاذاة الأعمدة تلقائياً. */
+export function isNumericCell(value: unknown): boolean {
+  const s = asciiDigits(value);
+  if (!s) return false;
+  return (
+    /^-?[\d,]+(\.\d+)?\s*%?$/.test(s) ||
+    /^\d{4}[-/]\d{1,2}[-/]\d{1,2}$/.test(s) ||
+    /^\d{1,2}[-/]\d{1,2}[-/]\d{2,4}$/.test(s)
+  );
+}
+
+/**
+ * جدول مستند احترافي: رأس حقيقي داخل <thead> (يتكرر في كل صفحة مطبوعة/PDF)،
+ * ومحاذاة ذكية لكل عمود (الأرقام والتواريخ وسطاً وبأرقام متساوية العرض،
+ * والنصوص يميناً وتلتف بدل تمدد الصف خارج الورقة).
+ * `centerFrom` يظل مدعوماً للتوافق مع النداءات القديمة.
+ */
 export function buildTableHtml(
   headers: string[],
   rows: (string | number)[][],
   centerFrom?: number | null
 ): string {
+  const numericCol = headers.map((_, i) => {
+    const sample = rows.slice(0, 40).map((r) => r[i]).filter((v) => String(v ?? "").trim() !== "");
+    return sample.length > 0 && sample.every((v) => isNumericCell(v));
+  });
+  const alignOf = (i: number): "right" | "center" => {
+    if (centerFrom != null && i >= centerFrom) return "center";
+    return numericCol[i] ? "center" : "right";
+  };
+  const cellClass = (i: number): string => (numericCol[i] ? "doc-cell-num" : "doc-cell-text");
+
   const out: string[] = [
-    "<table dir='rtl' width='100%' border='0.5' cellspacing='0' cellpadding='4' style='font-size:10pt;border-collapse:collapse'>",
-    "<tr bgcolor='#1f4e79'>",
+    "<table class='doc-table' dir='rtl' width='100%' cellspacing='0' cellpadding='0' style='border-collapse:collapse'>",
+    "<thead><tr>",
   ];
-  for (const h of headers) {
-    out.push(`<td align='center'><b><font color='white'>${esc(h)}</font></b></td>`);
-  }
-  out.push("</tr>");
-  rows.forEach((row, i) => {
-    const bg = i % 2 ? "#f2f6fa" : "white";
-    out.push(`<tr bgcolor='${bg}'>`);
-    row.forEach((cell, c) => {
-      const align = centerFrom != null && c >= centerFrom ? "center" : "right";
-      out.push(`<td align='${align}'>${esc(cell)}</td>`);
+  headers.forEach((h, i) => {
+    out.push(`<th align='center' class='${numericCol[i] ? "doc-cell-num" : "doc-cell-text"}'>${esc(h)}</th>`);
+  });
+  out.push("</tr></thead><tbody>");
+  rows.forEach((row) => {
+    out.push("<tr>");
+    headers.forEach((_, c) => {
+      const value = row[c];
+      out.push(`<td align='${alignOf(c)}' class='${cellClass(c)}'>${esc(value)}</td>`);
     });
     out.push("</tr>");
   });
-  out.push("</table>");
+  out.push("</tbody></table>");
   return out.join("");
 }
 
@@ -83,7 +120,7 @@ export function buildReportHtml(opts: {
   const o: DocOptions = opts.doc ?? {};
   const body: string[] = [];
   if (o.showHeader !== false) {
-    body.push(`<div class='doc-head'>${companyHeaderHtml(info, o)}</div><hr>`);
+    body.push(`<div class='doc-head'>${companyHeaderHtml(info, o)}</div>`);
   }
   body.push(`<div class='doc-title'>${esc(title)}</div>`);
   if (subtitle) body.push(`<div class='doc-sub'>${esc(subtitle)}</div>`);
@@ -91,24 +128,25 @@ export function buildReportHtml(opts: {
   if (o.showDate || o.printedBy || o.printedAt) {
     const at = o.printedAt ?? new Date().toLocaleString("ar-EG");
     const by = o.printedBy ? ` | طُبع بواسطة: ${esc(o.printedBy)}` : "";
-    body.push(`<div class='doc-meta'><span>تاريخ ووقت الطباعة: ${at}${by}</span><span></span></div>`);
+    body.push(`<div class='doc-meta'><span>تاريخ ووقت الطباعة: ${esc(at)}${by}</span><span></span></div>`);
   }
+  // الملخص على شكل بطاقات قيم واضحة بدل جدول صغير مشتّت.
   if (summaryLines && summaryLines.length) {
-    body.push(
-      "<table dir='rtl' width='60%' align='center' border='0.5' cellspacing='0' cellpadding='3' style='font-size:10pt;border-collapse:collapse'>"
-    );
+    body.push("<div class='doc-summary'>");
     for (const [k, v] of summaryLines) {
-      body.push(`<tr><td align='right'>${esc(k)}</td><td align='center'><b>${esc(v)}</b></td></tr>`);
+      body.push(
+        `<div class='doc-summary-item'><span class='k'>${esc(k)}</span><span class='v'>${esc(v)}</span></div>`
+      );
     }
-    body.push("</table><br>");
+    body.push("</div>");
   }
   if (headers) {
     body.push(buildTableHtml(headers, rows, centerFrom));
     if (o.showCount !== false) {
-      body.push(`<div align='left' style='font-size:9pt'>عدد السجلات: ${rows.length}</div>`);
+      body.push(`<div class='doc-count'>عدد السجلات: ${rows.length}</div>`);
     }
   }
-  const note = footerNote ?? o.footerText ?? info.company_vat_note ?? "";
+  const note = opts.footerNote ?? o.footerText ?? info.company_vat_note ?? "";
   if (note) body.push(`<div class='doc-foot'>${esc(note)}</div>`);
   if (o.showSignature) {
     body.push(`<div class='doc-sign'><span>${esc(o.signatureLabel || "التوقيع والختم")}</span></div>`);
@@ -223,42 +261,24 @@ export async function exportExcel(opts: {
 }
 
 // ---------------------------------------------------------------------------
-// PDF (عبر html2canvas لضمان دعم العربية RTL)
+// PDF (html2canvas + jsPDF) عبر محرّك تقسيم صفحات حقيقي — انظر pdfDoc.ts
 // ---------------------------------------------------------------------------
-export async function exportPdfHtml(html: string, defaultName: string): Promise<void> {
-  const [html2canvasMod, jsPDFMod] = await Promise.all([import("html2canvas"), import("jspdf")]);
-  const html2canvas = html2canvasMod.default;
-  const jsPDF = jsPDFMod.default;
+export type { PdfDocOptions } from "./pdfDoc";
+export { renderPdfDocument } from "./pdfDoc";
 
-  const container = document.createElement("div");
-  container.dir = "rtl";
-  container.style.cssText =
-    "position:fixed;left:-10000px;top:0;width:794px;background:white;padding:24px;" +
-    "font-family:'IBM Plex Sans Arabic','Segoe UI',Tahoma,sans-serif;color:#1d2a38;";
-  container.innerHTML = html;
-  document.body.appendChild(container);
-
-  const canvas = await html2canvas(container, { scale: 2, useCORS: true, backgroundColor: "#ffffff" });
-  document.body.removeChild(container);
-
-  const imgData = canvas.toDataURL("image/png");
-  const pdf = new jsPDF("p", "mm", "a4");
-  const pageW = 210;
-  const pageH = 297;
-  const imgH = (canvas.height * pageW) / canvas.width;
-  let heightLeft = imgH;
-  let position = 0;
-
-  pdf.addImage(imgData, "PNG", 0, position, pageW, imgH);
-  heightLeft -= pageH;
-  while (heightLeft > 0) {
-    position -= pageH;
-    pdf.addPage();
-    pdf.addImage(imgData, "PNG", 0, position, pageW, imgH);
-    heightLeft -= pageH;
-  }
+/**
+ * تصدير المستند إلى PDF احترافي: صفحات مقسّمة على مقاس الورق، بلا قطع صفوف،
+ * مع تكرار رأس الجدول وتذييل يحمل رقم الصفحة ومن طبع ومتى.
+ * `doc` اختياري: عند تمريره تُطبَّق أنماط الشركة (الورق/الاتجاه/الهوامش/الألوان).
+ */
+export async function exportPdfHtml(
+  html: string,
+  defaultName: string,
+  doc?: import("./pdfDoc").PdfDocOptions
+): Promise<void> {
+  const { renderPdfDocument } = await import("./pdfDoc");
   const name = safeFilename(defaultName);
-  pdf.save(name.endsWith(".pdf") ? name : `${name}.pdf`);
+  await renderPdfDocument(html, name.endsWith(".pdf") ? name : `${name}.pdf`, doc);
 }
 
 /**
@@ -293,10 +313,15 @@ export function printHtml(html: string, title: string, ps?: PrintSettingsLike, p
        table { border-collapse: collapse; }
        @media print { body { padding: 0; } }`;
   const watermark = ps?.watermark ? `<div class="doc-watermark">${esc(ps.watermark)}</div>` : "";
+  // الهوامش على مستوى @page فقط؛ body padding للعرض على الشاشة ويلغى عند الطباعة
+  // حتى لا تتضاعف الهوامش (كانت تُطبع الصفحة بهوامش مضاعفة فتتزاحم الصفوف).
+  const screenCss = `@media print { body { padding: 0 !important; } thead { display: table-header-group; } }`;
   w.document.open();
-  w.document.write(`<!doctype html><html dir="rtl" lang="ar"><head><meta charset="utf-8"><title>${esc(title)}</title>
-    <style>${css}</style></head><body>${watermark}${html}
-    <script>window.onload=function(){setTimeout(function(){window.focus();window.print();},120);}</script></body></html>`);
+  w.document.write(`<!doctype html><html dir="rtl" lang="ar"><head><meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>${esc(title)}</title>
+    <style>${css}${screenCss}</style></head><body>${watermark}${html}
+    <script>window.onload=function(){setTimeout(function(){window.focus();window.print();},150);}</script></body></html>`);
   w.document.close();
 }
 
