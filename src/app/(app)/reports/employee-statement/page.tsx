@@ -7,6 +7,7 @@ import { employeeStatement, voucherNumberLabel, invoiceNumberLabel } from "@/lib
 import { listEmployees } from "@/lib/repo";
 import { money, todayIso, periodLabel } from "@/lib/format";
 import { exportPage } from "@/lib/exportHelper";
+import { isValidDateRange } from "@/lib/dateRange";
 
 function yearStart(): string { return `${new Date().getFullYear()}-01-01`; }
 
@@ -22,7 +23,7 @@ export default function EmployeeStatementReportPage() {
     queryKey: ["report-emp-stmt", employeeId, dFrom, dTo],
     queryFn: () => employeeId ? employeeStatement(employeeId, dFrom, dTo) : null,
     placeholderData: keepPreviousData,
-    enabled: !!employeeId,
+    enabled: !!employeeId && isValidDateRange(dFrom, dTo),
   });
 
   const salHeaders = ["رقم", "التاريخ", "عن شهر", "الأساسي", "إضافات", "خصم سلف", "خصم خصومات", "خصومات أخرى", "الصافي"];

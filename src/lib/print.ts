@@ -291,7 +291,7 @@ export function printCss(input: PrintSettings): string {
     body {
       font-family: 'IBM Plex Sans Arabic','Segoe UI',Tahoma,sans-serif;
       color: #10202f; font-size: ${size()}; margin: 0; padding: ${pageMargin}mm;
-      ${t === "elegant" ? "line-height: 1.85;" : ""}
+      line-height: ${t === "elegant" ? "1.85" : thermal ? "1.35" : "1.55"};
       ${thermal ? "width:72mm;box-sizing:border-box;color:#000;" : ""}
     }
     ${headBlock}
@@ -307,15 +307,37 @@ export function printCss(input: PrintSettings): string {
     .doc-sub { text-align: center; font-size: ${size(-0.5)}; color: #33475b; margin-bottom: 8px; }
     .doc-meta { display: flex; justify-content: space-between; font-size: ${size(-1.5)}; color: #5a6b7d; margin-bottom: 6px; }
     hr { border: none; border-top: 1px solid #b9c6d4; margin: 6px 0; }
-    table { border-collapse: collapse; width: 100%; font-size: ${size()}; }
-    table td, table th { ${gridBorder} padding: ${pad}; }
+    table { border-collapse: collapse; width: 100%; font-size: ${size()}; table-layout: auto; }
+    table td, table th { ${gridBorder} padding: ${pad}; vertical-align: middle; line-height: 1.5; }
+    /* خلايا النصوص الطويلة تلتف بدل تمدّد الصف أفقياً خارج الورقة */
+    table td.doc-cell-text { white-space: normal; overflow-wrap: anywhere; text-align: right; line-height: 1.6; }
+    /* الأرقام والمبالغ بعرض ثابت ومحاذاة وسطية كي تتراصف خانة الآحاد */
+    table td.doc-cell-num, table th.doc-cell-num { white-space: nowrap; text-align: center; direction: ltr; font-variant-numeric: tabular-nums; }
     thead { display: table-header-group; }
-    thead th { ${theadStyle} font-weight: 800; }
-    tr { page-break-inside: avoid; }
+    tfoot { display: table-footer-group; }
+    thead th, thead td { ${theadStyle} font-weight: 800; ${gridBorder} padding: ${pad}; text-align: center; }
+    tr { page-break-inside: avoid; break-inside: avoid; }
+    table { break-inside: auto; }
     ${zebra}
+    ${zebra ? "tbody tr.doc-total-row td { background: #e8eef7 !important; font-weight: 800; }" : "tbody tr.doc-total-row td { font-weight: 800; }"}
+    tbody tr.doc-open-row td { background: #eef2f7; font-weight: 800; }
+    /* جداول التخطيط (ترويسة/بطاقات/توقيع) لا ترسم حدوداً ولا خلفيات جدولية */
+    table.doc-plain, table.doc-plain td, table.doc-plain th { border: none !important; background: transparent !important; }
+    table.doc-plain thead th { background: transparent !important; color: inherit; }
     .doc-foot { margin-top: 10px; font-size: ${size(-1)}; color: #33475b; text-align: center; }
     .doc-sign { margin-top: ${t === "compact" ? 16 : 26}px; text-align: left; font-size: ${size(-0.5)}; }
     .doc-sign span { display: inline-block; border-top: 1px solid #64748b; padding-top: 4px; min-width: 180px; text-align: center; }
+    /* ملخص علوي على شكل بطاقات (يُطبع كشبكة قيم) */
+    .doc-summary { display: flex; flex-wrap: wrap; gap: 6px; margin: 8px 0 12px; }
+    .doc-summary-item {
+      flex: 1 1 22%; min-width: 120px; border: 0.6pt solid #cfdae6; border-radius: 4px;
+      padding: 5px 8px; background: #f8fafc; break-inside: avoid;
+    }
+    .doc-summary-item .k { display: block; font-size: ${size(-1.5)}; color: #5a6b7d; }
+    .doc-summary-item .v { display: block; font-size: ${size(0.5)}; font-weight: 800; color: #10202f; white-space: nowrap; }
+    .doc-section { margin-top: 10px; }
+    .doc-section-title { font-size: ${size(0.5)}; font-weight: 800; color: ${accent}; border-bottom: 0.8pt solid ${accent}; padding-bottom: 2px; margin: 10px 0 5px; }
+    .doc-count { font-size: ${size(-1.5)}; color: #5a6b7d; margin-top: 4px; text-align: left; }
     .doc-watermark {
       position: fixed; inset: 0; display: flex; align-items: center; justify-content: center;
       font-size: 64pt; color: rgba(15,23,42,0.07); transform: rotate(-30deg);
@@ -323,4 +345,72 @@ export function printCss(input: PrintSettings): string {
     }
     * { -webkit-print-color-adjust: exact; print-color-adjust: exact; }
   `;
+}
+
+/**
+ * إعادة كتابة CSS لتُطبَّق داخل جذر محدَّد فقط (بدل body) — تُستخدم عند تصدير PDF
+ * حيث يُبنى المستند داخل حاوية منفصلة عن الصفحة، فلا تتسرّب الأنماط للتطبيق.
+ * تُحذف كتل @page (تُدار أبعادها برمجياً) وكتل @media لتفادي تسرّب الأنماط.
+ */
+export function scopeCss(css: string, scope = ".doc-root"): string {
+  const src = css.replace(/@page\s*\{[^}]*\}/g, " ").replace(/@media[^{]*\{[\s\S]*?\}\s*\}/g, " ");
+  const out: string[] = [];
+  let i = 0;
+  while (i < src.length) {
+    const open = src.indexOf("{", i);
+    if (open === -1) break;
+    const selector = src.slice(i, open).trim();
+    const close = src.indexOf("}", open);
+    if (close === -1) break;
+    const body = src.slice(open + 1, close).trim();
+    if (selector && !selector.startsWith("@") && body) {
+      const scoped = selector.split(",").map((part) => {
+        const sel = part.trim();
+        if (!sel) return "";
+        if (sel === "*") return `${scope} *`;
+        if (sel === "body" || sel === "html") return scope;
+        if (sel.startsWith(scope)) return sel;
+        return `${scope} ${sel}`;
+      }).filter(Boolean).join(", ");
+      if (scoped) out.push(`${scoped} { ${body} }`);
+    }
+    i = close + 1;
+  }
+  return out.join("\n");
+}
+
+/** CSS الطباعة لكن مقيَّداً بجذر المستند (لا يمسّ التطبيق) + بلا هوامش صفحة مكررة. */
+export function scopedPrintCss(input: PrintSettings, scope = ".doc-root"): string {
+  const ps = normalize(input);
+  return (
+    scopeCss(printCss(ps), scope) +
+    `\n${scope} { padding: 0 !important; margin: 0 !important; width: auto !important; max-width: none !important; }`
+  );
+}
+
+/** خيارات مستند PDF المشتقة من إعدادات الطباعة (نفس الورق/الاتجاه/الهوامش/العلامة المائية). */
+export function pdfDocOptions(
+  input: PrintSettings,
+  extra: { title?: string; footerText?: string; printedBy?: string; printedAt?: string } = {}
+): {
+  css: string;
+  paper: { w: number; h: number };
+  marginMm: number;
+  watermark?: string;
+  footerText?: string;
+  runningTitle?: string;
+  printedBy?: string;
+  printedAt?: string;
+} {
+  const ps = normalize(input);
+  return {
+    css: scopedPrintCss(ps),
+    paper: paperDimensions(ps),
+    marginMm: ps.margin_mm,
+    watermark: ps.watermark || undefined,
+    footerText: extra.footerText ?? ps.footer_text ?? undefined,
+    runningTitle: extra.title,
+    printedBy: extra.printedBy,
+    printedAt: extra.printedAt,
+  };
 }

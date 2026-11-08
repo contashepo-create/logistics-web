@@ -7,6 +7,7 @@ import { PageFrame, Spinner, ExportBar, TotalsBar, FilterRow } from "@/component
 import { itemsUsageReport } from "@/lib/items";
 import { money, todayIso } from "@/lib/format";
 import { exportPage } from "@/lib/exportHelper";
+import { isValidDateRange } from "@/lib/dateRange";
 
 function yearStart(): string { return `${new Date().getFullYear()}-01-01`; }
 
@@ -21,6 +22,7 @@ export default function ItemsReportPage() {
     queryKey: ["report-items", dFrom, dTo],
     queryFn: () => itemsUsageReport(dFrom, dTo),
     placeholderData: keepPreviousData,
+    enabled: isValidDateRange(dFrom, dTo),
   });
 
   const headers = ["الكود", "الخدمة", "النوع", "الخط (من ← إلى)", "الوحدة", "عدد النقلات", "إجمالي الكمية", "عدد الفواتير", "الإيراد قبل الضريبة", "الضريبة", "الإجمالي", "آخر استخدام"];

@@ -6,6 +6,7 @@ import { PageFrame, Spinner, ExportBar, TotalsBar, FilterRow } from "@/component
 import { pnlReport } from "@/lib/calc";
 import { money, todayIso, PURCHASE_EXPENSE_CATEGORIES } from "@/lib/format";
 import { exportPage } from "@/lib/exportHelper";
+import { isValidDateRange } from "@/lib/dateRange";
 
 function yearStart(): string { return `${new Date().getFullYear()}-01-01`; }
 
@@ -18,6 +19,7 @@ export default function PnlReportPage() {
     queryKey: ["report-pnl", dFrom, dTo],
     queryFn: () => pnlReport(dFrom, dTo),
     placeholderData: keepPreviousData,
+    enabled: isValidDateRange(dFrom, dTo),
   });
 
   const d = data ?? {};

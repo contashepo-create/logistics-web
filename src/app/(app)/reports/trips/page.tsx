@@ -7,6 +7,7 @@ import { tripProfitsReport } from "@/lib/calc";
 import { listCustomers } from "@/lib/repo";
 import { money, todayIso } from "@/lib/format";
 import { exportPage } from "@/lib/exportHelper";
+import { isValidDateRange } from "@/lib/dateRange";
 
 function yearStart(): string { return `${new Date().getFullYear()}-01-01`; }
 
@@ -21,6 +22,7 @@ export default function TripsReportPage() {
     queryKey: ["report-trips", dFrom, dTo, customerId],
     queryFn: () => tripProfitsReport(dFrom, dTo, customerId),
     placeholderData: keepPreviousData,
+    enabled: isValidDateRange(dFrom, dTo),
   });
 
   const headers = ["رقم الفاتورة", "التاريخ", "العميل", "الرحلة (من ← إلى)", "السيارة", "السائق", "الإيراد", "مصاريف مباشرة", "تفاصيل مصاريف مباشرة", "مصاريف لاحقة (سندات)", "تفاصيل سندات الصرف", "صافي الربح الفعلي"];

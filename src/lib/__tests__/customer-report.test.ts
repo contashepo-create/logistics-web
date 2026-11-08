@@ -115,8 +115,10 @@ describe("التقرير الشامل للعميل", () => {
     expect(report.summary.closing).toBeCloseTo(await calc.customerBalance(s.cust), 2);
   });
 
-  it("الفواتير تأتي بنقلاتها وحالاتها، والسابقة للفترة تُعلَّم ولا تُحتسب في المؤشرات", async () => {
-    const report = (await customerReport.customerFullReport(s.cust, "2026-01-01", "2026-12-31"))!;
+  it("الفواتير تأتي بنقلاتها وحالاتها، والسابقة للفترة تُعلَّم ولا تُحتسب في المؤشرات (نطاق: كل الفواتير)", async () => {
+    const report = (await customerReport.customerFullReport(s.cust, "2026-01-01", "2026-12-31", undefined, {
+      invoiceScope: "all",
+    }))!;
 
     expect(report.invoices).toHaveLength(2);
     const [oldest, current] = report.invoices;
@@ -144,6 +146,57 @@ describe("التقرير الشامل للعميل", () => {
     expect(report.trips.every((t) => t.invoice_number === 1 || t.invoice_number === 2)).toBe(true);
     expect(report.trips.map((t) => t.route)).toContain("المنصورة ← القاهرة");
     expect(report.trips.some((t) => t.item_name === "نقل المنصورة - القاهرة")).toBe(true);
+  });
+
+  it("فلتر التاريخ يعمل افتراضياً: الفواتير والنقلات داخل الفترة فقط", async () => {
+    const report = (await customerReport.customerFullReport(s.cust, "2026-01-01", "2026-12-31"))!;
+    expect(report.invoice_scope).toBe("period");
+    expect(report.invoices).toHaveLength(1);
+    expect(report.invoices[0].id).toBe(s.inv1);
+    expect(report.invoices.every((i) => i.in_range)).toBe(true);
+    // كل النقلات المعروضة تخص فواتير الفترة (2025-12-20 مستبعدة)
+    expect(report.trips).toHaveLength(2);
+    expect(report.trips.every((t) => t.date >= "2026-01-01")).toBe(true);
+    // الأعمار وتركيبة الرصيد تبقى على كل الفواتير حتى نهاية الفترة
+    expect(report.open_items).toHaveLength(2);
+    expect(report.summary.outstanding).toBeCloseTo(765, 2);
+  });
+
+  it("نطاق «كل الفواتير» يوسّع قسمي الفواتير والنقلات فقط", async () => {
+    const period = (await customerReport.customerFullReport(s.cust, "2026-01-01", "2026-12-31"))!;
+    const all = (await customerReport.customerFullReport(s.cust, "2026-01-01", "2026-12-31", undefined, {
+      invoiceScope: "all",
+    }))!;
+    expect(all.invoice_scope).toBe("all");
+    expect(all.invoices).toHaveLength(2);
+    expect(all.trips.length).toBeGreaterThan(period.trips.length);
+    // المؤشرات لا تتغيّر: الأرقام نفسها في الحالتين
+    expect(all.summary.invoiced).toBeCloseTo(period.summary.invoiced, 2);
+    expect(all.summary.closing).toBeCloseTo(period.summary.closing, 2);
+  });
+
+  it("تصدير فواتير نطاق مستقل: يجلب فواتير النطاق فقط مع المسدد والمتبقي", async () => {
+    const jan = await customerReport.customerInvoicesInRange(s.cust, "2026-01-01", "2026-02-28");
+    expect(jan).toHaveLength(1);
+    expect(jan[0].id).toBe(s.inv1);
+    expect(jan[0].label).toBe("INV-00001");
+    expect(jan[0].total).toBeCloseTo(2760, 2);
+    expect(jan[0].legs).toEqual(["المنصورة ← القاهرة", "طنطا ← بورسعيد"]);
+    // 500 سُدِّدت للأقدم أولاً (فاتورة 2025)، فهذه الفاتورة لم يُسدَّد منها شيء
+    expect(jan[0].paid).toBeCloseTo(0, 2);
+    expect(jan[0].remaining).toBeCloseTo(2760, 2);
+
+    // فاتورة 2025 تظهر عند توسيع النطاق
+    const wide = await customerReport.customerInvoicesInRange(s.cust, "2025-01-01", "2026-12-31");
+    expect(wide.map((i) => i.id)).toEqual([s.presetInvoice, s.inv1]);
+    // جميعها في النطاق المطلوب
+    expect(wide.every((i) => i.in_range)).toBe(true);
+
+    // نطاق بلا فواتير أو نطاق معكوس
+    await expect(customerReport.customerInvoicesInRange(s.cust, "2027-01-01", "2027-12-31")).resolves.toEqual([]);
+    await expect(customerReport.customerInvoicesInRange(s.cust, "2026-12-31", "2026-01-01")).rejects.toThrow();
+    // عميل بلا فواتير => قائمة فارغة (لا خطأ)
+    await expect(customerReport.customerInvoicesInRange(9999, "2026-01-01", "2026-12-31")).resolves.toEqual([]);
   });
 
   it("النقلات تحمل الخدمة والسيارة والسائق والحاويات", async () => {

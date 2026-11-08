@@ -1,6 +1,7 @@
 // دورة الموردين الكاملة: مورّد ← فاتورة مشتريات بالضريبة ← سند دفع ← رصيد وكشف حساب وأعمار ديون.
 // كل الاستعلامات معزولة تلقائياً بـ company_id عبر RLS.
 
+import { assertDateRange } from "./dateRange";
 import { supabase } from "./supabase";
 import { translateDbError } from "./db";
 import { RuleError, boundedNumber, ensureDateInOpenYear, positiveId, roundMoney, txt } from "./rules";
@@ -429,6 +430,7 @@ export async function supplierStatement(
   from?: string | null,
   to?: string | null
 ): Promise<{ rows: SupplierStatementRow[]; totals: { credit: number; debit: number; balance: number } }> {
+  assertDateRange(from, to);
   const sup = await getSupplier(supplierId);
   if (!sup) return { rows: [], totals: { credit: 0, debit: 0, balance: 0 } };
 

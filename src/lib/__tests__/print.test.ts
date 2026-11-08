@@ -1,5 +1,8 @@
 import { describe, it, expect } from "vitest";
-import { DEFAULT_PRINT_SETTINGS, PRINT_TEMPLATES, getTemplate, paperDimensions, printCss } from "../print";
+import {
+  DEFAULT_PRINT_SETTINGS, PRINT_TEMPLATES, getTemplate, paperDimensions, printCss,
+  scopeCss, scopedPrintCss, pdfDocOptions,
+} from "../print";
 
 describe("إعدادات الطباعة", () => {
   it("A4 طولي = 210×297 مم", () => {
@@ -70,5 +73,48 @@ describe("قوالب الفواتير الاحترافية المنقولة من
     expect(css).not.toContain("nth-child(even)");
     expect(css).toContain("@page { size: 80mm 297mm; margin: 4mm; }");
     expect(css).toContain("width:72mm");
+  });
+});
+
+describe("تقييد أنماط الطباعة بمستند مستقل (لتصدير PDF)", () => {
+  it("ينقل قواعد body إلى الجذر ويحذف @page", () => {
+    const scoped = scopeCss(printCss(DEFAULT_PRINT_SETTINGS), ".doc-root");
+    expect(scoped).not.toContain("@page");
+    expect(scoped).not.toContain("body {");
+    expect(scoped).toContain(".doc-root {");
+    expect(scoped).toContain(".doc-root table td");
+    expect(scoped).toContain(".doc-root .doc-company");
+  });
+
+  it("يحذف كتل @media حتى لا تتسرّب الأنماط إلى التطبيق", () => {
+    const scoped = scopeCss("@media print { body { color: red } } .doc-title { color: blue }", ".doc-root");
+    expect(scoped).not.toContain("@media");
+    expect(scoped).not.toContain("color: red");
+    expect(scoped).toContain(".doc-root .doc-title");
+  });
+
+  it("scopedPrintCss يصفّر هوامش الجذر (الهوامش تُدار على مستوى الصفحة)", () => {
+    const css = scopedPrintCss({ ...DEFAULT_PRINT_SETTINGS, margin_mm: 15 });
+    expect(css).toContain(".doc-root { padding: 0 !important; margin: 0 !important");
+    expect(css).toContain(".doc-root table td");
+  });
+
+  it("pdfDocOptions تحمل الورق والاتجاه والهوامش والعلامة المائية", () => {
+    const doc = pdfDocOptions(
+      { ...DEFAULT_PRINT_SETTINGS, paper: "A4", orientation: "landscape", margin_mm: 14, watermark: "نسخة" },
+      { title: "كشف حساب", printedBy: "أحمد", printedAt: "2026-01-01 10:00", footerText: "شكراً" }
+    );
+    expect(doc.paper).toEqual({ w: 297, h: 210 });
+    expect(doc.marginMm).toBe(14);
+    expect(doc.watermark).toBe("نسخة");
+    expect(doc.runningTitle).toBe("كشف حساب");
+    expect(doc.printedBy).toBe("أحمد");
+    expect(doc.footerText).toBe("شكراً");
+    expect(doc.css).toContain(".doc-root table td");
+  });
+
+  it("يراعي A5 و Letter في أبعاد PDF", () => {
+    expect(pdfDocOptions({ ...DEFAULT_PRINT_SETTINGS, paper: "A5" }).paper).toEqual({ w: 148, h: 210 });
+    expect(pdfDocOptions({ ...DEFAULT_PRINT_SETTINGS, paper: "Letter" }).paper).toEqual({ w: 216, h: 279 });
   });
 });

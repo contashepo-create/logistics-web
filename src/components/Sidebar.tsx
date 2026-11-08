@@ -88,7 +88,7 @@ const NAV_SECTIONS: NavSection[] = [
       { label: "التقرير الشامل للعميل", href: "/reports/customers", icon: "🧑‍💼" },
       { label: "تقرير الخدمات والأصناف", href: "/reports/items", icon: "🚏" },
       { label: "كشف حساب مورّد", href: "/reports/supplier-statement", icon: "📑" },
-      { label: "أعمار الديون", href: "/reports/aging", icon: "⏳" },
+      { label: "أعمار الديون (عملاء/موردون)", href: "/reports/aging", icon: "⏳" },
       { label: "كشف حساب موظف/سائق", href: "/reports/employee-statement", icon: "🧾" },
       { label: "أداء السيارات", href: "/reports/vehicles", icon: "🚛" },
       { label: "الأرباح والخسائر (P&L)", href: "/reports/pnl", icon: "💹" },

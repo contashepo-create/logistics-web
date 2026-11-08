@@ -9,6 +9,7 @@
 import { supabase } from "./supabase";
 import { translateDbError } from "./db";
 import { RuleError, positiveId } from "./rules";
+import { assertDateRange } from "./dateRange";
 import {
   customerAllocations,
   customerBalance,
@@ -107,17 +108,39 @@ export interface CustomerReportAgingBucket {
 }
 
 /**
+ * نطاق عرض أقسام «الفواتير / النقلات» داخل التقرير الشامل:
+ *   • period: الفواتير والنقلات التي تواريخها داخل الفترة [من, إلى] فقط —
+ *     وهو الافتراضي كي يعمل فلتر التاريخ فعلياً على كل أقسام التقرير.
+ *   • all: كل فواتير العميل حتى نهاية الفترة (مع علم in_range) لشرح تركيبة الرصيد.
+ */
+export type CustomerInvoiceScope = "period" | "all";
+
+/** وصف عربي لنطاق الفواتير — يُستخدم في الواجهة وفي ملفات التصدير. */
+export function invoiceScopeLabel(scope: CustomerInvoiceScope | undefined): string {
+  return scope === "all" ? "كل الفواتير حتى نهاية الفترة" : "الفواتير داخل الفترة المحددة";
+}
+
+/** خيارات التقرير الشامل (غير إلزامية للحفاظ على توافق النداءات القديمة). */
+export interface CustomerReportOptions {
+  /** نطاق أقسام الفواتير والنقلات (الافتراضي: داخل الفترة). */
+  invoiceScope?: CustomerInvoiceScope;
+}
+
+/**
  * مخرجات التقرير الشامل. نطاق كل قسم واضح حتى لا يلتبس على القارئ:
  *   • summary / statement / services: حركات الفترة [from, to].
- *   • invoices / trips: كل فواتير العميل حتى نهاية الفترة (وفيها علم in_range)
- *     لأن نقلاتها وخدماتها هي شرح تركيبة الرصيد المتبقي.
+ *   • invoices / trips: حسب `invoice_scope` — الافتراضي «داخل الفترة» ليحترم
+ *     فلتر التاريخ، ويمكن طلب «كل الفواتير حتى نهاية الفترة» لشرح تركيبة الرصيد.
  *   • receipts / notes: مستندات الفترة فقط.
- *   • open_items / aging: تركيبة المستحق على أساس كل الفواتير حتى تاريخ النهاية.
+ *   • open_items / aging: تركيبة المستحق على أساس كل الفواتير حتى تاريخ النهاية
+ *     (لا تتأثر بنطاق الفواتير لأنهما يشرحان الرصيد المستحق كاملاً).
  */
 export interface CustomerFullReport {
   customer: Customer | null;
   from: string;
   to: string;
+  /** نطاق قسمي الفواتير والنقلات المطبَّق فعلياً على هذا التقرير */
+  invoice_scope: CustomerInvoiceScope;
   generated_at: string;
   summary: {
     opening: number;
@@ -163,16 +186,23 @@ function daysBetween(fromIso: string, toIso: string): number {
 }
 
 /**
- * تقرير شامل عن العميل خلال فترة (افتراضياً كل الحركات حتى تاريخ النهاية).
+ * تقرير شامل عن العميل خلال فترة (افتراضياً الحركات داخل الفترة فقط).
  * يعيد null إن لم يكن العميل موجوداً.
+ *
+ * `options.invoiceScope` يحدد نطاق قسمي الفواتير والنقلات:
+ *   - "period" (افتراضي): الفواتير والنقلات داخل الفترة → فلتر التاريخ يعمل على كل الأقسام.
+ *   - "all": كل الفواتير حتى نهاية الفترة (لشرح تركيبة الرصيد والأعمار).
  */
 export async function customerFullReport(
   customerId: number,
   dFrom: string,
   dTo: string,
-  filters?: StatementFilters
+  filters?: StatementFilters,
+  options?: CustomerReportOptions
 ): Promise<CustomerFullReport | null> {
+  assertDateRange(dFrom, dTo);
   const id = positiveId(customerId, "العميل");
+  const invoiceScope: CustomerInvoiceScope = options?.invoiceScope === "all" ? "all" : "period";
 
   const { data: custRow, error: custError } = await supabase
     .from("customers")
@@ -323,7 +353,7 @@ export async function customerFullReport(
 
   const inRange = (date: string) => date >= dFrom && date <= dTo;
 
-  const invoices: CustomerReportInvoice[] = invoicesRaw.map((inv) => {
+  const allInvoices: CustomerReportInvoice[] = invoicesRaw.map((inv) => {
     const totals = totalsMap.get(inv.id) ?? { trips_total: 0, billable_total: 0, vat_amount: 0, customer_total: 0 };
     const paidInfo = alloc.byInvoice.get(inv.id);
     const total = round2(totals.customer_total);
@@ -372,6 +402,11 @@ export async function customerFullReport(
       notes: String(t.notes ?? ""),
     };
   });
+
+  // نطاق عرض الفواتير والنقلات: الافتراضي «داخل الفترة» حتى يحترم فلتر التاريخ،
+  // و«all» يعرض كل فواتير العميل حتى نهاية الفترة لشرح تركيبة الرصيد.
+  const invoices = invoiceScope === "all" ? allInvoices : allInvoices.filter((i) => i.in_range);
+  const trips = invoiceScope === "all" ? allTrips : allTrips.filter((t) => inRange(t.date));
 
   // تجميع الخدمات لهذا العميل من سطور الاستخدام (نفس مصدر تقارير الخدمات)
   const customerLines = servicesReport.lines.filter((line) => invByLocalId.has(line.invoice_id));
@@ -467,18 +502,19 @@ export async function customerFullReport(
   // حركات الفترة فقط (فاتورة داخل الفترة + سند + إشعار) — أما open_items/aging
   // فتبقى على أساس كل الفواتير حتى نهاية الفترة لأنها تركيبة الرصيد المستحق.
   const allDates = [
-    ...invoices.filter((i) => i.in_range).map((i) => i.date),
+    ...allInvoices.filter((i) => i.in_range).map((i) => i.date),
     ...receipts.map((r) => r.date),
     ...notes.map((n) => n.date),
   ].filter(Boolean).sort();
   const lastInvoice = invoicesRaw.length ? invoicesRaw[invoicesRaw.length - 1] : null;
   const outstanding = round2(openItems.reduce((a, i) => a + i.remaining, 0));
-  const inRangeInvoices = invoices.filter((i) => i.in_range);
+  const inRangeInvoices = allInvoices.filter((i) => i.in_range);
 
   return {
     customer: custRow as Customer,
     from: dFrom,
     to: dTo,
+    invoice_scope: invoiceScope,
     generated_at: new Date().toISOString(),
     summary: {
       opening: statement.opening,
@@ -504,12 +540,111 @@ export async function customerFullReport(
     },
     statement,
     invoices,
-    trips: allTrips,
+    trips,
     services,
     receipts,
     notes,
     aging: buckets,
     open_items: openItems,
+  };
+}
+
+/**
+ * فواتير العميل داخل نطاق تاريخي مستقل تماماً عن فترة التقرير الشامل.
+ * يُستخدم في «تصدير فواتير من تاريخ إلى تاريخ» من داخل صفحة التقرير الشامل،
+ * فيمكن تصدير أي نطاق دون تغيير فترة التقرير نفسه.
+ */
+export async function customerInvoicesInRange(
+  customerId: number,
+  from: string,
+  to: string
+): Promise<CustomerReportInvoice[]> {
+  const id = positiveId(customerId, "العميل");
+  assertDateRange(from, to, { required: true });
+  const start = String(from ?? "").trim();
+  const end = String(to ?? "").trim();
+
+  const { data: invRows, error } = await supabase
+    .from("invoices")
+    .select("id, number, date, vat_rate, notes")
+    .eq("customer_id", id)
+    .gte("date", start)
+    .lte("date", end)
+    .order("date")
+    .order("number");
+  if (error) throw new RuleError(translateDbError(error.message));
+
+  const invoicesRaw = (invRows ?? []) as {
+    id: number; number: number; date: string; vat_rate: number; notes: string;
+  }[];
+  const ids = invoicesRaw.map((i) => i.id);
+
+  const [totalsMap, alloc] = await Promise.all([
+    invoiceTotalsBatch(ids),
+    customerAllocations(id),
+  ]);
+
+  const legsByInvoice = new Map<number, string[]>();
+  const tripsCountByInvoice = new Map<number, number>();
+  if (ids.length) {
+    const { data: tripRows } = await supabase
+      .from("invoice_trips")
+      .select("invoice_id, from_loc, to_loc")
+      .in("invoice_id", ids)
+      .order("id");
+    for (const t of tripRows ?? []) {
+      const key = Number(t.invoice_id);
+      const legs = legsByInvoice.get(key) ?? [];
+      legs.push(`${t.from_loc || "—"} ← ${t.to_loc || "—"}`);
+      legsByInvoice.set(key, legs);
+      tripsCountByInvoice.set(key, (tripsCountByInvoice.get(key) ?? 0) + 1);
+    }
+  }
+
+  return invoicesRaw.map((inv) => {
+    const totals = totalsMap.get(inv.id) ?? { trips_total: 0, billable_total: 0, vat_amount: 0, customer_total: 0 };
+    const paidInfo = alloc.byInvoice.get(inv.id);
+    const total = round2(totals.customer_total);
+    const paid = round2(paidInfo?.paid ?? 0);
+    const remaining = round2(Math.max(0, total - paid));
+    return {
+      id: inv.id,
+      number: inv.number,
+      label: invoiceNumberLabel(inv.number),
+      date: inv.date,
+      notes: String(inv.notes ?? ""),
+      vat_rate: num(inv.vat_rate),
+      subtotal: round2(num(totals.trips_total) + num(totals.billable_total)),
+      vat_amount: round2(totals.vat_amount),
+      total,
+      paid,
+      remaining,
+      status: remaining <= 0.0001 ? "paid" : paid > 0.0001 ? "partial" : "open",
+      trips_count: tripsCountByInvoice.get(inv.id) ?? 0,
+      legs: legsByInvoice.get(inv.id) ?? [],
+      in_range: true,
+    } satisfies CustomerReportInvoice;
+  });
+}
+
+/** إجماليات نطاق فواتير مُصدَّر (عدد + قبل الضريبة + الضريبة + الإجمالي + المسدد + المتبقي). */
+export interface InvoiceRangeTotals {
+  count: number;
+  subtotal: number;
+  vat_amount: number;
+  total: number;
+  paid: number;
+  remaining: number;
+}
+
+export function invoiceRangeTotals(invoices: CustomerReportInvoice[]): InvoiceRangeTotals {
+  return {
+    count: invoices.length,
+    subtotal: round2(invoices.reduce((a, v) => a + num(v.subtotal), 0)),
+    vat_amount: round2(invoices.reduce((a, v) => a + num(v.vat_amount), 0)),
+    total: round2(invoices.reduce((a, v) => a + num(v.total), 0)),
+    paid: round2(invoices.reduce((a, v) => a + num(v.paid), 0)),
+    remaining: round2(invoices.reduce((a, v) => a + num(v.remaining), 0)),
   };
 }
 

@@ -1,19 +1,23 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useParams, useRouter } from "next/navigation";
 import { useQuery, useQueryClient, keepPreviousData } from "@tanstack/react-query";
 import {
-  PageFrame, Spinner, ExportBar, TotalsBar, FilterRow, DictSelect, Field, Input, AmountInput, Select, Button,
+  PageFrame, Spinner, ExportBar, TotalsBar, FilterRow, DictSelect, Field, Input, AmountInput, Select, Button, DateInput,
 } from "@/components/ui";
 import { notify } from "@/components/toast";
-import { customerFullReport, balanceSideLabel } from "@/lib/customerReport";
 import {
-  exportCustomerReportExcel, exportCustomerReportPdf, printCustomerReport,
+  customerFullReport, customerInvoicesInRange, balanceSideLabel, invoiceScopeLabel,
+  type CustomerInvoiceScope,
+} from "@/lib/customerReport";
+import {
+  exportCustomerReportExcel, exportCustomerReportPdf, printCustomerReport, exportCustomerInvoicesRange,
 } from "@/lib/customerReportExport";
 import { statementFiltersLabel, STATEMENT_DOC_TYPES, invoiceNumberLabel, type StatementFilters, type StatementDocType } from "@/lib/calc";
 import { itemOptions } from "@/lib/items";
 import { money, todayIso } from "@/lib/format";
+import { isValidDateRange } from "@/lib/dateRange";
 
 function yearStart(): string { return `${new Date().getFullYear()}-01-01`; }
 
@@ -28,6 +32,16 @@ export default function CustomerFullReportPage() {
   const [dFrom, setDFrom] = useState(yearStart());
   const [dTo, setDTo] = useState(todayIso());
   const [busy, setBusy] = useState<"" | "excel" | "pdf" | "print">("");
+  // نطاق قسمي الفواتير والنقلات: «داخل الفترة» افتراضياً حتى يعمل فلتر التاريخ فعلياً
+  const [scope, setScope] = useState<CustomerInvoiceScope>("period");
+  // نطاق تصدير الفواتير وحده — مستقل عن فترة التقرير
+  const [invFrom, setInvFrom] = useState(yearStart());
+  const [invTo, setInvTo] = useState(todayIso());
+  const [invBusy, setInvBusy] = useState<"" | "excel" | "pdf" | "print">("");
+
+  // عند تغيير فترة التقرير نُزامن نطاق تصدير الفواتير معها (ما لم يعده المستخدم يدوياً)
+  useEffect(() => { setInvFrom(dFrom); }, [dFrom]);
+  useEffect(() => { setInvTo(dTo); }, [dTo]);
 
   const [q, setQ] = useState("");
   const [fromLoc, setFromLoc] = useState("");
@@ -50,16 +64,16 @@ export default function CustomerFullReportPage() {
   const { data: items } = useQuery({ queryKey: ["items-options"], queryFn: () => itemOptions(true) });
 
   const { data: rep, isLoading } = useQuery({
-    queryKey: ["report-customer-full", customerId, dFrom, dTo, filters],
-    queryFn: () => customerFullReport(customerId, dFrom, dTo, filters),
+    queryKey: ["report-customer-full", customerId, dFrom, dTo, filters, scope],
+    queryFn: () => customerFullReport(customerId, dFrom, dTo, filters, { invoiceScope: scope }),
     placeholderData: keepPreviousData,
-    enabled: Number.isFinite(customerId) && customerId > 0,
+    enabled: Number.isFinite(customerId) && customerId > 0 && isValidDateRange(dFrom, dTo),
   });
 
   const s = rep?.summary;
   const filterLabel = statementFiltersLabel(filters);
   const subtitle = rep
-    ? `الكود: ${rep.customer?.code ?? "—"} | الفترة: من ${rep.from} إلى ${rep.to}${filterLabel ? ` — ${filterLabel}` : ""} | الحركات المعروضة ${rep.statement.matched_count} من ${rep.statement.all_rows_count}`
+    ? `الكود: ${rep.customer?.code ?? "—"} | الفترة: من ${rep.from} إلى ${rep.to} | ${invoiceScopeLabel(rep.invoice_scope)}${filterLabel ? ` — ${filterLabel}` : ""} | الحركات المعروضة ${rep.statement.matched_count} من ${rep.statement.all_rows_count}`
     : "كل ما يخص العميل في تقرير واحد";
 
   const run = async (mode: "excel" | "pdf" | "print") => {
@@ -73,6 +87,28 @@ export default function CustomerFullReportPage() {
       notify(e instanceof Error ? e.message : String(e), "error");
     } finally {
       setBusy("");
+    }
+  };
+
+  const exportInvoices = async (mode: "excel" | "pdf" | "print") => {
+    if (!rep?.customer) return;
+    if (!invFrom || !invTo) { notify("حدّد تاريخ البداية والنهاية لتصدير الفواتير.", "error"); return; }
+    if (invFrom > invTo) { notify("تاريخ البداية يجب أن يكون قبل تاريخ النهاية.", "error"); return; }
+    setInvBusy(mode);
+    try {
+      const list = await customerInvoicesInRange(customerId, invFrom, invTo);
+      if (!list.length) {
+        notify("لا توجد فواتير لهذا العميل داخل النطاق المحدد.", "warning");
+        return;
+      }
+      await exportCustomerInvoicesRange({
+        customerName: rep.customer.name, from: invFrom, to: invTo, invoices: list, mode,
+      });
+      notify(`تم تصدير ${list.length} فاتورة من ${invFrom} إلى ${invTo}.`, "success");
+    } catch (e) {
+      notify(e instanceof Error ? e.message : String(e), "error");
+    } finally {
+      setInvBusy("");
     }
   };
 
@@ -99,6 +135,20 @@ export default function CustomerFullReportPage() {
           {/* ——— فلتر ذكي لحركات الكشف داخل التقرير ——— */}
           <div className="group-box" style={{ marginTop: 0 }}>
             <div className="group-title">فلتر ذكي لحركات الكشف</div>
+            <div className="form-grid-3">
+              <Field label="من تاريخ" hint="يطبَّق على كشف الحساب والسندات والإشعارات والفواتير والنقلات">
+                <DateInput value={dFrom} onChange={setDFrom} />
+              </Field>
+              <Field label="إلى تاريخ">
+                <DateInput value={dTo} onChange={setDTo} />
+              </Field>
+              <Field label="نطاق الفواتير والنقلات والخدمات" hint="«داخل الفترة» يجعل فلتر التاريخ يشمل كل أقسام التقرير">
+                <Select value={scope} onChange={(e) => setScope(e.target.value as CustomerInvoiceScope)}>
+                  <option value="period">الفواتير داخل الفترة المحددة</option>
+                  <option value="all">كل الفواتير حتى نهاية الفترة</option>
+                </Select>
+              </Field>
+            </div>
             <div className="form-grid-3">
               <Field label="النقلة من (مكان الانطلاق)">
                 <Input value={fromLoc} onChange={(e) => setFromLoc(e.target.value)} placeholder="مثال: الرياض" />
@@ -133,7 +183,9 @@ export default function CustomerFullReportPage() {
               </div>
             </div>
             <div className="field-hint">
-              الفلتر يخص قسم «كشف الحساب» فقط؛ الفواتير والنقلات والخدمات والأعمار تُعرض كاملة حتى نهاية الفترة لشرح تركيبة الرصيد.
+              «من/إلى» يحددان الفترة لكل الأقسام؛ وبالنطاق الافتراضي تُعرض الفواتير والنقلات داخل الفترة فقط.
+              اختر «كل الفواتير حتى نهاية الفترة» إذا أردت شرح تركيبة الرصيد والأعمار بالفواتير السابقة للفترة.
+              الفلاتر الذكية (المسار/القيمة/البحث/النوع/الخدمة) تخص قسم «كشف الحساب» فقط ولا تُغيّر الأرصدة.
             </div>
           </div>
 
@@ -181,13 +233,13 @@ export default function CustomerFullReportPage() {
                 <tbody>
                   {rep.statement.rows.map((r, i) => (
                     <tr key={i}>
-                      <td>{r.date}</td>
+                      <td className="num">{r.date}</td>
                       <td>{r.doc}</td>
-                      <td>{r.number != null ? r.number : "—"}</td>
-                      <td>{r.desc}{r.detail ? ` — ${r.detail}` : ""}</td>
-                      <td>{r.debit ? money(r.debit) : ""}</td>
-                      <td>{r.credit ? money(r.credit) : ""}</td>
-                      <td>{r.balance != null ? money(r.balance) : "—"}</td>
+                      <td className="num">{r.number != null ? r.number : "—"}</td>
+                      <td className="data-cell-wrap">{r.desc}{r.detail ? ` — ${r.detail}` : ""}</td>
+                      <td className="num">{r.debit ? money(r.debit) : "—"}</td>
+                      <td className="num">{r.credit ? money(r.credit) : "—"}</td>
+                      <td className="num">{r.balance != null ? money(r.balance) : "—"}</td>
                     </tr>
                   ))}
                   {!rep.statement.rows.length && <tr><td colSpan={7} style={{ color: "var(--muted)" }}>لا توجد حركات مطابقة للفلاتر.</td></tr>}
@@ -198,7 +250,26 @@ export default function CustomerFullReportPage() {
 
           {/* ——— الفواتير ——— */}
           <div className="group-box">
-            <div className="group-title">الفواتير ({rep.invoices.length})</div>
+            <div className="group-title">الفواتير ({rep.invoices.length}) — {invoiceScopeLabel(rep.invoice_scope)}</div>
+            <div className="form-grid-3" style={{ marginBottom: 10 }}>
+              <Field label="تصدير الفواتير من تاريخ" hint="تصدير الفواتير وحدها لنطاق مستقل عن فترة التقرير">
+                <DateInput value={invFrom} onChange={setInvFrom} />
+              </Field>
+              <Field label="تصدير الفواتير إلى تاريخ">
+                <DateInput value={invTo} onChange={setInvTo} />
+              </Field>
+              <div style={{ display: "flex", gap: 8, alignItems: "flex-end", flexWrap: "wrap" }}>
+                <Button variant="primary" onClick={() => exportInvoices("excel")} disabled={invBusy !== ""} title="تصدير الفواتير لهذا النطاق إلى Excel">
+                  {invBusy === "excel" ? "… جارٍ التصدير" : "📊 Excel"}
+                </Button>
+                <Button onClick={() => exportInvoices("pdf")} disabled={invBusy !== ""} title="تصدير الفواتير لهذا النطاق إلى PDF">
+                  {invBusy === "pdf" ? "… جارٍ التصدير" : "📄 PDF"}
+                </Button>
+                <Button onClick={() => exportInvoices("print")} disabled={invBusy !== ""} title="طباعة الفواتير لهذا النطاق">
+                  {invBusy === "print" ? "… جارٍ التحضير" : "🖨️ طباعة"}
+                </Button>
+              </div>
+            </div>
             <div className="table-wrap">
               <table className="data-table">
                 <thead><tr>{["الرقم", "التاريخ", "النقلات", "الخطوط", "قبل الضريبة", "الضريبة", "الإجمالي", "المسدد", "المتبقي", "الحالة"].map((h, i) => <th key={i}>{h}</th>)}</tr></thead>
@@ -208,14 +279,14 @@ export default function CustomerFullReportPage() {
                       <td>
                         <button className="btn btn-sm" onClick={() => router.push(`/invoices/${v.id}`)}>{invoiceNumberLabel(v.number)}</button>
                       </td>
-                      <td>{v.date}</td>
-                      <td>{v.trips_count}</td>
-                      <td>{v.legs.length ? v.legs.join(" ، ") : "—"}</td>
-                      <td>{money(v.subtotal)}</td>
-                      <td>{money(v.vat_amount)}</td>
-                      <td>{money(v.total)}</td>
-                      <td>{money(v.paid)}</td>
-                      <td>{money(v.remaining)}</td>
+                      <td className="num">{v.date}</td>
+                      <td className="num">{v.trips_count}</td>
+                      <td className="data-cell-wrap">{v.legs.length ? v.legs.join(" ، ") : "—"}</td>
+                      <td className="num">{money(v.subtotal)}</td>
+                      <td className="num">{money(v.vat_amount)}</td>
+                      <td className="num">{money(v.total)}</td>
+                      <td className="num">{money(v.paid)}</td>
+                      <td className="num">{money(v.remaining)}</td>
                       <td>{STATUS_LABEL[v.status] ?? v.status}{v.in_range ? "" : " (خارج الفترة)"}</td>
                     </tr>
                   ))}
@@ -262,13 +333,13 @@ export default function CustomerFullReportPage() {
                   {rep.trips.map((t) => (
                     <tr key={t.trip_id}>
                       <td>{t.invoice_label}</td>
-                      <td>{t.date}</td>
-                      <td>{t.item_name}</td>
+                      <td className="num">{t.date}</td>
+                      <td className="data-cell-wrap">{t.item_name}</td>
                       <td>{t.from_loc || "—"}</td>
                       <td>{t.to_loc || "—"}</td>
-                      <td>{t.qty}</td>
-                      <td>{money(t.unit_price)}</td>
-                      <td>{money(t.amount)}</td>
+                      <td className="num">{t.qty}</td>
+                      <td className="num">{money(t.unit_price)}</td>
+                      <td className="num">{money(t.amount)}</td>
                       <td>{t.containers.length ? t.containers.join("، ") : "—"}</td>
                       <td>{t.vehicle_name || "—"}</td>
                       <td>{t.driver_name || "—"}</td>

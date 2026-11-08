@@ -1,13 +1,19 @@
 // تصدير التقرير الشامل للعميل: Excel متعدد الأوراق + PDF + طباعة.
 // الأقسام مبنية في دوال نقية قابلة للاختبار، ثم تُصيَّر إلى ملف/صفحة واحدة.
 
-import { buildReportHtml, buildTableHtml, exportPdfHtml, printHtml } from "./exporter";
-import { docOptions, printMeta } from "./exportHelper";
-import { getPrintSettings, printCss } from "./print";
+import { buildReportHtml, buildTableHtml, excelColumnWidth, exportPdfHtml, printHtml, sanitizeSheetName } from "./exporter";
+import { docOptions, exportPage, printMeta, type ExportMode } from "./exportHelper";
+import { getPrintSettings, pdfDocOptions, printCss } from "./print";
 import { companyInfo } from "./repo";
 import { money } from "./format";
 import { invoiceNumberLabel } from "./calc";
-import { balanceSideLabel, type CustomerFullReport } from "./customerReport";
+import {
+  balanceSideLabel,
+  invoiceRangeTotals,
+  invoiceScopeLabel,
+  type CustomerFullReport,
+  type CustomerReportInvoice,
+} from "./customerReport";
 
 export interface ReportSheet {
   /** اسم الورقة/القسم */
@@ -52,6 +58,7 @@ export function customerReportSheets(rep: CustomerFullReport): ReportSheet[] {
       ...customerDataLines(rep),
       ["", ""],
       ["— الملخص المالي للفترة —", `${rep.from} ← ${rep.to}`],
+      ["نطاق الفواتير والنقلات", invoiceScopeLabel(rep.invoice_scope)],
       ["رصيد افتتاحي (حتى بداية الفترة)", money(s.opening)],
       ["إجمالي الفواتير", money(s.invoiced)],
       ["إجمالي المقبوضات", money(s.collected)],
@@ -201,6 +208,7 @@ export function customerReportSummaryLines(rep: CustomerFullReport): [string, st
   const s = rep.summary;
   return [
     ["الفترة", `${rep.from} ← ${rep.to}`],
+    ["نطاق الفواتير والنقلات", invoiceScopeLabel(rep.invoice_scope)],
     ["رصيد افتتاحي", money(s.opening)],
     ["إجمالي الفواتير", money(s.invoiced)],
     ["إجمالي المقبوضات", money(s.collected)],
@@ -230,7 +238,7 @@ export async function customerReportHtml(rep: CustomerFullReport): Promise<strin
   const [info, ps, meta] = await Promise.all([companyInfo(), getPrintSettings(), printMeta()]);
   const sheets = customerReportSheets(rep);
   const title = `التقرير الشامل عن العميل - ${rep.customer?.name ?? ""}`;
-  const subtitle = `كود العميل: ${rep.customer?.code ?? "—"} | الفترة: من ${rep.from} إلى ${rep.to} | تاريخ التقرير: ${rep.generated_at}`;
+  const subtitle = `كود العميل: ${rep.customer?.code ?? "—"} | الفترة: من ${rep.from} إلى ${rep.to} | ${invoiceScopeLabel(rep.invoice_scope)} | تاريخ التقرير: ${rep.generated_at}`;
   const body = sheets
     .map((sh) => `<div class="doc-section"><h3 class="doc-section-title">${esc(sh.label)}</h3>${tableFor(sh)}</div>`)
     .join("");
@@ -268,7 +276,7 @@ export async function exportCustomerReportExcel(rep: CustomerFullReport): Promis
   const name = safeName(rep);
 
   for (const sh of customerReportSheets(rep)) {
-    const ws = wb.addWorksheet(sh.label.slice(0, 31));
+    const ws = wb.addWorksheet(sanitizeSheetName(sh.label));
     ws.views = [{ rightToLeft: true }];
     const nCols = Math.max(sh.headers.length, 2);
 
@@ -280,7 +288,10 @@ export async function exportCustomerReportExcel(rep: CustomerFullReport): Promis
 
     ws.mergeCells(2, 1, 2, nCols);
     const sub = ws.getCell(2, 1);
-    sub.value = `${sh.label} | الفترة: من ${rep.from} إلى ${rep.to}`;
+    const scopeNote = sh.label === "الفواتير" || sh.label === "النقلات"
+      ? ` | النطاق: ${invoiceScopeLabel(rep.invoice_scope)}`
+      : "";
+    sub.value = `${sh.label} | الفترة: من ${rep.from} إلى ${rep.to}${scopeNote}`;
     sub.font = { bold: true, size: 11 };
     sub.alignment = { horizontal: "center" };
 
@@ -314,11 +325,23 @@ export async function exportCustomerReportExcel(rep: CustomerFullReport): Promis
     }
 
     sh.headers.forEach((h, i) => {
-      let width = h.length;
-      for (const row of sh.rows) if (i < row.length) width = Math.max(width, String(row[i] ?? "").length);
-      ws.getColumn(i + 1).width = Math.min(Math.max(width + 4, 10), 45);
+      const values = sh.rows.map((row) => (i < row.length ? row[i] : ""));
+      ws.getColumn(i + 1).width = excelColumnWidth(values, h.length);
     });
+    if (sh.rows.length) {
+      ws.autoFilter = { from: { row: 3, column: 1 }, to: { row: 3, column: nCols } };
+    }
     ws.views = [{ rightToLeft: true, state: "frozen", ySplit: 3 }];
+    ws.pageSetup = {
+      paperSize: 9,
+      orientation: nCols > 6 ? "landscape" : "portrait",
+      fitToPage: true,
+      fitToWidth: 1,
+      fitToHeight: 0,
+      horizontalCentered: true,
+      printTitlesRow: "3:3",
+      margins: { left: 0.3, right: 0.3, top: 0.5, bottom: 0.5, header: 0.2, footer: 0.25 },
+    };
   }
 
   const buffer = await wb.xlsx.writeBuffer();
@@ -329,11 +352,83 @@ export async function exportCustomerReportExcel(rep: CustomerFullReport): Promis
 }
 
 export async function exportCustomerReportPdf(rep: CustomerFullReport): Promise<void> {
-  const html = await customerReportHtml(rep);
-  await exportPdfHtml(html, `${safeName(rep)}.pdf`);
+  const [html, ps, meta] = await Promise.all([customerReportHtml(rep), getPrintSettings(), printMeta()]);
+  await exportPdfHtml(html, `${safeName(rep)}.pdf`, pdfDocOptions(ps, {
+    title: `التقرير الشامل عن العميل - ${rep.customer?.name ?? ""}`,
+    printedBy: meta.printedBy,
+    printedAt: meta.printedAt,
+  }));
 }
 
 export async function printCustomerReport(rep: CustomerFullReport): Promise<void> {
   const [html, ps] = await Promise.all([customerReportHtml(rep), getPrintSettings()]);
   printHtml(html, safeName(rep), { css: printCss(ps), watermark: ps.watermark });
+}
+
+// ---------------------------------------------------------------------------
+// تصدير الفواتير وحدها لنطاق تاريخي مستقل (من تاريخ → إلى تاريخ)
+// ---------------------------------------------------------------------------
+
+export const INVOICE_EXPORT_HEADERS = [
+  "رقم الفاتورة", "التاريخ", "عدد النقلات", "الخطوط", "قبل الضريبة",
+  "الضريبة", "الإجمالي", "المسدد", "المتبقي", "الحالة",
+];
+
+/** صفوف جدول تصدير الفواتير — دالة نقية قابلة للاختبار. */
+export function invoiceExportRows(invoices: CustomerReportInvoice[]): (string | number)[][] {
+  return invoices.map((v) => [
+    invoiceNumberLabel(v.number),
+    v.date,
+    v.trips_count,
+    v.legs.length ? v.legs.join(" ، ") : "—",
+    money(v.subtotal),
+    money(v.vat_amount),
+    money(v.total),
+    money(v.paid),
+    money(v.remaining),
+    STATUS_LABEL[v.status] ?? v.status,
+  ]);
+}
+
+/** سطور الملخص التي تظهر أعلى ملف الفواتير المصدَّر. */
+export function invoiceRangeSummaryLines(
+  invoices: CustomerReportInvoice[],
+  from: string,
+  to: string
+): [string, string | number][] {
+  const t = invoiceRangeTotals(invoices);
+  return [
+    ["الفترة", `${from || "—"} ← ${to || "—"}`],
+    ["عدد الفواتير", t.count],
+    ["قبل الضريبة", money(t.subtotal)],
+    ["الضريبة", money(t.vat_amount)],
+    ["الإجمالي", money(t.total)],
+    ["المسدد", money(t.paid)],
+    ["المتبقي", money(t.remaining)],
+  ];
+}
+
+/**
+ * تصدير فواتير العميل لنطاق محدد فقط (Excel / PDF / طباعة).
+ * النطاق هنا مستقل عن فترة التقرير الشامل، فلا حاجة لتغيير «من/إلى» أعلى الصفحة.
+ */
+export async function exportCustomerInvoicesRange(opts: {
+  customerName: string;
+  from: string;
+  to: string;
+  invoices: CustomerReportInvoice[];
+  mode: ExportMode;
+}): Promise<number> {
+  const { customerName, from, to, invoices, mode } = opts;
+  const title = `فواتير العميل - ${customerName || "العميل"}`;
+  const subtitle = `الفترة: من ${from || "—"} إلى ${to || "—"} | عدد الفواتير: ${invoices.length}`;
+  await exportPage({
+    title,
+    subtitle,
+    headers: INVOICE_EXPORT_HEADERS,
+    rows: invoiceExportRows(invoices),
+    summaryLines: invoiceRangeSummaryLines(invoices, from, to),
+    mode,
+  });
+  return invoices.length;
 }

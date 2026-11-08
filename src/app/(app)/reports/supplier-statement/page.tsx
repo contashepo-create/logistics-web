@@ -6,6 +6,7 @@ import { PageFrame, Spinner, ExportBar, TotalsBar, FilterRow, DictSelect } from 
 import { listSuppliers, supplierStatement } from "@/lib/suppliers";
 import { money, todayIso } from "@/lib/format";
 import { exportPage } from "@/lib/exportHelper";
+import { isValidDateRange } from "@/lib/dateRange";
 
 function yearStart(): string {
   return `${new Date().getFullYear()}-01-01`;
@@ -21,7 +22,7 @@ export default function SupplierStatementPage() {
   const { data: st, isLoading } = useQuery({
     queryKey: ["report-supp-stmt", supplierId, dFrom, dTo],
     queryFn: () => (supplierId ? supplierStatement(supplierId, dFrom, dTo) : null),
-    enabled: !!supplierId,
+    enabled: !!supplierId && isValidDateRange(dFrom, dTo),
   });
 
   const headers = ["التاريخ", "المستند", "البيان", "مشتريات (له)", "مدفوعات (عليه)", "الرصيد"];

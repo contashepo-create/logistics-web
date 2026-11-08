@@ -4,6 +4,9 @@ import { describe, it, expect } from "vitest";
 import {
   customerReportSheets,
   customerReportSummaryLines,
+  invoiceExportRows,
+  invoiceRangeSummaryLines,
+  INVOICE_EXPORT_HEADERS,
   type ReportSheet,
 } from "@/lib/customerReportExport";
 import type { CustomerFullReport } from "@/lib/customerReport";
@@ -31,6 +34,7 @@ function fixture(): CustomerFullReport {
     },
     from: "2026-01-01",
     to: "2026-03-31",
+    invoice_scope: "period",
     generated_at: "2026-03-31 12:00",
     summary: {
       opening: 1690,
@@ -204,6 +208,35 @@ describe("customerReportSheets — التقرير الشامل للعميل", ()
     expect(lines.find(([k]) => k === "رصيد الإقفال")![1]).toBe("1,765.00 (مستحق على العميل)");
     expect(lines.find(([k]) => k === "إشعارات مدينة / دائنة")![1]).toBe("115.00 / 2,300.00");
     expect(lines.find(([k]) => k === "عدد النقلات / إجمالي الكميات")![1]).toBe("5 / 9");
+  });
+
+  it("يوضّح نطاق الفواتير في الملخص وفي ورقة بيانات العميل", () => {
+    const rep = fixture();
+    expect(customerReportSummaryLines(rep).find(([k]) => k === "نطاق الفواتير والنقلات")![1])
+      .toBe("الفواتير داخل الفترة المحددة");
+    const dataText = customerReportSheets(rep)[0].rows.map((r) => r.join(" | ")).join("\n");
+    expect(dataText).toContain("نطاق الفواتير والنقلات | الفواتير داخل الفترة المحددة");
+
+    rep.invoice_scope = "all";
+    expect(customerReportSummaryLines(rep).find(([k]) => k === "نطاق الفواتير والنقلات")![1])
+      .toBe("كل الفواتير حتى نهاية الفترة");
+  });
+
+  it("تصدير الفواتير لنطاق: الأعمدة والصفوف والإجماليات", () => {
+    const invoices = fixture().invoices;
+    const rows = invoiceExportRows(invoices);
+    expect(rows).toHaveLength(1);
+    expect(rows[0]).toEqual([
+      "INV-00012", "2026-01-05", 2, "الرياض ← الدمام",
+      "1,000.00", "150.00", "1,150.00", "500.00", "650.00", "مسددة جزئياً",
+    ]);
+    for (const row of rows) expect(row.length).toBe(INVOICE_EXPORT_HEADERS.length);
+
+    const summary = invoiceRangeSummaryLines(invoices, "2026-01-01", "2026-01-31");
+    expect(summary.find(([k]) => k === "الفترة")![1]).toBe("2026-01-01 ← 2026-01-31");
+    expect(summary.find(([k]) => k === "عدد الفواتير")![1]).toBe(1);
+    expect(summary.find(([k]) => k === "الإجمالي")![1]).toBe("1,150.00");
+    expect(summary.find(([k]) => k === "المتبقي")![1]).toBe("650.00");
   });
 
   it("يتعامل مع عميل بلا أي حركات دون أخطاء", () => {
