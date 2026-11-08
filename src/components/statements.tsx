@@ -1,5 +1,6 @@
 "use client";
 
+import { assertDateRange } from "@/lib/dateRange";
 import { useEffect, useState } from "react";
 import { Modal, DateInput, Button, ExportBar, Balance } from "@/components/ui";
 import { notify } from "@/components/toast";
@@ -25,14 +26,30 @@ export function CustomerStatementDialog({ customerId, onClose }: {
   const [st, setSt] = useState<CustomerStatementFull | null>(null);
   const owner = st?.customer ? `${st.customer.code} - ${st.customer.name}` : "—";
 
-  const load = async () => setSt(await customerStatementFull(customerId, dFrom, dTo));
+  const load = async () => {
+    try {
+      assertDateRange(dFrom, dTo);
+      setSt(await customerStatementFull(customerId, dFrom, dTo));
+    } catch (error) {
+      notify(error instanceof Error ? error.message : String(error), "error");
+    }
+  };
   useEffect(() => { load(); }, [customerId]);
 
   const headers = ["التاريخ", "المستند", "البيان", "مدين (عليه)", "دائن (له)", "الرصيد"];
-  const textRows = (st?.rows ?? []).map((r) => [
-    r.date, r.doc, r.detail ? `${r.desc} — ${r.detail}` : r.desc,
-    r.debit ? money(r.debit) : "", r.credit ? money(r.credit) : "", money(r.balance),
-  ]);
+  const textRows: (string | number)[][] = [
+    [st?.from ?? dFrom, "رصيد افتتاحي", "رصيد ما قبل الفترة (افتتاحي)", "", "", money(st?.opening ?? 0)],
+    ...(st?.rows ?? []).map((r) => [
+      r.date, r.doc, r.detail ? `${r.desc} — ${r.detail}` : r.desc,
+      r.debit ? money(r.debit) : "", r.credit ? money(r.credit) : "", money(r.balance),
+    ]),
+    [
+      "", "الإجماليات", `${st?.rows.length ?? 0} حركة معروضة`,
+      money((st?.invoiced ?? 0) + (st?.notes_debit ?? 0)),
+      money((st?.collected ?? 0) + (st?.notes_credit ?? 0)),
+      money(st?.closing ?? 0),
+    ],
+  ];
 
   const doExport = async (mode: "excel" | "pdf" | "print") => {
     if (!st) return;
@@ -148,13 +165,29 @@ export function AccountStatementDialog({ kind, accountId, onClose }: {
     const a = await getAccount(kind, accountId);
     const kindLabel = kind === "cashbox" ? "خزينة" : "بنك";
     if (a) setOwner(`${kindLabel}: ${a.code} - ${a.name}`);
-    setSt(await accountStatement(kind, accountId, dFrom, dTo));
+    try {
+      assertDateRange(dFrom, dTo);
+      setSt(await accountStatement(kind, accountId, dFrom, dTo));
+    } catch (error) {
+      notify(error instanceof Error ? error.message : String(error), "error");
+    }
   };
 
   useEffect(() => { load(); }, [kind, accountId]);
 
   const headers = ["التاريخ", "المستند", "البيان", "وارد", "منصرف", "الرصيد"];
-  const rows = (st?.rows ?? []).map((r) => [r.date, r.doc, r.desc, money(r.in), money(r.out), money(r.balance)]);
+  const moves = st?.rows ?? [];
+  const totalIn = moves.reduce((a, r) => a + r.in, 0);
+  const totalOut = moves.reduce((a, r) => a + r.out, 0);
+  // صفوف التصدير تبدأ بالرصيد الافتتاحي وتنتهي بالإجماليات، والخانات الصفرية تُترك فارغة.
+  const rows: (string | number)[][] = [
+    [dFrom, "رصيد افتتاحي", "الرصيد قبل الفترة (افتتاحي)", "", "", money(st?.opening ?? 0)],
+    ...moves.map((r) => [
+      r.date, r.doc, r.desc,
+      r.in ? money(r.in) : "", r.out ? money(r.out) : "", money(r.balance),
+    ]),
+    ["", "الإجماليات", `${moves.length} حركة معروضة`, money(totalIn), money(totalOut), money(st?.closing ?? 0)],
+  ];
 
   const doExport = async (mode: "excel" | "pdf" | "print") => {
     const [info, ps, meta] = await Promise.all([companyInfo(), getPrintSettings(), printMeta()]);
@@ -163,8 +196,8 @@ export function AccountStatementDialog({ kind, accountId, onClose }: {
     const summary: [string, string][] = [
       ["الحساب", owner],
       ["الرصيد الافتتاحي", money(st?.opening ?? 0)],
-      ["إجمالي الوارد", money((st?.rows ?? []).reduce((a, r) => a + r.in, 0))],
-      ["إجمالي المنصرف", money((st?.rows ?? []).reduce((a, r) => a + r.out, 0))],
+      ["إجمالي الوارد", money(totalIn)],
+      ["إجمالي المنصرف", money(totalOut)],
       ["الرصيد الحالي", money(st?.closing ?? 0)],
     ];
     if (mode === "excel") {
@@ -190,14 +223,45 @@ export function AccountStatementDialog({ kind, accountId, onClose }: {
       </div>
       <div className="table-wrap">
         <table className="data-table">
-          <thead><tr>{headers.map((h, i) => <th key={i}>{h}</th>)}</tr></thead>
+          <thead>
+            <tr>
+              <th className="num">التاريخ</th>
+              <th>المستند</th>
+              <th style={{ textAlign: "right" }}>البيان</th>
+              <th className="num">وارد</th>
+              <th className="num">منصرف</th>
+              <th className="num">الرصيد</th>
+            </tr>
+          </thead>
           <tbody>
-            {rows.map((r, i) => <tr key={i}>{r.map((c, j) => <td key={j}>{c}</td>)}</tr>)}
-            <tr style={{ fontWeight: 700 }}>
-              <td></td><td>الإجمالي / الرصيد النهائي</td><td></td>
-              <td>{money((st?.rows ?? []).reduce((a, r) => a + r.in, 0))}</td>
-              <td>{money((st?.rows ?? []).reduce((a, r) => a + r.out, 0))}</td>
-              <td>{money(st?.closing ?? 0)}</td>
+            <tr className="stmt-opening">
+              <td className="num">{dFrom}</td>
+              <td>—</td>
+              <td className="data-cell-wrap">رصيد ما قبل الفترة (افتتاحي)</td>
+              <td className="num">—</td>
+              <td className="num">—</td>
+              <td className="num">{money(st?.opening ?? 0)}</td>
+            </tr>
+            {moves.map((r, i) => (
+              <tr key={i}>
+                <td className="num">{r.date}</td>
+                <td>{r.doc}</td>
+                <td className="data-cell-wrap">{r.desc}</td>
+                <td className="num">{r.in ? money(r.in) : "—"}</td>
+                <td className="num">{r.out ? money(r.out) : "—"}</td>
+                <td className="num" style={{ fontWeight: 700 }}>{money(r.balance)}</td>
+              </tr>
+            ))}
+            {!moves.length && (
+              <tr><td colSpan={headers.length} style={{ color: "var(--muted)" }}>لا توجد حركات في هذه الفترة</td></tr>
+            )}
+            <tr className="total-row">
+              <td className="num"></td>
+              <td>الإجماليات</td>
+              <td className="data-cell-wrap">{moves.length} حركة معروضة</td>
+              <td className="num">{money(totalIn)}</td>
+              <td className="num">{money(totalOut)}</td>
+              <td className="num">{money(st?.closing ?? 0)}</td>
             </tr>
           </tbody>
         </table>

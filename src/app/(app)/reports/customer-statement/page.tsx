@@ -9,6 +9,7 @@ import { listCustomers } from "@/lib/repo";
 import { itemOptions } from "@/lib/items";
 import { money, todayIso } from "@/lib/format";
 import { exportPage } from "@/lib/exportHelper";
+import { isValidDateRange } from "@/lib/dateRange";
 import { notify } from "@/components/toast";
 
 function yearStart(): string { return `${new Date().getFullYear()}-01-01`; }
@@ -46,7 +47,7 @@ export default function CustomerStatementReportPage() {
     queryKey: ["report-cust-stmt", customerId, dFrom, dTo, filters],
     queryFn: () => customerId ? customerStatement(customerId, dFrom, dTo, filters) : null,
     placeholderData: keepPreviousData,
-    enabled: !!customerId,
+    enabled: !!customerId && isValidDateRange(dFrom, dTo),
   });
 
   const headers = ["التاريخ", "المستند", "البيان", "التفاصيل", "مدين (عليه)", "دائن (له)", "الرصيد"];

@@ -9,6 +9,7 @@
 import { supabase } from "./supabase";
 import { translateDbError } from "./db";
 import { RuleError, positiveId } from "./rules";
+import { assertDateRange } from "./dateRange";
 import {
   customerAllocations,
   customerBalance,
@@ -199,6 +200,7 @@ export async function customerFullReport(
   filters?: StatementFilters,
   options?: CustomerReportOptions
 ): Promise<CustomerFullReport | null> {
+  assertDateRange(dFrom, dTo);
   const id = positiveId(customerId, "العميل");
   const invoiceScope: CustomerInvoiceScope = options?.invoiceScope === "all" ? "all" : "period";
 
@@ -558,10 +560,9 @@ export async function customerInvoicesInRange(
   to: string
 ): Promise<CustomerReportInvoice[]> {
   const id = positiveId(customerId, "العميل");
+  assertDateRange(from, to, { required: true });
   const start = String(from ?? "").trim();
   const end = String(to ?? "").trim();
-  if (!start || !end) throw new RuleError("حدّد تاريخ البداية والنهاية لتصدير الفواتير.");
-  if (start > end) throw new RuleError("تاريخ البداية يجب أن يكون قبل تاريخ النهاية.");
 
   const { data: invRows, error } = await supabase
     .from("invoices")

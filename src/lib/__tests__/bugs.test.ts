@@ -109,11 +109,19 @@ describe("ترتيب كشف حساب العميل (حركات بنفس التا�
 });
 
 describe("فترات معكوسة / مستقبلية", () => {
-  it("كشف بفترة معكوسة (من > إلى) لا يُرجع صفوفاً", async () => {
+  it("كشف بفترة معكوسة (من > إلى) يُرفض برسالة عربية واضحة بدل نتيجة فارغة صامتة", async () => {
     setup();
     await repo.saveYear({ year: 2026, date_from: "2026-01-01", date_to: "2026-12-31" });
     const cust = await repo.saveCustomer({ name: "شركة العميل", opening_balance: 0 });
-    const st = await calc.customerStatement(cust, "2026-12-31", "2026-01-01");
+    await expect(calc.customerStatement(cust, "2026-12-31", "2026-01-01"))
+      .rejects.toThrow(/تاريخ البداية يجب أن يكون قبل تاريخ النهاية/);
+  });
+
+  it("فترة مستقبلية صالحة تُرجع كشفاً فارغاً بلا أخطاء (لا حركات)", async () => {
+    setup();
+    await repo.saveYear({ year: 2026, date_from: "2026-01-01", date_to: "2026-12-31" });
+    const cust = await repo.saveCustomer({ name: "شركة العميل", opening_balance: 0 });
+    const st = await calc.customerStatement(cust, "2027-01-01", "2027-12-31");
     expect(st.rows).toHaveLength(0);
   });
 });

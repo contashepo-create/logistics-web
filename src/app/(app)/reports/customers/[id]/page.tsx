@@ -17,6 +17,7 @@ import {
 import { statementFiltersLabel, STATEMENT_DOC_TYPES, invoiceNumberLabel, type StatementFilters, type StatementDocType } from "@/lib/calc";
 import { itemOptions } from "@/lib/items";
 import { money, todayIso } from "@/lib/format";
+import { isValidDateRange } from "@/lib/dateRange";
 
 function yearStart(): string { return `${new Date().getFullYear()}-01-01`; }
 
@@ -66,7 +67,7 @@ export default function CustomerFullReportPage() {
     queryKey: ["report-customer-full", customerId, dFrom, dTo, filters, scope],
     queryFn: () => customerFullReport(customerId, dFrom, dTo, filters, { invoiceScope: scope }),
     placeholderData: keepPreviousData,
-    enabled: Number.isFinite(customerId) && customerId > 0,
+    enabled: Number.isFinite(customerId) && customerId > 0 && isValidDateRange(dFrom, dTo),
   });
 
   const s = rep?.summary;

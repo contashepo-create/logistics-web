@@ -8,6 +8,7 @@ import { itemUsageReport, isRouteItem } from "@/lib/items";
 import { invoiceNumberLabel } from "@/lib/calc";
 import { money, todayIso } from "@/lib/format";
 import { exportPage } from "@/lib/exportHelper";
+import { isValidDateRange } from "@/lib/dateRange";
 
 function yearStart(): string { return `${new Date().getFullYear()}-01-01`; }
 
@@ -24,7 +25,7 @@ export default function ItemReportPage() {
     queryKey: ["report-item", id, dFrom, dTo],
     queryFn: () => itemUsageReport(id, dFrom, dTo),
     placeholderData: keepPreviousData,
-    enabled: Number.isFinite(id) && id > 0,
+    enabled: Number.isFinite(id) && id > 0 && isValidDateRange(dFrom, dTo),
   });
 
   const item = data?.item ?? null;

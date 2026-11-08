@@ -7,6 +7,7 @@ import { vehicleReport } from "@/lib/calc";
 import { listVehicles } from "@/lib/repo";
 import { money, todayIso } from "@/lib/format";
 import { exportPage } from "@/lib/exportHelper";
+import { isValidDateRange } from "@/lib/dateRange";
 
 function yearStart(): string { return `${new Date().getFullYear()}-01-01`; }
 
@@ -21,6 +22,7 @@ export default function VehiclesReportPage() {
     queryKey: ["report-vehicles", dFrom, dTo, vehicleId],
     queryFn: () => vehicleReport(dFrom, dTo, vehicleId),
     placeholderData: keepPreviousData,
+    enabled: isValidDateRange(dFrom, dTo),
   });
 
   const headers = ["الكود", "رقم اللوحة", "النوع", "عدد النقلات", "الإيرادات", "مصروفات مباشرة", "صيانة (سندات دفع)", "مشتريات محمّلة", "صافي ربحية السيارة"];

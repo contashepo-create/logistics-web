@@ -1,6 +1,7 @@
 // محرك الحسابات: الأرصدة اللحظية، كشوف الحساب، التقارير، ولقطات الإغلاق.
 // مكافئ حرفي لـ app/core/calc.py — الأرصدة تُحسب دائماً من الحركات.
 
+import { assertDateRange } from "./dateRange";
 import { supabase } from "./supabase";
 import { PAYMENT_TYPES, EXPENSE_TYPES, PURCHASE_EXPENSE_CATEGORIES, money, periodLabel, normalizeDigits } from "./format";
 import type {
@@ -965,6 +966,7 @@ export async function customerStatement(
   dTo: string,
   filters?: StatementFilters
 ): Promise<CustomerStatementResult> {
+  assertDateRange(dFrom, dTo);
   const opening = await customerBalance(customerId, dFrom);
 
   const { data: invRows } = await supabase
@@ -1281,6 +1283,7 @@ export async function customerStatementFull(
   dFrom: string,
   dTo: string
 ): Promise<CustomerStatementFull> {
+  assertDateRange(dFrom, dTo);
   const { data: cust } = await supabase.from("customers").select("*").eq("id", customerId).single();
   const opening = await customerBalance(customerId, dFrom);
   const alloc = await customerAllocations(customerId);
@@ -1410,6 +1413,7 @@ export async function accountStatement(
   dFrom: string,
   dTo: string
 ): Promise<{ opening: number; rows: AccountStmtRow[]; closing: number }> {
+  assertDateRange(dFrom, dTo);
   const opening = await accountBalance(kind, accountId, dFrom);
   const rows: AccountStmtRow[] = [];
 
@@ -1521,6 +1525,7 @@ export async function tripProfitsReport(
   dTo?: string | null,
   customerId?: number | null
 ): Promise<Record<string, unknown>[]> {
+  assertDateRange(dFrom, dTo);
   let q = supabase.from("invoices").select("id, number, date, customer_id");
   if (dFrom) q = q.gte("date", dFrom);
   if (dTo) q = q.lte("date", dTo);
@@ -1967,6 +1972,7 @@ export async function employeeStatement(
   allowances: Record<string, unknown>[];
   totals: Record<string, number>;
 }> {
+  assertDateRange(dFrom, dTo);
   let salQ = supabase.from("payrolls").select("*").eq("employee_id", employeeId).order("date").order("id");
   if (dFrom) salQ = salQ.gte("date", dFrom);
   if (dTo) salQ = salQ.lte("date", dTo);
@@ -2108,6 +2114,7 @@ export async function vehicleReport(
   dTo?: string | null,
   vehicleId?: number | null
 ): Promise<Record<string, unknown>[]> {
+  assertDateRange(dFrom, dTo);
   let vehQ = supabase.from("vehicles").select("*").order("code");
   const { data: vehicles } = await vehQ;
 
@@ -2190,6 +2197,7 @@ export async function pnlReport(
   dFrom?: string | null,
   dTo?: string | null
 ): Promise<Record<string, number>> {
+  assertDateRange(dFrom, dTo);
   const between = <T,>(q: T, col: string): T => {
     let r = q as any;
     if (dFrom) r = r.gte(col, dFrom);

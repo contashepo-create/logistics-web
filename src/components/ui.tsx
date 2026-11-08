@@ -1,5 +1,6 @@
 "use client";
 
+import { DATE_RANGE_ERROR, isValidDateRange } from "@/lib/dateRange";
 import React, { useEffect, useRef, useState } from "react";
 import { money, normalizeDigits, parseFloatSafe, balanceSide, balanceSideLabel } from "@/lib/format";
 
@@ -276,9 +277,9 @@ export function FilterRow({
       </div>
       {children}
       <Button variant="primary" onClick={onRefresh}>🔄 عرض</Button>
-      {!!dFrom && !!dTo && dFrom > dTo && (
+      {!!dFrom && !!dTo && !isValidDateRange(dFrom, dTo) && (
         <div style={{ color: "var(--danger)", fontSize: 12.5, alignSelf: "center", fontWeight: 600 }}>
-          ⚠️ تاريخ البداية بعد تاريخ النهاية — لن تظهر أي حركة
+          ⚠️ {DATE_RANGE_ERROR} لن تُنفَّذ أي حركة على البيانات حتى تصحيح الفترة.
         </div>
       )}
     </div>

@@ -6,6 +6,7 @@
 //     فيبقى مطابقاً دائماً ولا يحتاج أي ترحيل أرصدة.
 //   • تقريران: تقرير مجمّع لكل الأصناف/الخدمات، وتقرير تفصيلي لكل خدمة.
 
+import { assertDateRange } from "./dateRange";
 import { supabase } from "./supabase";
 import { translateDbError } from "./db";
 import { RuleError, boundedNumber, positiveId, roundMoney, txt } from "./rules";
@@ -287,6 +288,7 @@ export async function itemsUsageReport(
   dTo: string,
   options?: { customerId?: number | null }
 ): Promise<ItemsUsageReport> {
+  assertDateRange(dFrom, dTo);
   const customerFilter = options?.customerId != null ? positiveId(options.customerId, "العميل") : null;
   const [itemsRes, customersRes, invRes] = await Promise.all([
     supabase.from("items").select("*").order("item_type").order("name"),
