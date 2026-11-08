@@ -321,6 +321,9 @@ export function printCss(input: PrintSettings): string {
     ${zebra}
     ${zebra ? "tbody tr.doc-total-row td { background: #e8eef7 !important; font-weight: 800; }" : "tbody tr.doc-total-row td { font-weight: 800; }"}
     tbody tr.doc-open-row td { background: #eef2f7; font-weight: 800; }
+    /* جداول التخطيط (ترويسة/بطاقات/توقيع) لا ترسم حدوداً ولا خلفيات جدولية */
+    table.doc-plain, table.doc-plain td, table.doc-plain th { border: none !important; background: transparent !important; }
+    table.doc-plain thead th { background: transparent !important; color: inherit; }
     .doc-foot { margin-top: 10px; font-size: ${size(-1)}; color: #33475b; text-align: center; }
     .doc-sign { margin-top: ${t === "compact" ? 16 : 26}px; text-align: left; font-size: ${size(-0.5)}; }
     .doc-sign span { display: inline-block; border-top: 1px solid #64748b; padding-top: 4px; min-width: 180px; text-align: center; }

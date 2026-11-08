@@ -44,6 +44,7 @@ const DEFAULT_CSS = `
 .doc-root thead th, .doc-root thead td { background: #1f4e79; color: #fff; font-weight: 800; text-align: center; }
 .doc-root td.doc-cell-text { white-space: normal; overflow-wrap: anywhere; text-align: right; }
 .doc-root td.doc-cell-num, .doc-root th.doc-cell-num { white-space: nowrap; text-align: center; direction: ltr; font-variant-numeric: tabular-nums; }
+.doc-root table.doc-plain, .doc-root table.doc-plain td, .doc-root table.doc-plain th { border: none !important; background: transparent !important; }
 .doc-root .doc-title { text-align: center; font-size: 16pt; font-weight: 800; margin: 8px 0 2px; }
 .doc-root .doc-sub { text-align: center; color: #33475b; margin-bottom: 8px; }
 .doc-root .doc-company { font-size: 15pt; font-weight: 800; text-align: center; }

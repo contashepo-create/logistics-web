@@ -73,7 +73,9 @@ export function isNumericCell(value: unknown): boolean {
 export function buildTableHtml(
   headers: string[],
   rows: (string | number)[][],
-  centerFrom?: number | null
+  centerFrom?: number | null,
+  /** أصناف صفوف اختيارية (مثل doc-open-row للرصيد الافتتاحي وdoc-total-row للإجماليات). */
+  rowClasses?: (string | null | undefined)[]
 ): string {
   const numericCol = headers.map((_, i) => {
     const sample = rows.slice(0, 40).map((r) => r[i]).filter((v) => String(v ?? "").trim() !== "");
@@ -93,8 +95,9 @@ export function buildTableHtml(
     out.push(`<th align='center' class='${numericCol[i] ? "doc-cell-num" : "doc-cell-text"}'>${esc(h)}</th>`);
   });
   out.push("</tr></thead><tbody>");
-  rows.forEach((row) => {
-    out.push("<tr>");
+  rows.forEach((row, r) => {
+    const cls = rowClasses?.[r];
+    out.push(cls ? `<tr class='${esc(cls)}'>` : "<tr>");
     headers.forEach((_, c) => {
       const value = row[c];
       out.push(`<td align='${alignOf(c)}' class='${cellClass(c)}'>${esc(value)}</td>`);
@@ -159,6 +162,34 @@ function safeFilename(name: string): string {
   return (clean || "export").slice(0, 120);
 }
 
+/**
+ * اسم ورقة Excel صالح: يمنع المحارف الممنوعة (\ / ? * [ ] :) ويقصّ إلى 31 حرفاً
+ * (حد Excel) بدل أن يرفض الملف أو يُعيد تسميته تلقائياً.
+ */
+export function sanitizeSheetName(title: string, fallback = "تقرير"): string {
+  const clean = String(title ?? "")
+    .replace(/[\\/?*[\]:]/g, " ")
+    .replace(/['"]/g, "")
+    .replace(/\s+/g, " ")
+    .trim();
+  return (clean || fallback).slice(0, 31);
+}
+
+/** عرض تقريبي للنص داخل خلية Excel (العربية أعرض من الأرقام قليلاً). */
+function displayWidth(value: unknown): number {
+  const s = String(value ?? "");
+  let w = 0;
+  for (const ch of s) w += /[\u0600-\u06FF]/.test(ch) ? 1.15 : 1;
+  return w;
+}
+
+/** عرض عمود مناسب لبياناته (لا يقل عن 9 ولا يتجاوز 42 حرفاً). */
+export function excelColumnWidth(values: unknown[], header = 0, min = 9, max = 42): number {
+  let w = displayWidth(header);
+  for (const v of values) w = Math.max(w, displayWidth(v));
+  return Math.min(Math.max(Math.ceil(w) + 3, min), max);
+}
+
 function downloadBlob(blob: Blob, name: string): void {
   const url = URL.createObjectURL(blob);
   const a = document.createElement("a");
@@ -184,7 +215,7 @@ export async function exportExcel(opts: {
   const defaultName = safeFilename(opts.defaultName ?? `${title}.xlsx`);
 
   const wb = new ExcelJS.Workbook();
-  const ws = wb.addWorksheet("تقرير");
+  const ws = wb.addWorksheet(sanitizeSheetName(title));
   ws.views = [{ rightToLeft: true }];
 
   const nCols = Math.max(headers.length, 2);
@@ -247,14 +278,30 @@ export async function exportExcel(opts: {
   }
 
   headers.forEach((h, i) => {
-    let width = h.length;
-    for (const row of rows) {
-      if (i < row.length) width = Math.max(width, String(row[i] ?? "").length);
-    }
-    ws.getColumn(i + 1).width = Math.min(Math.max(width + 4, 10), 40);
+    const values = rows.map((row) => (i < row.length ? row[i] : ""));
+    ws.getColumn(i + 1).width = excelColumnWidth(values, h.length);
   });
 
+  // فلترة تلقائية على صف الرؤوس: المستخدم يصفّي/يفرز داخل الملف نفسه
+  if (rows.length) {
+    ws.autoFilter = { from: { row: headerRow, column: 1 }, to: { row: headerRow, column: nCols } };
+  }
+
+  // تثبيت الرؤوس + إعداد طباعة A4 (عرضي عند كثرة الأعمدة) مع تكرار الرؤوس في كل صفحة
   ws.views = [{ rightToLeft: true, state: "frozen", ySplit: headerRow }];
+  ws.pageSetup = {
+    paperSize: 9, // A4
+    orientation: nCols > 6 ? "landscape" : "portrait",
+    fitToPage: true,
+    fitToWidth: 1,
+    fitToHeight: 0,
+    horizontalCentered: true,
+    printTitlesRow: `${headerRow}:${headerRow}`,
+    margins: { left: 0.3, right: 0.3, top: 0.5, bottom: 0.5, header: 0.2, footer: 0.25 },
+  };
+  ws.headerFooter = {
+    oddFooter: `&C&"IBM Plex Sans Arabic,Regular"&8صفحة &P من &N`,
+  };
 
   const buffer = await wb.xlsx.writeBuffer();
   downloadBlob(new Blob([buffer], { type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" }), defaultName.endsWith(".xlsx") ? defaultName : `${defaultName}.xlsx`);

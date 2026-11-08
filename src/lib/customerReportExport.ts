@@ -1,7 +1,7 @@
 // تصدير التقرير الشامل للعميل: Excel متعدد الأوراق + PDF + طباعة.
 // الأقسام مبنية في دوال نقية قابلة للاختبار، ثم تُصيَّر إلى ملف/صفحة واحدة.
 
-import { buildReportHtml, buildTableHtml, exportPdfHtml, printHtml } from "./exporter";
+import { buildReportHtml, buildTableHtml, excelColumnWidth, exportPdfHtml, printHtml, sanitizeSheetName } from "./exporter";
 import { docOptions, exportPage, printMeta, type ExportMode } from "./exportHelper";
 import { getPrintSettings, pdfDocOptions, printCss } from "./print";
 import { companyInfo } from "./repo";
@@ -276,7 +276,7 @@ export async function exportCustomerReportExcel(rep: CustomerFullReport): Promis
   const name = safeName(rep);
 
   for (const sh of customerReportSheets(rep)) {
-    const ws = wb.addWorksheet(sh.label.slice(0, 31));
+    const ws = wb.addWorksheet(sanitizeSheetName(sh.label));
     ws.views = [{ rightToLeft: true }];
     const nCols = Math.max(sh.headers.length, 2);
 
@@ -325,11 +325,23 @@ export async function exportCustomerReportExcel(rep: CustomerFullReport): Promis
     }
 
     sh.headers.forEach((h, i) => {
-      let width = h.length;
-      for (const row of sh.rows) if (i < row.length) width = Math.max(width, String(row[i] ?? "").length);
-      ws.getColumn(i + 1).width = Math.min(Math.max(width + 4, 10), 45);
+      const values = sh.rows.map((row) => (i < row.length ? row[i] : ""));
+      ws.getColumn(i + 1).width = excelColumnWidth(values, h.length);
     });
+    if (sh.rows.length) {
+      ws.autoFilter = { from: { row: 3, column: 1 }, to: { row: 3, column: nCols } };
+    }
     ws.views = [{ rightToLeft: true, state: "frozen", ySplit: 3 }];
+    ws.pageSetup = {
+      paperSize: 9,
+      orientation: nCols > 6 ? "landscape" : "portrait",
+      fitToPage: true,
+      fitToWidth: 1,
+      fitToHeight: 0,
+      horizontalCentered: true,
+      printTitlesRow: "3:3",
+      margins: { left: 0.3, right: 0.3, top: 0.5, bottom: 0.5, header: 0.2, footer: 0.25 },
+    };
   }
 
   const buffer = await wb.xlsx.writeBuffer();

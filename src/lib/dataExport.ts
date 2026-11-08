@@ -3,6 +3,8 @@
 
 import { exportCompanyData } from "./subscription";
 import { money } from "./format";
+import { buildTableHtml, esc, excelColumnWidth, exportPdfHtml, sanitizeSheetName } from "./exporter";
+import { getPrintSettings, pdfDocOptions } from "./print";
 
 type Row = Record<string, unknown>;
 
@@ -21,6 +23,43 @@ const TABLES: { key: string; label: string }[] = [
   { key: "payrolls", label: "الرواتب" },
   { key: "advance_settlements", label: "تسويات السلف" },
 ];
+
+/** قسم واحد من أقسام نسخة البيانات (عنوان + رؤوس + صفوف). */
+export interface BackupSection {
+  label: string;
+  headers: string[];
+  rows: (string | number)[][];
+}
+
+/**
+ * مستند نسخة البيانات بصيغة المستندات الموحّدة (.doc-*) بدل جدول مرسوم يدوياً،
+ * فيستفيد من تنسيق الطباعة المختار وتقسيم الصفحات وتكرار رؤوس كل جدول.
+ */
+export function backupReportHtml(opts: {
+  companyName: string;
+  printedAt: string;
+  printedBy?: string;
+  sections: BackupSection[];
+}): string {
+  const { companyName, printedAt, printedBy, sections } = opts;
+  const meta = `تاريخ ووقت الطباعة: ${esc(printedAt)}${printedBy ? ` | طُبع بواسطة: ${esc(printedBy)}` : ""}`;
+  const body: string[] = [
+    `<div class='doc-head'><div class='doc-company'>${esc(companyName)}</div></div>`,
+    "<div class='doc-title'>نسخة بيانات النظام</div>",
+    `<div class='doc-sub'>${esc(meta)}</div>`,
+  ];
+  for (const section of sections) {
+    body.push("<div class='doc-section'>");
+    body.push(`<div class='doc-section-title'>${esc(section.label)} (${section.rows.length})</div>`);
+    body.push(
+      section.rows.length
+        ? buildTableHtml(section.headers, section.rows)
+        : "<div class='doc-sub'>لا توجد بيانات</div>"
+    );
+    body.push("</div>");
+  }
+  return body.join("");
+}
 
 function columnsOf(rows: Row[]): string[] {
   const keys = new Set<string>();
@@ -60,7 +99,7 @@ export async function exportDataExcel(): Promise<void> {
   for (const t of TABLES) {
     const rows = (data[t.key] ?? []) as Row[];
     const cols = columnsOf(rows);
-    const ws = wb.addWorksheet(t.label.slice(0, 31));
+    const ws = wb.addWorksheet(sanitizeSheetName(t.label));
     ws.views = [{ rightToLeft: true }];
 
     // صف العنوان
@@ -82,11 +121,22 @@ export async function exportDataExcel(): Promise<void> {
     }
 
     cols.forEach((c, i) => {
-      let w = c.length;
-      for (const r of rows) w = Math.max(w, String(r[c] ?? "").length);
-      ws.getColumn(i + 1).width = Math.min(Math.max(w + 4, 10), 40);
+      ws.getColumn(i + 1).width = excelColumnWidth(rows.map((r) => r[c]), c.length);
     });
+    if (rows.length) {
+      ws.autoFilter = { from: { row: 2, column: 1 }, to: { row: 2, column: Math.max(cols.length, 1) } };
+    }
     ws.views = [{ rightToLeft: true, state: "frozen", ySplit: 2 }];
+    ws.pageSetup = {
+      paperSize: 9,
+      orientation: cols.length > 6 ? "landscape" : "portrait",
+      fitToPage: true,
+      fitToWidth: 1,
+      fitToHeight: 0,
+      horizontalCentered: true,
+      printTitlesRow: "2:2",
+      margins: { left: 0.3, right: 0.3, top: 0.5, bottom: 0.5, header: 0.2, footer: 0.25 },
+    };
   }
 
   const buffer = await wb.xlsx.writeBuffer();
@@ -118,39 +168,23 @@ export async function exportDataPdf(): Promise<void> {
   const company = (data.company ?? {}) as Row;
   const companyName = String(company.name ?? "الشركة");
   const { printMeta } = await import("./exportHelper");
-  const meta = await printMeta();
-  const esc = (v: unknown) =>
-    String(v ?? "")
-      .replace(/&/g, "&amp;")
-      .replace(/</g, "&lt;")
-      .replace(/>/g, "&gt;")
-      .replace(/"/g, "&quot;")
-      .replace(/'/g, "&#39;");
+  const [meta, ps] = await Promise.all([printMeta(), getPrintSettings()]);
 
-  let html = `<div dir="rtl" style="font-family:'IBM Plex Sans Arabic',sans-serif;color:#111;">
-    <div style="text-align:center;border-bottom:2px solid #1d4ed8;padding-bottom:8px;margin-bottom:8px;">
-      <div style="font-size:18px;font-weight:800;color:#1d4ed8;">${esc(companyName)}</div>
-      <div style="font-size:13px;color:#334155;margin-top:4px;">نسخة بيانات النظام</div>
-      <div style="font-size:11px;color:#64748b;margin-top:4px;">تاريخ ووقت الطباعة: ${esc(meta.printedAt)}${meta.printedBy ? ` | طُبع بواسطة: ${esc(meta.printedBy)}` : ""}</div>
-    </div>`;
-
-  for (const t of TABLES) {
+  const sections: BackupSection[] = TABLES.map((t) => {
     const rows = (data[t.key] ?? []) as Row[];
-    const cols = columnsOf(rows);
-    html += `<h3 style="color:#1d4ed8;border-bottom:1px solid #cbd5e1;">${t.label} (${rows.length})</h3>`;
-    if (!rows.length) {
-      html += `<p style="color:#888;">لا توجد بيانات</p>`;
-      continue;
-    }
-    html += `<table border="1" cellspacing="0" cellpadding="4" style="border-collapse:collapse;width:100%;font-size:11px;">
-      <tr style="background:#2563eb;color:#fff;">${cols.map((c) => `<th>${c}</th>`).join("")}</tr>`;
-    for (const r of rows) {
-      html += `<tr>${cols.map((c) => `<td>${String(cellValue(r[c]))}</td>`).join("")}</tr>`;
-    }
-    html += `</table><br>`;
-  }
-  html += `</div>`;
+    const headers = columnsOf(rows);
+    return {
+      label: t.label,
+      headers,
+      rows: rows.map((r) => headers.map((h) => cellValue(r[h]))),
+    };
+  });
 
-  const { exportPdfHtml } = await import("./exporter");
-  await exportPdfHtml(html, `${safeFilename(companyName)}-بيانات-النظام.pdf`);
+  const html = backupReportHtml({ companyName, printedAt: meta.printedAt, printedBy: meta.printedBy, sections });
+  const title = `${companyName} — نسخة بيانات النظام`;
+  await exportPdfHtml(html, `${safeFilename(companyName)}-بيانات-النظام.pdf`, pdfDocOptions(ps, {
+    title,
+    printedBy: meta.printedBy,
+    printedAt: meta.printedAt,
+  }));
 }

@@ -2,6 +2,7 @@
 // يعتمد قالب الطباعة المختار في الإعدادات (5 قوالب) ولونه الرئيسي.
 
 import { money, balanceSideLabel, balanceSide, amountToArabicWords } from "@/lib/format";
+import { buildTableHtml } from "@/lib/exporter";
 import type { CustomerStatementFull } from "@/lib/calc";
 import type { PrintSettings } from "@/lib/print";
 
@@ -39,49 +40,55 @@ export function customerStatementHtml({ info, ps, st, printedBy, printedAt }: St
       <td style="padding:5px 10px;text-align:left;font-weight:${strong ? 800 : 700};font-size:${strong ? "13.5px" : "12.5px"};white-space:nowrap;">${value}</td>
     </tr>`;
 
-  const rowsHtml = st.rows.map((r, i) => {
-    const zebra = ps.zebra && i % 2 === 1 ? "background:#f7f9fc;" : "";
-    const isInvoice = r.kind === "invoice";
-    return `<tr style="${zebra}">
-      <td style="padding:7px 8px;text-align:center;white-space:nowrap;">${esc(r.date)}</td>
-      <td style="padding:7px 8px;text-align:center;white-space:nowrap;font-weight:700;color:${isInvoice ? soft : "#475569"};">${esc(r.doc)}</td>
-      <td style="padding:7px 8px;text-align:right;">
-        <div>${esc(r.desc)}</div>
-        ${r.detail ? `<div style="color:#64748b;font-size:11px;margin-top:2px;">${esc(r.detail)}</div>` : ""}
-      </td>
-      <td style="padding:7px 8px;text-align:center;font-weight:${r.debit ? 700 : 400};">${r.debit ? money(r.debit) : "—"}</td>
-      <td style="padding:7px 8px;text-align:center;font-weight:${r.credit ? 700 : 400};">${r.credit ? money(r.credit) : "—"}</td>
-      <td style="padding:7px 8px;text-align:center;font-weight:800;">${money(r.balance)}</td>
-    </tr>`;
-  }).join("");
+  // جدول الحركات يبني نفسه على نظام المستندات المشترك (.doc-table/.doc-cell-*)
+  // بدل أنماط مضمّنة مكرّرة، فيرث تنسيق الطباعة وتكرار الرؤوس وتفادي قطع الصفوف.
+  const moveHeaders = ["التاريخ", "المستند", "البيان", "مدين (عليه)", "دائن (له)", "الرصيد"];
+  const moveRows: (string | number)[][] = [
+    [st.from, "—", "رصيد ما قبل الفترة (افتتاحي)", "—", "—", money(st.opening)],
+    ...st.rows.map((r) => [
+      r.date,
+      r.doc,
+      r.detail ? `${r.desc} — ${r.detail}` : r.desc,
+      r.debit ? money(r.debit) : "—",
+      r.credit ? money(r.credit) : "—",
+      money(r.balance),
+    ]),
+    [
+      "",
+      "الإجماليات",
+      st.rows.length ? `${st.rows.length} حركة معروضة` : "لا توجد حركات خلال هذه الفترة",
+      money(st.invoiced + st.notes_debit),
+      money(st.collected + st.notes_credit),
+      money(st.closing),
+    ],
+  ];
+  const moveRowClasses: (string | null)[] = [
+    "doc-open-row",
+    ...st.rows.map(() => null),
+    "doc-total-row",
+  ];
+  const rowsHtml = buildTableHtml(moveHeaders, moveRows, null, moveRowClasses);
 
   const openItemsHtml = st.openItems.length
-    ? `<div style="margin-top:14px;">
-        <div style="font-weight:800;font-size:12.5px;color:${soft};margin-bottom:5px;">تركيبة الرصيد المستحق (تُسدَّد الدفعات بالأقدمية)</div>
-        <table width="100%" style="border-collapse:collapse;font-size:12px;border:1px solid #e2e8f0;">
-          <thead>
-            <tr style="background:${ps.template === "minimal" ? "#f1f5f9" : soft};color:${ps.template === "minimal" ? "#111827" : "#fff"};">
-              <th style="padding:6px 8px;">الفاتورة</th><th style="padding:6px 8px;">التاريخ</th>
-              <th style="padding:6px 8px;">قيمتها</th><th style="padding:6px 8px;">المسدَّد</th><th style="padding:6px 8px;">المتبقي</th>
-            </tr>
-          </thead>
-          <tbody>
-            ${st.openItems.map((o) => `<tr>
-              <td style="padding:6px 8px;text-align:center;font-weight:700;">INV-${String(o.number).padStart(5, "0")}</td>
-              <td style="padding:6px 8px;text-align:center;">${esc(o.date)}</td>
-              <td style="padding:6px 8px;text-align:center;">${money(o.total)}</td>
-              <td style="padding:6px 8px;text-align:center;">${money(o.paid)}</td>
-              <td style="padding:6px 8px;text-align:center;font-weight:800;">${money(o.remaining)}</td>
-            </tr>`).join("")}
-          </tbody>
-        </table>
+    ? `<div class="doc-section">
+        <div class="doc-section-title">تركيبة الرصيد المستحق (تُسدَّد الدفعات بالأقدمية)</div>
+        ${buildTableHtml(
+          ["الفاتورة", "التاريخ", "قيمتها", "المسدَّد", "المتبقي"],
+          st.openItems.map((o) => [
+            `INV-${String(o.number).padStart(5, "0")}`,
+            o.date,
+            money(o.total),
+            money(o.paid),
+            money(o.remaining),
+          ])
+        )}
       </div>`
     : "";
 
   return `
   <div style="font-family:'IBM Plex Sans Arabic','Segoe UI',Tahoma,sans-serif;color:#0f172a;direction:rtl;">
 
-    <table width="100%" style="border-collapse:collapse;margin-bottom:12px;">
+    <table class="doc-plain" width="100%" style="border-collapse:collapse;margin-bottom:12px;">
       <tr>
         <td style="vertical-align:top;">
           ${ps.show_logo && ps.logo_url ? `<img src="${esc(ps.logo_url)}" style="max-height:60px;margin-bottom:6px;"/><br/>` : ""}
@@ -95,7 +102,7 @@ export function customerStatementHtml({ info, ps, st, printedBy, printedAt }: St
           <div style="background:${ps.template === "minimal" ? "#f1f5f9" : soft};color:${ps.template === "minimal" ? "#111827" : "#fff"};border-radius:8px;padding:9px 14px;text-align:center;">
             <div style="font-size:15px;font-weight:800;">كشف حساب عميل</div>
           </div>
-          <table width="100%" style="margin-top:6px;border-collapse:collapse;">
+          <table class="doc-plain" width="100%" style="margin-top:6px;border-collapse:collapse;">
             ${headerRow("من تاريخ", esc(st.from))}
             ${headerRow("إلى تاريخ", esc(st.to))}
             ${printedBy ? headerRow("طُبع بواسطة", esc(printedBy)) : ""}
@@ -107,7 +114,7 @@ export function customerStatementHtml({ info, ps, st, printedBy, printedAt }: St
 
     <div style="height:3px;background:linear-gradient(90deg,${soft},transparent);border-radius:3px;margin-bottom:12px;"></div>
 
-    <table width="100%" style="border-collapse:collapse;margin-bottom:12px;">
+    <table class="doc-plain" width="100%" style="border-collapse:collapse;margin-bottom:12px;">
       <tr>
         <td style="width:50%;vertical-align:top;padding-inline-end:8px;">
           <div style="border:1px solid #e2e8f0;border-radius:8px;overflow:hidden;">
@@ -123,7 +130,7 @@ export function customerStatementHtml({ info, ps, st, printedBy, printedAt }: St
         <td style="width:50%;vertical-align:top;">
           <div style="border:1px solid #e2e8f0;border-radius:8px;overflow:hidden;">
             <div style="background:#f1f5f9;padding:5px 10px;font-size:11px;font-weight:800;color:#475569;">ملخص الحركة خلال الفترة</div>
-            <table width="100%" style="border-collapse:collapse;">
+            <table class="doc-plain" width="100%" style="border-collapse:collapse;">
               ${headerRow("الرصيد الافتتاحي", `${money(st.opening)} ${esc(cur)}`)}
               ${headerRow("إجمالي الفواتير (مدين)", `${money(st.invoiced)} ${esc(cur)}`)}
               ${headerRow("إجمالي التحصيل (دائن)", `${money(st.collected)} ${esc(cur)}`)}
@@ -142,35 +149,7 @@ export function customerStatementHtml({ info, ps, st, printedBy, printedAt }: St
       </tr>
     </table>
 
-    <table width="100%" style="border-collapse:collapse;font-size:12.5px;border:1px solid #e2e8f0;">
-      <thead>
-        <tr style="background:${ps.template === "minimal" ? "#f1f5f9" : soft};color:${ps.template === "minimal" ? "#111827" : "#fff"};">
-          <th style="padding:8px;width:86px;">التاريخ</th>
-          <th style="padding:8px;width:120px;">المستند</th>
-          <th style="padding:8px;text-align:right;">البيان</th>
-          <th style="padding:8px;width:96px;">مدين (عليه)</th>
-          <th style="padding:8px;width:96px;">دائن (له)</th>
-          <th style="padding:8px;width:104px;">الرصيد</th>
-        </tr>
-      </thead>
-      <tbody>
-        <tr style="background:#eef2f7;font-weight:800;">
-          <td style="padding:7px 8px;text-align:center;">${esc(st.from)}</td>
-          <td style="padding:7px 8px;text-align:center;">—</td>
-          <td style="padding:7px 8px;text-align:right;">رصيد ما قبل الفترة (افتتاحي)</td>
-          <td style="padding:7px 8px;text-align:center;">—</td>
-          <td style="padding:7px 8px;text-align:center;">—</td>
-          <td style="padding:7px 8px;text-align:center;">${money(st.opening)}</td>
-        </tr>
-        ${rowsHtml || `<tr><td colspan="6" style="padding:14px;text-align:center;color:#64748b;">لا توجد حركات خلال هذه الفترة</td></tr>`}
-        <tr style="background:${ps.template === "minimal" ? "#f1f5f9" : "#eaf0fb"};font-weight:800;">
-          <td colspan="3" style="padding:8px;text-align:center;">الإجماليات</td>
-          <td style="padding:8px;text-align:center;">${money(st.invoiced + st.notes_debit)}</td>
-          <td style="padding:8px;text-align:center;">${money(st.collected + st.notes_credit)}</td>
-          <td style="padding:8px;text-align:center;color:${sideColor};">${money(st.closing)}</td>
-        </tr>
-      </tbody>
-    </table>
+    <div class="doc-section">${rowsHtml}</div>
 
     ${openItemsHtml}
 
@@ -185,7 +164,7 @@ export function customerStatementHtml({ info, ps, st, printedBy, printedAt }: St
     </div>
 
     ${ps.show_signature ? `
-    <table width="100%" style="margin-top:24px;border-collapse:collapse;font-size:12px;color:#475569;">
+    <table class="doc-plain" width="100%" style="margin-top:24px;border-collapse:collapse;font-size:12px;color:#475569;">
       <tr>
         <td style="text-align:center;"><div style="border-top:1px dashed #94a3b8;padding-top:6px;width:190px;margin:0 auto;">مطابقة العميل</div></td>
         <td style="text-align:center;"><div style="border-top:1px dashed #94a3b8;padding-top:6px;width:190px;margin:0 auto;">${esc(ps.signature_label || "عن الشركة")}</div></td>
