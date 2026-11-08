@@ -1,15 +1,18 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useParams, useRouter } from "next/navigation";
 import { useQuery, useQueryClient, keepPreviousData } from "@tanstack/react-query";
 import {
-  PageFrame, Spinner, ExportBar, TotalsBar, FilterRow, DictSelect, Field, Input, AmountInput, Select, Button,
+  PageFrame, Spinner, ExportBar, TotalsBar, FilterRow, DictSelect, Field, Input, AmountInput, Select, Button, DateInput,
 } from "@/components/ui";
 import { notify } from "@/components/toast";
-import { customerFullReport, balanceSideLabel } from "@/lib/customerReport";
 import {
-  exportCustomerReportExcel, exportCustomerReportPdf, printCustomerReport,
+  customerFullReport, customerInvoicesInRange, balanceSideLabel, invoiceScopeLabel,
+  type CustomerInvoiceScope,
+} from "@/lib/customerReport";
+import {
+  exportCustomerReportExcel, exportCustomerReportPdf, printCustomerReport, exportCustomerInvoicesRange,
 } from "@/lib/customerReportExport";
 import { statementFiltersLabel, STATEMENT_DOC_TYPES, invoiceNumberLabel, type StatementFilters, type StatementDocType } from "@/lib/calc";
 import { itemOptions } from "@/lib/items";
@@ -28,6 +31,16 @@ export default function CustomerFullReportPage() {
   const [dFrom, setDFrom] = useState(yearStart());
   const [dTo, setDTo] = useState(todayIso());
   const [busy, setBusy] = useState<"" | "excel" | "pdf" | "print">("");
+  // نطاق قسمي الفواتير والنقلات: «داخل الفترة» افتراضياً حتى يعمل فلتر التاريخ فعلياً
+  const [scope, setScope] = useState<CustomerInvoiceScope>("period");
+  // نطاق تصدير الفواتير وحده — مستقل عن فترة التقرير
+  const [invFrom, setInvFrom] = useState(yearStart());
+  const [invTo, setInvTo] = useState(todayIso());
+  const [invBusy, setInvBusy] = useState<"" | "excel" | "pdf" | "print">("");
+
+  // عند تغيير فترة التقرير نُزامن نطاق تصدير الفواتير معها (ما لم يعده المستخدم يدوياً)
+  useEffect(() => { setInvFrom(dFrom); }, [dFrom]);
+  useEffect(() => { setInvTo(dTo); }, [dTo]);
 
   const [q, setQ] = useState("");
   const [fromLoc, setFromLoc] = useState("");
@@ -50,8 +63,8 @@ export default function CustomerFullReportPage() {
   const { data: items } = useQuery({ queryKey: ["items-options"], queryFn: () => itemOptions(true) });
 
   const { data: rep, isLoading } = useQuery({
-    queryKey: ["report-customer-full", customerId, dFrom, dTo, filters],
-    queryFn: () => customerFullReport(customerId, dFrom, dTo, filters),
+    queryKey: ["report-customer-full", customerId, dFrom, dTo, filters, scope],
+    queryFn: () => customerFullReport(customerId, dFrom, dTo, filters, { invoiceScope: scope }),
     placeholderData: keepPreviousData,
     enabled: Number.isFinite(customerId) && customerId > 0,
   });
@@ -59,7 +72,7 @@ export default function CustomerFullReportPage() {
   const s = rep?.summary;
   const filterLabel = statementFiltersLabel(filters);
   const subtitle = rep
-    ? `الكود: ${rep.customer?.code ?? "—"} | الفترة: من ${rep.from} إلى ${rep.to}${filterLabel ? ` — ${filterLabel}` : ""} | الحركات المعروضة ${rep.statement.matched_count} من ${rep.statement.all_rows_count}`
+    ? `الكود: ${rep.customer?.code ?? "—"} | الفترة: من ${rep.from} إلى ${rep.to} | ${invoiceScopeLabel(rep.invoice_scope)}${filterLabel ? ` — ${filterLabel}` : ""} | الحركات المعروضة ${rep.statement.matched_count} من ${rep.statement.all_rows_count}`
     : "كل ما يخص العميل في تقرير واحد";
 
   const run = async (mode: "excel" | "pdf" | "print") => {
@@ -73,6 +86,28 @@ export default function CustomerFullReportPage() {
       notify(e instanceof Error ? e.message : String(e), "error");
     } finally {
       setBusy("");
+    }
+  };
+
+  const exportInvoices = async (mode: "excel" | "pdf" | "print") => {
+    if (!rep?.customer) return;
+    if (!invFrom || !invTo) { notify("حدّد تاريخ البداية والنهاية لتصدير الفواتير.", "error"); return; }
+    if (invFrom > invTo) { notify("تاريخ البداية يجب أن يكون قبل تاريخ النهاية.", "error"); return; }
+    setInvBusy(mode);
+    try {
+      const list = await customerInvoicesInRange(customerId, invFrom, invTo);
+      if (!list.length) {
+        notify("لا توجد فواتير لهذا العميل داخل النطاق المحدد.", "warning");
+        return;
+      }
+      await exportCustomerInvoicesRange({
+        customerName: rep.customer.name, from: invFrom, to: invTo, invoices: list, mode,
+      });
+      notify(`تم تصدير ${list.length} فاتورة من ${invFrom} إلى ${invTo}.`, "success");
+    } catch (e) {
+      notify(e instanceof Error ? e.message : String(e), "error");
+    } finally {
+      setInvBusy("");
     }
   };
 
@@ -99,6 +134,20 @@ export default function CustomerFullReportPage() {
           {/* ——— فلتر ذكي لحركات الكشف داخل التقرير ——— */}
           <div className="group-box" style={{ marginTop: 0 }}>
             <div className="group-title">فلتر ذكي لحركات الكشف</div>
+            <div className="form-grid-3">
+              <Field label="من تاريخ" hint="يطبَّق على كشف الحساب والسندات والإشعارات والفواتير والنقلات">
+                <DateInput value={dFrom} onChange={setDFrom} />
+              </Field>
+              <Field label="إلى تاريخ">
+                <DateInput value={dTo} onChange={setDTo} />
+              </Field>
+              <Field label="نطاق الفواتير والنقلات والخدمات" hint="«داخل الفترة» يجعل فلتر التاريخ يشمل كل أقسام التقرير">
+                <Select value={scope} onChange={(e) => setScope(e.target.value as CustomerInvoiceScope)}>
+                  <option value="period">الفواتير داخل الفترة المحددة</option>
+                  <option value="all">كل الفواتير حتى نهاية الفترة</option>
+                </Select>
+              </Field>
+            </div>
             <div className="form-grid-3">
               <Field label="النقلة من (مكان الانطلاق)">
                 <Input value={fromLoc} onChange={(e) => setFromLoc(e.target.value)} placeholder="مثال: الرياض" />
@@ -133,7 +182,9 @@ export default function CustomerFullReportPage() {
               </div>
             </div>
             <div className="field-hint">
-              الفلتر يخص قسم «كشف الحساب» فقط؛ الفواتير والنقلات والخدمات والأعمار تُعرض كاملة حتى نهاية الفترة لشرح تركيبة الرصيد.
+              «من/إلى» يحددان الفترة لكل الأقسام؛ وبالنطاق الافتراضي تُعرض الفواتير والنقلات داخل الفترة فقط.
+              اختر «كل الفواتير حتى نهاية الفترة» إذا أردت شرح تركيبة الرصيد والأعمار بالفواتير السابقة للفترة.
+              الفلاتر الذكية (المسار/القيمة/البحث/النوع/الخدمة) تخص قسم «كشف الحساب» فقط ولا تُغيّر الأرصدة.
             </div>
           </div>
 
@@ -198,7 +249,26 @@ export default function CustomerFullReportPage() {
 
           {/* ——— الفواتير ——— */}
           <div className="group-box">
-            <div className="group-title">الفواتير ({rep.invoices.length})</div>
+            <div className="group-title">الفواتير ({rep.invoices.length}) — {invoiceScopeLabel(rep.invoice_scope)}</div>
+            <div className="form-grid-3" style={{ marginBottom: 10 }}>
+              <Field label="تصدير الفواتير من تاريخ" hint="تصدير الفواتير وحدها لنطاق مستقل عن فترة التقرير">
+                <DateInput value={invFrom} onChange={setInvFrom} />
+              </Field>
+              <Field label="تصدير الفواتير إلى تاريخ">
+                <DateInput value={invTo} onChange={setInvTo} />
+              </Field>
+              <div style={{ display: "flex", gap: 8, alignItems: "flex-end", flexWrap: "wrap" }}>
+                <Button variant="primary" onClick={() => exportInvoices("excel")} disabled={invBusy !== ""} title="تصدير الفواتير لهذا النطاق إلى Excel">
+                  {invBusy === "excel" ? "… جارٍ التصدير" : "📊 Excel"}
+                </Button>
+                <Button onClick={() => exportInvoices("pdf")} disabled={invBusy !== ""} title="تصدير الفواتير لهذا النطاق إلى PDF">
+                  {invBusy === "pdf" ? "… جارٍ التصدير" : "📄 PDF"}
+                </Button>
+                <Button onClick={() => exportInvoices("print")} disabled={invBusy !== ""} title="طباعة الفواتير لهذا النطاق">
+                  {invBusy === "print" ? "… جارٍ التحضير" : "🖨️ طباعة"}
+                </Button>
+              </div>
+            </div>
             <div className="table-wrap">
               <table className="data-table">
                 <thead><tr>{["الرقم", "التاريخ", "النقلات", "الخطوط", "قبل الضريبة", "الضريبة", "الإجمالي", "المسدد", "المتبقي", "الحالة"].map((h, i) => <th key={i}>{h}</th>)}</tr></thead>

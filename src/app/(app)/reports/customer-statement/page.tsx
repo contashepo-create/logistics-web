@@ -3,7 +3,7 @@
 import { useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
 import { useQuery, useQueryClient, keepPreviousData } from "@tanstack/react-query";
-import { PageFrame, Spinner, ExportBar, TotalsBar, FilterRow, DictSelect, Field, Input, AmountInput, Select, Button } from "@/components/ui";
+import { PageFrame, Spinner, ExportBar, TotalsBar, FilterRow, DictSelect, Field, Input, AmountInput, Select, Button, DateInput } from "@/components/ui";
 import { customerStatement, statementFiltersLabel, STATEMENT_DOC_TYPES, type StatementFilters, type StatementDocType } from "@/lib/calc";
 import { listCustomers } from "@/lib/repo";
 import { itemOptions } from "@/lib/items";
@@ -102,17 +102,25 @@ export default function CustomerStatementReportPage() {
       <div className="group-box" style={{ marginTop: 0 }}>
         <div className="group-title">فلتر ذكي للكشف</div>
         <div className="form-grid-3">
+          <Field label="من تاريخ" hint="الفترة المطبَّقة على الكشف والتصدير">
+            <DateInput value={dFrom} onChange={setDFrom} />
+          </Field>
+          <Field label="إلى تاريخ">
+            <DateInput value={dTo} onChange={setDTo} />
+          </Field>
+          <Field label="نوع المستند" hint="يُطبَّق مع الفترة على الحركات المعروضة">
+            <Select value={docType} onChange={(e) => setDocType(e.target.value as StatementDocType | "")}>
+              <option value="">الكل</option>
+              {STATEMENT_DOC_TYPES.map((t) => <option key={t.value} value={t.value}>{t.label}</option>)}
+            </Select>
+          </Field>
+        </div>
+        <div className="form-grid-3">
           <Field label="النقلة من (مكان الانطلاق)" hint="يطابق مسار نقلات الفواتير والمرتجعات">
             <Input value={fromLoc} onChange={(e) => setFromLoc(e.target.value)} placeholder="مثال: الرياض" />
           </Field>
           <Field label="النقلة إلى (مكان الوصول)">
             <Input value={toLoc} onChange={(e) => setToLoc(e.target.value)} placeholder="مثال: الدمام" />
-          </Field>
-          <Field label="نوع المستند">
-            <Select value={docType} onChange={(e) => setDocType(e.target.value as StatementDocType | "")}>
-              <option value="">الكل</option>
-              {STATEMENT_DOC_TYPES.map((t) => <option key={t.value} value={t.value}>{t.label}</option>)}
-            </Select>
           </Field>
         </div>
         <div className="form-grid-3">
@@ -136,7 +144,8 @@ export default function CustomerStatementReportPage() {
           </div>
         </div>
         <div className="field-hint">
-          ملاحظة: فلتر «من/إلى» يعرض الحركات التي لها نقلات (فواتير ومرتجعات) فقط؛ السندات والإشعارات اليدوية بلا مسار
+          «من تاريخ/إلى تاريخ» يحددان الفترة المشمولة في الكشف والتصدير (والرصيد الافتتاحي محسوب حتى ما قبل «من تاريخ»).
+          فلتر «النقلة من/إلى» يعرض الحركات التي لها نقلات (فواتير ومرتجعات) فقط؛ السندات والإشعارات اليدوية بلا مسار
           فلا تظهر عند تحديد مسار. الرصيد الجاري لكل سطر محسوب دائماً من كل الحركات حتى مع الفلترة.
         </div>
       </div>
